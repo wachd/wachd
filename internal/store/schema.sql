@@ -1,10 +1,9 @@
 -- Wachd database schema — runs automatically on startup via store.Migrate()
 -- All statements use IF NOT EXISTS so this is safe to run repeatedly.
-
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Uses gen_random_uuid() (built-in since PostgreSQL 13) — no extensions required.
 
 CREATE TABLE IF NOT EXISTS teams (
-    id             UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     name           VARCHAR(255) NOT NULL,
     webhook_secret VARCHAR(255) NOT NULL UNIQUE,
     created_at     TIMESTAMP    NOT NULL DEFAULT NOW(),
@@ -14,7 +13,7 @@ CREATE TABLE IF NOT EXISTS teams (
 CREATE INDEX IF NOT EXISTS idx_teams_webhook_secret ON teams(webhook_secret);
 
 CREATE TABLE IF NOT EXISTS users (
-    id         UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id    UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     name       VARCHAR(255) NOT NULL,
     email      VARCHAR(255) NOT NULL,
@@ -28,7 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_users_team_id ON users(team_id);
 CREATE INDEX IF NOT EXISTS idx_users_email   ON users(email);
 
 CREATE TABLE IF NOT EXISTS incidents (
-    id            UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id       UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     title         VARCHAR(500) NOT NULL,
     message       TEXT,
@@ -53,7 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_incidents_fired_at    ON incidents(fired_at DESC)
 CREATE INDEX IF NOT EXISTS idx_incidents_assigned_to ON incidents(assigned_to);
 
 CREATE TABLE IF NOT EXISTS schedules (
-    id              UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id         UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     name            VARCHAR(255) NOT NULL,
     rotation_config JSONB        NOT NULL,
@@ -67,7 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(enabled);
 
 -- SSO identity: one row per person, provider-scoped, not team-scoped
 CREATE TABLE IF NOT EXISTS sso_identities (
-    id          UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     provider    VARCHAR(50)  NOT NULL,           -- entra | google | okta
     provider_id VARCHAR(500) NOT NULL,           -- oid claim from Entra
     email       VARCHAR(255) NOT NULL,
@@ -90,7 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_sso_team_access_team ON sso_team_access(team_id);
 
 -- Entra group → wachd team mapping
 CREATE TABLE IF NOT EXISTS group_mappings (
-    id          UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     provider    VARCHAR(50)  NOT NULL DEFAULT 'entra',
     group_id    VARCHAR(500) NOT NULL,           -- Entra group object ID
     group_name  VARCHAR(255),                    -- human-readable label
@@ -104,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_group_mappings_group ON group_mappings(provider, 
 
 -- Sessions (Redis is authoritative/TTL; this table is audit trail only)
 CREATE TABLE IF NOT EXISTS sessions (
-    id          UUID     PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id          UUID     PRIMARY KEY DEFAULT gen_random_uuid(),
     identity_id UUID     NOT NULL REFERENCES sso_identities(id) ON DELETE CASCADE,
     token_hash  CHAR(64) NOT NULL UNIQUE,        -- SHA-256 hex of session token
     expires_at  TIMESTAMP NOT NULL,
@@ -134,7 +133,7 @@ INSERT INTO password_policy (id) VALUES (1) ON CONFLICT DO NOTHING;
 
 -- Local (non-SSO) users — global auth identities, not team-scoped
 CREATE TABLE IF NOT EXISTS local_users (
-    id                    UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id                    UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     username              VARCHAR(100) NOT NULL UNIQUE,
     email                 VARCHAR(255) NOT NULL UNIQUE,
     name                  VARCHAR(255) NOT NULL,
@@ -153,7 +152,7 @@ CREATE INDEX IF NOT EXISTS idx_local_users_email    ON local_users(email);
 
 -- Local groups (superadmin-managed; independent of SSO groups)
 CREATE TABLE IF NOT EXISTS local_groups (
-    id          UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
     created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
@@ -180,7 +179,7 @@ CREATE INDEX IF NOT EXISTS idx_local_group_access_team ON local_group_access(tea
 
 -- SSO provider config — DB-stored, AES-256-GCM encrypted client secret
 CREATE TABLE IF NOT EXISTS sso_providers (
-    id                UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id                UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     name              VARCHAR(100) NOT NULL,
     provider_type     VARCHAR(50)  NOT NULL DEFAULT 'oidc',
     issuer_url        VARCHAR(500) NOT NULL,
@@ -213,7 +212,7 @@ ALTER TABLE group_mappings
 
 -- API tokens (personal access tokens — Bearer auth for programmatic access)
 CREATE TABLE IF NOT EXISTS api_tokens (
-    id           UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id      UUID         NOT NULL REFERENCES local_users(id) ON DELETE CASCADE,
     name         VARCHAR(255) NOT NULL,
     token_hash   CHAR(64)     NOT NULL UNIQUE,  -- SHA-256 hex of the raw token
@@ -232,7 +231,7 @@ CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
 
 -- Temporary overrides: replace the scheduled user for a time window
 CREATE TABLE IF NOT EXISTS schedule_overrides (
-    id          UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     schedule_id UUID         NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
     team_id     UUID         NOT NULL,  -- denormalized for fast team-scoped queries
     start_at    TIMESTAMP    NOT NULL,
@@ -248,7 +247,7 @@ CREATE INDEX IF NOT EXISTS idx_schedule_overrides_window   ON schedule_overrides
 
 -- Escalation policy: per-team ordered chain with ack-timeout per layer
 CREATE TABLE IF NOT EXISTS escalation_policies (
-    id         UUID      PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id         UUID      PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id    UUID      NOT NULL UNIQUE REFERENCES teams(id) ON DELETE CASCADE,
     config     JSONB     NOT NULL,
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()

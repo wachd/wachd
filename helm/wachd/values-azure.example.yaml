@@ -1,0 +1,278 @@
+# =============================================================================
+# Wachd — Azure Enterprise Values Override (EXAMPLE)
+#
+# Copy this file to values-azure.yaml and fill in your real values.
+#   cp helm/wachd/values-azure.example.yaml helm/wachd/values-azure.yaml
+#
+# values-azure.yaml is git-ignored — never commit it.
+#
+# Fill in <PLACEHOLDER> values from Terraform outputs:
+#   cd infra/azure
+#   terraform output deployment_summary       (non-sensitive — safe to read)
+#   terraform output -raw postgres_host
+#   terraform output -raw redis_host
+#   terraform output -raw entra_tenant_id
+#   terraform output -raw entra_client_id
+# =============================================================================
+
+# =============================================================================
+# Image — your ACR registry
+# Run: az acr list --resource-group rg-wachd --query "[].loginServer" -o tsv
+# =============================================================================
+image:
+  registry: <acr-name>.azurecr.io   # e.g. wachdregistry.azurecr.io
+  repository: wachd
+  tag: "0.2.1"
+  pullPolicy: Always
+
+# =============================================================================
+# PostgreSQL — Azure Database for PostgreSQL Flexible Server
+# SSL is always required for Azure PostgreSQL; sslmode=require is enforced.
+# Password is injected from K8s Secret — never put it in this file.
+# =============================================================================
+postgres:
+  enabled: false
+
+  external:
+    host: "<psql-wachd-prod.postgres.database.azure.com>"   # terraform output -raw postgres_host
+    port: 5432
+    database: wachd
+    username: "wachdadmin"
+    passwordSecret: wachd-db-secret
+    passwordKey: password
+    sslMode: require
+    maxConnections: 100
+    maxIdleConnections: 10
+    connMaxLifetime: 3600
+
+# =============================================================================
+# Redis — Azure Cache for Redis
+# Azure Redis always uses TLS on port 6380 (NOT 6379).
+# =============================================================================
+redis:
+  enabled: false
+
+  external:
+    host: "<redis-wachd-prod.redis.cache.windows.net>"   # terraform output -raw redis_host
+    port: 6380
+    passwordSecret: wachd-redis-secret
+    passwordKey: password
+    tls: true
+    tlsSkipVerify: false
+
+# =============================================================================
+# Server — 3 replicas with HPA for enterprise HA
+# =============================================================================
+server:
+  replicaCount: 3
+
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+# =============================================================================
+# Worker — 2 replicas
+# =============================================================================
+worker:
+  replicaCount: 2
+
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilization: 70
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+# =============================================================================
+# Web — 2 replicas
+# =============================================================================
+web:
+  enabled: true
+  replicaCount: 2
+
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilization: 70
+
+# =============================================================================
+# Ingress
+# Get the nginx ingress public IP after installing the ingress controller:
+#   kubectl get svc ingress-nginx-controller -n ingress-nginx
+# For testing without a domain: wachd.<EXTERNAL-IP>.nip.io
+# =============================================================================
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+  hosts:
+    - host: "<wachd.yourdomain.com>"
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: server
+        - path: /auth
+          pathType: Prefix
+          service: server
+        - path: /
+          pathType: Prefix
+          service: web
+  tls:
+    - secretName: wachd-tls
+      hosts:
+        - "<wachd.yourdomain.com>"
+
+# =============================================================================
+# TLS — cert-manager with Let's Encrypt
+# Requires port 80 open on the AKS NSG for HTTP-01 challenge.
+# =============================================================================
+certManager:
+  createIssuer: true
+  issuerName: wachd-ca-issuer
+  externalIssuer: "letsencrypt-prod"
+
+tls:
+  internal:
+    enabled: true
+  external:
+    enabled: true
+    issuer: "letsencrypt-prod"
+    commonName: "<wachd.yourdomain.com>"
+
+# =============================================================================
+# Authentication — Microsoft Entra (Azure AD) SSO
+# =============================================================================
+auth:
+  enabled: true
+
+  encryptionKeySecret:
+    name: wachd-encryption-key
+    key: encryption-key
+
+  legacyEnvMigration:
+    enabled: true   # Set to false after first successful deploy
+
+  provider: entra
+
+  entra:
+    tenantId: "<your-entra-tenant-id>"    # terraform output -raw entra_tenant_id
+    clientId: "<your-entra-client-id>"    # terraform output -raw entra_client_id
+    clientSecretRef:
+      name: wachd-entra-secret
+      key: client-secret
+    redirectURI: "https://<wachd.yourdomain.com>/auth/callback"
+
+  # groupMappings:
+  #   - groupId: "<entra-group-object-id>"
+  #     groupName: "Platform Admins"
+  #     teamName: "Platform"
+  #     role: admin
+
+# =============================================================================
+# Analysis Backend
+# ollama = no secret needed (local/air-gapped)
+# claude = requires wachd-claude-key K8s secret
+# openai = requires wachd-openai-key K8s secret
+# =============================================================================
+analysis:
+  backend: ollama   # change to claude or openai for cloud AI
+
+  ollama:
+    enabled: false
+
+  # Uncomment for Claude:
+  # claudeApiKeySecret: wachd-claude-key
+  # claudeApiKeyKey: api-key
+  # claudeModel: claude-sonnet-4-6
+
+# =============================================================================
+# Notifications — enable and add K8s secrets for each channel you use
+# =============================================================================
+config:
+  notifications:
+    slack:
+      enabled: false
+      # enabled: true
+      # webhookUrlSecret: wachd-slack-webhook
+      # webhookUrlKey: url
+      # channel: "alerts"
+
+    email:
+      enabled: false
+
+    twilio:
+      enabled: false
+
+  dataSources:
+    github:
+      enabled: false
+      # enabled: true
+      # tokenSecret: wachd-github-token
+      # tokenKey: token
+      # repos: []
+
+    prometheus:
+      enabled: false
+
+    loki:
+      enabled: false
+
+  logging:
+    level: info
+    format: json
+
+  environment: production
+
+# =============================================================================
+# License
+# opensource = no key needed (1 team, 5 users, 1k alerts/month)
+# smb/enterprise = set keySecret to a K8s secret containing your license key
+# =============================================================================
+license:
+  type: opensource
+  keySecret: ""
+  # type: enterprise
+  # keySecret: "wachd-license"
+  # keySecretKey: license-key
+
+# =============================================================================
+# Monitoring
+# =============================================================================
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false   # Set true if prometheus-operator is installed
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000

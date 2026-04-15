@@ -70,13 +70,16 @@ Return the proper image name
 {{- end }}
 
 {{/*
-Return the PostgreSQL connection string
+Return the PostgreSQL connection string.
+Password is intentionally omitted from the URL — it is injected via the
+POSTGRES_PASSWORD env var (from K8s Secret) and applied in store/db.go.
+This avoids URL-encoding issues with special characters in cloud-managed passwords.
 */}}
 {{- define "wachd.databaseURL" -}}
 {{- if .Values.postgres.enabled -}}
-{{- printf "postgres://%s:%s@%s-postgresql:5432/%s?sslmode=disable" .Values.postgres.auth.username .Values.postgres.auth.password (include "wachd.fullname" .) .Values.postgres.auth.database -}}
+{{- printf "postgres://%s@%s-postgresql:5432/%s?sslmode=disable" .Values.postgres.auth.username (include "wachd.fullname" .) .Values.postgres.auth.database -}}
 {{- else -}}
-{{- printf "postgres://%s:$(POSTGRES_PASSWORD)@%s:%d/%s?sslmode=%s" .Values.postgres.external.username .Values.postgres.external.host (int .Values.postgres.external.port) .Values.postgres.external.database .Values.postgres.external.sslMode -}}
+{{- printf "postgres://%s@%s:%d/%s?sslmode=%s" .Values.postgres.external.username .Values.postgres.external.host (int .Values.postgres.external.port) .Values.postgres.external.database .Values.postgres.external.sslMode -}}
 {{- end -}}
 {{- end }}
 

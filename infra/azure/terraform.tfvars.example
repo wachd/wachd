@@ -1,0 +1,72 @@
+# terraform.tfvars — fill in your values before running terraform apply
+# Copy this file: cp terraform.tfvars.example terraform.tfvars
+# terraform.tfvars is git-ignored — never commit it
+
+# ============================================================================
+# Required: fill these in
+# ============================================================================
+
+location            = "uksouth"       # Azure region closest to your users
+resource_group_name = "rg-wachd"
+environment         = "prod"
+
+# Your Wachd hostname — must match DNS you'll configure after deployment
+# Options:
+#   - Custom domain:    "wachd.mycompany.com"  (add DNS A record after deploy)
+#   - nip.io (quick test): "wachd.<AKS-public-ip>.nip.io"  (fill IP after AKS created)
+wachd_hostname = "wachd.mycompany.com"
+
+# ============================================================================
+# AKS — adjust size to your budget
+# ============================================================================
+
+aks_kubernetes_version = "1.32"
+aks_system_node_count  = 3          # 3 for HA (zones 1,2,3); 1 for dev/test
+aks_system_vm_size     = "Standard_D2s_v3"  # 2vCPU, 8GB — minimum for prod
+aks_enable_auto_scaling = false
+
+# ============================================================================
+# PostgreSQL — adjust tier to workload
+# ============================================================================
+
+postgres_sku     = "B_Standard_B2ms"  # Dev: Burstable; Prod: GP_Standard_D4s
+postgres_version = "16"
+postgres_storage_mb = 32768          # 32 GB
+
+# ============================================================================
+# Redis — Standard C1 (1GB) is sufficient for Wachd job queue
+# ============================================================================
+
+redis_sku      = "Standard"
+redis_capacity = 1
+
+# ============================================================================
+# Entra — group → team mappings (optional bootstrap)
+# ============================================================================
+
+entra_app_display_name = "Wachd Alert Intelligence"
+
+# Optional: seed group mappings from Entra groups.
+# Get group object IDs from: Azure Portal > Groups > select group > Overview > Object ID
+# entra_group_object_ids = {
+#   "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" = { team_name = "Platform", role = "admin" }
+#   "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy" = { team_name = "Payments", role = "responder" }
+# }
+
+# ============================================================================
+# Optional: Azure Container Registry
+# ============================================================================
+
+create_acr = false  # true to build and host Wachd image in your own ACR
+
+# ============================================================================
+# Tags — applied to every resource for cost tracking
+# ============================================================================
+
+tags = {
+  Project     = "wachd"
+  ManagedBy   = "terraform"
+  Environment = "prod"
+  Owner       = "platform-team"
+  CostCenter  = "engineering"
+}

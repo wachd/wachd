@@ -17,6 +17,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,11 +28,27 @@ type DB struct {
 	pool *pgxpool.Pool
 }
 
-// NewDB creates a new database connection pool
+// NewDB creates a new database connection pool.
+//
+// The databaseURL must NOT contain the password when running in Kubernetes —
+// pass a URL with no password (e.g. postgres://user@host/db?sslmode=require)
+// and set POSTGRES_PASSWORD as a separate environment variable injected from
+// a K8s Secret. This avoids URL-encoding issues with special characters in
+// passwords, which is common with cloud-managed databases.
+//
+// For local development, the password can be included in DATABASE_URL as usual.
 func NewDB(databaseURL string) (*DB, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse database URL: %w", err)
+	}
+
+	// Override password from POSTGRES_PASSWORD env var if set.
+	// This allows the DATABASE_URL to omit the password entirely, which is
+	// required when the password contains URL-unsafe characters (e.g. []{}|;:)
+	// — common in cloud-managed PostgreSQL (Azure, GCP, RDS) auto-generated passwords.
+	if pw := os.Getenv("POSTGRES_PASSWORD"); pw != "" {
+		config.ConnConfig.Password = pw
 	}
 
 	// Set connection pool settings

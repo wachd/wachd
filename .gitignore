@@ -58,6 +58,8 @@ web/build/
 # Helm
 helm/charts/
 *.tgz
+helm/wachd/values-azure.yaml
+helm/wachd/values-azure-patched.yaml
 
 # License keys (never commit!)
 *.license
