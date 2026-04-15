@@ -232,6 +232,8 @@ else
     --create-namespace \
     --version ${NGINX_INGRESS_VERSION} \
     --set controller.service.annotations.'service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-protocol'=tcp \
+    --set controller.service.annotations.'service\.beta\.kubernetes\.io/port_80_health-probe_protocol'=Tcp \
+    --set controller.service.annotations.'service\.beta\.kubernetes\.io/port_443_health-probe_protocol'=Tcp \
     --set controller.replicaCount=2 \
     --set controller.nodeSelector.'kubernetes\.io/os'=linux \
     --set defaultBackend.nodeSelector.'kubernetes\.io/os'=linux \

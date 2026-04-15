@@ -176,6 +176,8 @@ helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
   --namespace ingress-nginx \
   --create-namespace \
   --set controller.service.annotations.'service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-protocol'=tcp \
+  --set controller.service.annotations.'service\.beta\.kubernetes\.io/port_80_health-probe_protocol'=Tcp \
+  --set controller.service.annotations.'service\.beta\.kubernetes\.io/port_443_health-probe_protocol'=Tcp \
   --set controller.replicaCount=2 \
   --set controller.nodeSelector.'kubernetes\.io/os'=linux \
   --set defaultBackend.nodeSelector.'kubernetes\.io/os'=linux \
@@ -197,12 +199,16 @@ wachd_hostname = "wachd.yourcompany.com"
 
 Update `values-azure.yaml` with the same hostname (replace all `<wachd.mycompany.com>` placeholders).
 
-> **Why the TCP health probe annotation?**
-> Azure Load Balancer uses an HTTP health probe on the nginx NodePort by default.
-> The probe sends `GET /` with no Host header — nginx returns 404, Azure marks all
-> backends unhealthy, and the LB accepts TCP connections but silently drops all HTTP
-> data before forwarding it to nginx. Setting the probe protocol to TCP bypasses
-> HTTP-level health checking and always passes as long as nginx is running.
+> **Why three health probe annotations instead of one?**
+> AKS 1.24+ cloud-provider-azure reads `appProtocol: http/https` on nginx service
+> ports and **overrides** the global `azure-load-balancer-health-probe-protocol`
+> annotation, always creating HTTP probes for ports 80/443 regardless of the global
+> setting. The per-port annotations (`port_80_health-probe_protocol` and
+> `port_443_health-probe_protocol`) take precedence over `appProtocol` and correctly
+> set TCP probes. Without these, Azure LB marks all nginx backends unhealthy and
+> silently drops HTTP request data — TCP connects succeed but the ACME HTTP-01
+> challenge token is never served, causing Let's Encrypt validation to time out.
+> See: https://github.com/Azure/AKS/issues/3210
 
 ---
 
@@ -400,8 +406,10 @@ az network lb probe update \
   --protocol Tcp --port <nodeport-443> --request-path ""
 ```
 > **Permanent fix:** The `deploy-azure.sh` script and this README's Step 5 now install
-> nginx ingress with `azure-load-balancer-health-probe-protocol=tcp` so this never
-> happens on a fresh deployment.
+> nginx ingress with three annotations: the global `azure-load-balancer-health-probe-protocol=tcp`
+> plus per-port `port_80_health-probe_protocol=Tcp` and `port_443_health-probe_protocol=Tcp`.
+> The per-port annotations are required on AKS 1.24+ because `appProtocol: http/https` on
+> nginx service ports overrides the global annotation (Azure/AKS#3210).
 
 **Cause 3 — ClusterIssuer using deprecated `class: nginx`:**
 If the ClusterIssuer was created with `class: nginx` (old format), cert-manager creates
