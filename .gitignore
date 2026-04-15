@@ -1,0 +1,78 @@
+# Binaries
+cmd/server/server
+cmd/worker/worker
+server
+worker
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+postgres_data/
+redis_data/
+ollama_data/
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+build/
+bin/
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.next/
+web/out/
+web/build/
+
+# Helm
+helm/charts/
+*.tgz
+
+# License keys (never commit!)
+*.license
+license.key
+
+# Internal process files
+ROADMAP.md
+
+# Claude / AI tool configuration (internal only)
+.claude/
+CLAUDE.md
+AI_SETUP.md
+REVIEW_PROCESS.md
+web/CLAUDE.md
+web/AGENTS.md
+# test_lifecycle.sh has hardcoded demo UUIDs — keep local only
+test_lifecycle.sh
+scripts/test_lifecycle.sh

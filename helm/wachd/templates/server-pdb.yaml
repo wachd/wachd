@@ -1,0 +1,16 @@
+{{- if .Values.server.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "wachd.fullname" . }}-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wachd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  minAvailable: {{ .Values.server.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "wachd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+{{- end }}

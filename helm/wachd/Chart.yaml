@@ -1,0 +1,41 @@
+apiVersion: v2
+name: wachd
+description: Alert intelligence platform with root cause analysis — self-hosted OpsGenie replacement
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+keywords:
+  - devops
+  - monitoring
+  - alerting
+  - incident-management
+  - sre
+  - on-call
+home: https://github.com/wachd/wachd
+sources:
+  - https://github.com/wachd/wachd
+maintainers:
+  - name: NTC Dev
+    email: info@ntcdev.com
+
+# Dependencies
+# NOTE: cert-manager is a cluster prerequisite — install it separately before
+# deploying wachd. See README.md > Kubernetes Deployment > Prerequisites.
+dependencies:
+  - name: postgresql
+    version: "12.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgres.enabled
+    tags:
+      - database
+  - name: redis
+    version: "18.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+    tags:
+      - cache
+
+annotations:
+  category: Monitoring
+  licenses: Apache-2.0
+

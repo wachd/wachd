@@ -1,0 +1,92 @@
+# Local development / Docker Desktop k8s — uses host postgres & redis
+# Usage: helm install wachd ./helm/wachd -f helm/wachd/values-dev.yaml -n wachd --create-namespace
+
+image:
+  tag: "0.1.2"
+  pullPolicy: IfNotPresent
+
+# Disable cert-manager — not installed on docker-desktop
+certManager:
+  enabled: false
+  createIssuer: false
+
+tls:
+  internal:
+    enabled: false
+  external:
+    enabled: false
+
+# Disable bundled postgres — use the one already running on the host
+postgres:
+  enabled: false
+  external:
+    host: host.docker.internal
+    port: 5432
+    database: wachd
+    username: wachd
+    passwordSecret: wachd-db-secret
+    passwordKey: password
+    sslMode: disable
+
+# Disable bundled redis — use the one already running on the host
+redis:
+  enabled: false
+  external:
+    host: host.docker.internal
+    port: 6379
+    tls: false
+    passwordSecret: wachd-redis-secret
+    passwordKey: password
+
+# Server
+server:
+  replicaCount: 1
+  hpa:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  affinity: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 8080
+
+# Worker
+worker:
+  replicaCount: 1
+  hpa:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  affinity: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Ollama running on host machine
+analysis:
+  backend: ollama
+  ollama:
+    enabled: false
+    endpoint: http://host.docker.internal:11434
+    model: phi3
+
+# Disable ingress — use kubectl port-forward
+ingress:
+  enabled: false
+
+config:
+  environment: development
+  logging:
+    level: debug
+    format: text

@@ -1,0 +1,47 @@
+name: Feature Request
+description: Propose a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the suggestion. Please describe the feature and the problem it solves.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve? What's the current limitation?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How would you like this to work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any other approaches you considered?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature Area
+      options:
+        - Alert ingestion / webhook parsing
+        - Context collection (GitHub, Loki, Prometheus)
+        - Root cause analysis
+        - On-call scheduling
+        - Notifications (Slack, email, SMS)
+        - Web dashboard
+        - Helm chart / Kubernetes
+        - API
+        - Other
+    validations:
+      required: true

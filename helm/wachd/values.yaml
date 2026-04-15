@@ -1,0 +1,537 @@
+# Wachd Helm Chart Values
+# Enterprise-Grade Configuration with Security, Scalability, and High Availability
+
+# =============================================================================
+# Global Configuration
+# =============================================================================
+global:
+  imagePullSecrets: []
+  storageClass: ""  # Use cluster default if not specified
+
+nameOverride: ""
+fullnameOverride: ""
+
+# =============================================================================
+# Image Configuration
+# =============================================================================
+image:
+  registry: ghcr.io
+  repository: wachd/wachd
+  tag: "0.2.0"
+  pullPolicy: IfNotPresent
+
+# =============================================================================
+# Certificate Management
+# cert-manager must be installed in the cluster before deploying wachd.
+# See README.md > Kubernetes Deployment > Prerequisites.
+# =============================================================================
+certManager:
+  # Create a self-signed ClusterIssuer for internal mTLS
+  createIssuer: true
+  issuerName: wachd-ca-issuer
+
+  # Optional: use an existing issuer (e.g. letsencrypt-prod) for external ingress
+  externalIssuer: ""
+
+# TLS Configuration
+tls:
+  # Tier 1: Internal Service mTLS (Automatic Self-Signed)
+  internal:
+    enabled: true
+    ca:
+      duration: 26280h  # 3 years
+      renewBefore: 720h  # Renew 30 days before expiry
+    server:
+      duration: 8760h  # 1 year
+      renewBefore: 720h  # Renew 30 days before expiry
+
+  # Tier 2: External Ingress TLS (Flexible)
+  external:
+    enabled: true
+    # Option A: Bring your own certificate (K8s Secret name)
+    secretName: ""
+    # Option B: Use cert-manager issuer (Let's Encrypt, company CA)
+    issuer: ""  # Falls back to self-signed if empty
+    # Certificate configuration
+    commonName: "wachd.example.com"
+    dnsNames: []  # Additional SANs
+
+# =============================================================================
+# PostgreSQL Database Configuration
+# =============================================================================
+postgres:
+  # Use in-cluster PostgreSQL for evaluation/development only.
+  # For production, set enabled: false and configure external below.
+  enabled: false
+
+  # In-cluster PostgreSQL settings (when enabled: true)
+  auth:
+    username: wachd
+    password: wachd_dev_password  # Change in production!
+    database: wachd
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+  # External PostgreSQL (AWS RDS, Azure, GCP, self-hosted)
+  # Set enabled: false and configure below
+  external:
+    host: ""  # e.g., mydb.abc123.us-east-1.rds.amazonaws.com
+    port: 5432
+    database: wachd
+    username: wachd
+    # Password stored in K8s secret (create manually)
+    passwordSecret: wachd-db-secret
+    passwordKey: password
+    # SSL/TLS Configuration
+    sslMode: require  # disable|allow|prefer|require|verify-ca|verify-full
+    sslRootCert: ""  # Path to CA certificate (optional)
+    # Connection Pooling
+    maxConnections: 100
+    maxIdleConnections: 10
+    connMaxLifetime: 3600  # seconds
+
+# =============================================================================
+# Redis Cache Configuration
+# =============================================================================
+redis:
+  # Use in-cluster Redis for evaluation/development only.
+  # For production, set enabled: false and configure external below.
+  enabled: false
+
+  # In-cluster Redis settings (when enabled: true)
+  auth:
+    enabled: true
+    password: redis_dev_password  # Change in production!
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+
+  # External Redis (AWS ElastiCache, Azure Cache, GCP Memorystore)
+  # Set enabled: false and configure below
+  external:
+    host: ""  # e.g., my-redis.abc123.cache.amazonaws.com
+    port: 6379
+    # Password stored in K8s secret (create manually)
+    passwordSecret: wachd-redis-secret
+    passwordKey: password
+    # TLS Configuration
+    tls: false
+    tlsSkipVerify: false
+    # Sentinel Configuration (High Availability)
+    sentinel:
+      enabled: false
+      masterName: mymaster
+      addresses: []  # ["sentinel1:26379", "sentinel2:26379"]
+
+# =============================================================================
+# Wachd Server Configuration
+# =============================================================================
+server:
+  replicaCount: 2
+
+  image:
+    repository: ""  # Defaults to global image.repository
+    tag: ""  # Defaults to global image.tag
+
+  # Horizontal Pod Autoscaler
+  hpa:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+
+  # Resource Requests and Limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # Health Checks
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /api/v1/health
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /api/v1/health
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # Service Configuration
+  service:
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+
+  # Pod Disruption Budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # Pod Anti-Affinity (spread across nodes)
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - server
+            topologyKey: kubernetes.io/hostname
+
+  # Node Selection
+  nodeSelector: {}
+  tolerations: []
+
+# =============================================================================
+# Wachd Worker Configuration
+# =============================================================================
+worker:
+  replicaCount: 1
+
+  image:
+    repository: ""  # Defaults to global image.repository
+    tag: ""  # Defaults to global image.tag
+
+  # Horizontal Pod Autoscaler
+  hpa:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+    # Custom metric: scale based on Redis queue depth
+    targetQueueDepth: 100
+
+  # Resource Requests and Limits (higher for analysis processing)
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 2000m  # 2 cores for context analysis
+      memory: 2Gi
+
+  # Health Checks
+  livenessProbe:
+    enabled: false  # Workers don't expose HTTP endpoint
+
+  readinessProbe:
+    enabled: false
+
+  # Pod Disruption Budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 0  # Can tolerate all workers down briefly
+
+  # Pod Anti-Affinity (spread across nodes/zones)
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - worker
+            topologyKey: topology.kubernetes.io/zone
+
+  # Node Selection
+  nodeSelector: {}
+  tolerations: []
+
+# =============================================================================
+# Web Dashboard Configuration
+# =============================================================================
+web:
+  enabled: true
+  replicaCount: 1
+
+  # Horizontal Pod Autoscaler
+  hpa:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilization: 70
+
+  # Resource Requests and Limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Service Configuration
+  service:
+    type: ClusterIP
+    port: 3000
+    annotations: {}
+    # Cloud load balancer examples:
+    #
+    # AWS internal NLB:
+    #   service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    #   service.beta.kubernetes.io/aws-load-balancer-subnets: "subnet-xxx,subnet-yyy"
+    #
+    # GCP internal LB:
+    #   cloud.google.com/load-balancer-type: "Internal"
+    #
+    # Azure internal LB:
+    #   service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+
+  # Node Selection
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# =============================================================================
+# Ingress Configuration
+# =============================================================================
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # cert-manager.io/cluster-issuer: "wachd-ca-issuer"  # self-signed
+    #
+    # AWS ALB internal:
+    #   kubernetes.io/ingress.class: alb
+    #   alb.ingress.kubernetes.io/scheme: internal
+    #   alb.ingress.kubernetes.io/subnets: subnet-xxx,subnet-yyy
+    #   alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:...
+  hosts:
+    - host: wachd.example.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: server   # routes to wachd-server:8080
+        - path: /
+          pathType: Prefix
+          service: web      # routes to wachd-web:3000
+  tls:
+    - secretName: wachd-tls
+      hosts:
+        - wachd.example.com
+
+# =============================================================================
+# Authentication Configuration
+# =============================================================================
+auth:
+  # Set enabled: false to skip auth entirely (dev only — never in production)
+  enabled: true
+
+  # Encryption key for SSO client secrets stored in the database.
+  # Must be a 32-byte value (64 hex characters).
+  # Generate once and store in a K8s Secret:
+  #   kubectl create secret generic wachd-encryption-key \
+  #     --namespace wachd \
+  #     --from-literal=encryption-key="$(openssl rand -hex 32)"
+  encryptionKeySecret:
+    name: wachd-encryption-key
+    key: encryption-key
+
+  # Legacy env-var migration: set to true for the FIRST deploy after upgrading
+  # to DB-stored SSO providers. After one successful deploy, set back to false.
+  # When true, ENTRA_* env vars are written to sso_providers table automatically.
+  legacyEnvMigration:
+    enabled: false
+
+  # Provider: entra | google | okta (only entra is implemented today)
+  provider: entra
+
+  entra:
+    tenantId: ""       # Azure Directory (tenant) ID
+    clientId: ""       # Application (client) ID
+    # Client secret stored in a Kubernetes Secret (create manually):
+    #   kubectl create secret generic wachd-entra-secret \
+    #     --namespace wachd \
+    #     --from-literal=client-secret=<YOUR_SECRET>
+    clientSecretRef:
+      name: wachd-entra-secret
+      key: client-secret
+    redirectURI: "https://wachd.example.com/auth/callback"
+
+  # Bootstrap group → team mappings on first deploy.
+  # These are seeded into the DB via numbered env vars from the configmap.
+  # You can also manage mappings live via the admin API.
+  groupMappings: []
+  # Example:
+  # groupMappings:
+  #   - groupId: "00000000-0000-0000-0000-000000000001"
+  #     groupName: "Payments Team"
+  #     teamName: "Payments"
+  #     role: responder           # viewer | responder | admin
+  #   - groupId: "00000000-0000-0000-0000-000000000002"
+  #     groupName: "Platform Admins"
+  #     teamName: "Platform"
+  #     role: admin
+
+# =============================================================================
+# Analysis Backend Configuration
+# =============================================================================
+analysis:
+  # Backend type: ollama | claude | openai
+  backend: ollama
+
+  # Ollama Configuration (local, air-gapped)
+  ollama:
+    enabled: true  # Deploy Ollama in cluster
+    endpoint: http://wachd-ollama:11434
+    model: llama3.2
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+    gpu:
+      enabled: false
+      count: 1
+
+  # Cloud backend secrets (SMB/Enterprise only)
+  claudeApiKeySecret: wachd-claude-key
+  claudeApiKeyKey: api-key
+  claudeModel: claude-sonnet-4-6
+
+  openaiApiKeySecret: wachd-openai-key
+  openaiApiKeyKey: api-key
+  openaiModel: gpt-4o-mini
+
+# =============================================================================
+# Application Configuration
+# =============================================================================
+config:
+  # Notification Channels
+  notifications:
+    slack:
+      enabled: false
+      webhookUrlSecret: wachd-slack-webhook
+      webhookUrlKey: url
+      channel: alerts
+
+    email:
+      enabled: false
+      smtpHost: ""
+      smtpPort: 587
+      from: wachd@example.com
+      usernameSecret: wachd-smtp-creds
+      usernameKey: username
+      passwordSecret: wachd-smtp-creds
+      passwordKey: password
+
+    twilio:
+      enabled: false
+      # Account SID and Auth Token stored in a Kubernetes Secret:
+      #   kubectl create secret generic wachd-twilio-creds \
+      #     --namespace wachd \
+      #     --from-literal=account-sid=<YOUR_SID> \
+      #     --from-literal=auth-token=<YOUR_TOKEN>
+      accountSidSecret: wachd-twilio-creds
+      accountSidKey: account-sid
+      authTokenSecret: wachd-twilio-creds
+      authTokenKey: auth-token
+      # Non-sensitive (stored in ConfigMap):
+      fromNumber: ""   # e.g. "+15551234567"
+      twimlURL: ""     # URL returning TwiML for voice alerts
+
+  # Data Sources
+  dataSources:
+    github:
+      enabled: false
+      tokenSecret: wachd-github-token
+      tokenKey: token
+      repos: []  # ["org/repo1", "org/repo2"]
+
+    prometheus:
+      enabled: false
+      endpoint: ""
+
+    loki:
+      enabled: false
+      endpoint: ""
+
+  # Logging
+  logging:
+    level: info  # debug | info | warn | error
+    format: json  # json | text
+
+  # Environment
+  environment: production  # development | staging | production
+
+# =============================================================================
+# Licensing Configuration
+# =============================================================================
+license:
+  # License tier: opensource | smb | enterprise
+  type: opensource
+
+  # License key (required for SMB/Enterprise).
+  # Store in a Kubernetes Secret, then reference it here:
+  #   kubectl create secret generic wachd-license \
+  #     --namespace wachd \
+  #     --from-literal=license-key="<your-key>"
+  # Leave keySecret empty for the open-source tier — no key needed.
+  keySecret: ""
+  keySecretKey: license-key
+
+# =============================================================================
+# Service Account
+# =============================================================================
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# =============================================================================
+# Security Context
+# =============================================================================
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+# =============================================================================
+# Monitoring (Prometheus)
+# =============================================================================
+metrics:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    path: /api/v1/metrics

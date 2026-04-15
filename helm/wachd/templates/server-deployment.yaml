@@ -1,0 +1,185 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wachd.fullname" . }}-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wachd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  {{- if not .Values.server.hpa.enabled }}
+  replicas: {{ .Values.server.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "wachd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "wachd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      serviceAccountName: {{ include "wachd.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: server
+        image: {{ include "wachd.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          {{- toYaml .Values.containerSecurityContext | nindent 10 }}
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        {{- if not .Values.postgres.enabled }}
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.external.passwordSecret }}
+              key: {{ .Values.postgres.external.passwordKey }}
+        {{- end }}
+        {{- if not .Values.redis.enabled }}
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.redis.external.passwordSecret }}
+              key: {{ .Values.redis.external.passwordKey }}
+        {{- end }}
+        - name: DATABASE_URL
+          value: {{ include "wachd.databaseURL" . | quote }}
+        - name: REDIS_URL
+          value: {{ include "wachd.redisURL" . | quote }}
+        - name: PORT
+          value: "8080"
+        {{- if and .Values.auth.enabled (eq .Values.auth.provider "entra") }}
+        - name: ENTRA_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.auth.entra.clientSecretRef.name }}
+              key: {{ .Values.auth.entra.clientSecretRef.key }}
+        {{- end }}
+        - name: WACHD_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.auth.encryptionKeySecret.name }}
+              key: {{ .Values.auth.encryptionKeySecret.key }}
+        {{- if .Values.license.keySecret }}
+        - name: WACHD_LICENSE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.license.keySecret }}
+              key: {{ .Values.license.keySecretKey }}
+        {{- end }}
+        {{- if eq .Values.analysis.backend "claude" }}
+        - name: CLAUDE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.analysis.claudeApiKeySecret }}
+              key: {{ .Values.analysis.claudeApiKeyKey }}
+        {{- end }}
+        {{- if eq .Values.analysis.backend "openai" }}
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.analysis.openaiApiKeySecret }}
+              key: {{ .Values.analysis.openaiApiKeyKey }}
+        {{- end }}
+        {{- if .Values.config.notifications.slack.enabled }}
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.slack.webhookUrlSecret }}
+              key: {{ .Values.config.notifications.slack.webhookUrlKey }}
+        {{- end }}
+        {{- if .Values.config.notifications.email.enabled }}
+        - name: SMTP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.email.usernameSecret }}
+              key: {{ .Values.config.notifications.email.usernameKey }}
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.email.passwordSecret }}
+              key: {{ .Values.config.notifications.email.passwordKey }}
+        {{- end }}
+        envFrom:
+        - configMapRef:
+            name: {{ include "wachd.fullname" . }}-config
+
+        {{- if .Values.server.livenessProbe.enabled }}
+        livenessProbe:
+          {{- toYaml (omit .Values.server.livenessProbe "enabled") | nindent 10 }}
+        {{- end }}
+        {{- if .Values.server.readinessProbe.enabled }}
+        readinessProbe:
+          {{- toYaml (omit .Values.server.readinessProbe "enabled") | nindent 10 }}
+        {{- end }}
+
+        resources:
+          {{- toYaml .Values.server.resources | nindent 10 }}
+
+        volumeMounts:
+        {{- if .Values.tls.internal.enabled }}
+        - name: tls-certs
+          mountPath: /etc/wachd/tls
+          readOnly: true
+        {{- end }}
+        {{- if not .Values.postgres.enabled }}
+        - name: postgres-password
+          mountPath: /secrets/postgres
+          readOnly: true
+        {{- end }}
+        {{- if not .Values.redis.enabled }}
+        - name: redis-password
+          mountPath: /secrets/redis
+          readOnly: true
+        {{- end }}
+        - name: tmp
+          mountPath: /tmp
+
+      volumes:
+      {{- if .Values.tls.internal.enabled }}
+      - name: tls-certs
+        secret:
+          secretName: {{ include "wachd.fullname" . }}-server-tls
+          defaultMode: 0400
+      {{- end }}
+      {{- if not .Values.postgres.enabled }}
+      - name: postgres-password
+        secret:
+          secretName: {{ .Values.postgres.external.passwordSecret }}
+          items:
+          - key: {{ .Values.postgres.external.passwordKey }}
+            path: {{ .Values.postgres.external.passwordKey }}
+          defaultMode: 0400
+      {{- end }}
+      {{- if not .Values.redis.enabled }}
+      - name: redis-password
+        secret:
+          secretName: {{ .Values.redis.external.passwordSecret }}
+          items:
+          - key: {{ .Values.redis.external.passwordKey }}
+            path: {{ .Values.redis.external.passwordKey }}
+          defaultMode: 0400
+      {{- end }}
+      - name: tmp
+        emptyDir: {}
+
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

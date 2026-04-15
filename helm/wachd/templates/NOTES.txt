@@ -1,0 +1,41 @@
+Wachd {{ .Chart.AppVersion }} has been deployed!
+
+=============================================================================
+QUICK START
+=============================================================================
+
+1. Get the application URL:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+   https://{{ .host }}
+{{- end }}
+{{- else }}
+   kubectl port-forward svc/{{ include "wachd.fullname" . }}-server 8080:8080 -n {{ .Release.Namespace }}
+   http://localhost:8080
+{{- end }}
+
+2. Configure your alert sources to send webhooks to:
+   POST https://<your-host>/api/v1/webhook/{teamId}/{secret}
+
+3. View the dashboard:
+   https://<your-host>/
+
+=============================================================================
+CONFIGURATION CHECKLIST
+=============================================================================
+
+[ ] Configure your alert source webhook URL
+[ ] Add team members via API or dashboard
+[ ] Set up Slack notifications (config.notifications.slack)
+[ ] Configure data sources (GitHub, Prometheus, Loki)
+[ ] Set on-call schedule for your team
+
+=============================================================================
+NEXT STEPS
+=============================================================================
+
+  Full documentation: https://github.com/wachd/wachd
+  Health check:       GET /api/v1/health
+  Metrics endpoint:   GET /api/v1/metrics
+
+=============================================================================

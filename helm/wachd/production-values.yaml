@@ -1,0 +1,92 @@
+# Production Values Override
+# Use with: helm upgrade wachd ./helm/wachd -f helm/wachd/production-values.yaml
+#
+# Replace all placeholder values before deploying.
+
+image:
+  tag: "0.1.0"  # Pin to specific release tag
+
+# Use external managed database (AWS RDS, Azure DB, GCP Cloud SQL)
+postgres:
+  enabled: false
+  external:
+    host: "YOUR_DB_HOST.rds.amazonaws.com"
+    port: 5432
+    database: wachd
+    username: wachd
+    passwordSecret: wachd-postgres-password  # kubectl create secret generic wachd-postgres-password --from-literal=password=<your-password>
+    sslMode: require
+
+# Use external managed Redis (AWS ElastiCache, Azure Cache)
+redis:
+  enabled: false
+  external:
+    host: "YOUR_REDIS_HOST.cache.amazonaws.com"
+    port: 6379
+    passwordSecret: wachd-redis-password  # kubectl create secret generic wachd-redis-password --from-literal=password=<your-password>
+    tls: true
+
+# High availability server
+server:
+  replicaCount: 3
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+
+# High availability worker
+worker:
+  replicaCount: 2
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+
+# Ingress with your domain
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: wachd.your-company.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: wachd-tls
+      hosts:
+        - wachd.your-company.com
+
+# Analysis backend (set to ollama for air-gapped, or cloud backend with SMB license)
+analysis:
+  backend: ollama
+  ollama:
+    enabled: true
+    model: llama3.2
+
+# Notifications
+config:
+  notifications:
+    slack:
+      enabled: true
+      webhookUrlSecret: wachd-slack-webhook
+      channel: alerts
+  dataSources:
+    github:
+      enabled: true
+      tokenSecret: wachd-github-token
+    prometheus:
+      enabled: true
+      endpoint: "http://prometheus-server.monitoring.svc.cluster.local"
+
+# License
+license:
+  type: opensource  # Change to smb or enterprise with valid key
+
+# Production logging
+config:
+  logging:
+    level: info
+    format: json
+  environment: production

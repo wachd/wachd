@@ -1,0 +1,166 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wachd.fullname" . }}-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wachd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.worker.hpa.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "wachd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "wachd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ include "wachd.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: worker
+        image: {{ include "wachd.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["/worker"]
+        securityContext:
+          {{- toYaml .Values.containerSecurityContext | nindent 10 }}
+        env:
+        {{- if not .Values.postgres.enabled }}
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.external.passwordSecret }}
+              key: {{ .Values.postgres.external.passwordKey }}
+        {{- end }}
+        {{- if not .Values.redis.enabled }}
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.redis.external.passwordSecret }}
+              key: {{ .Values.redis.external.passwordKey }}
+        {{- end }}
+        - name: DATABASE_URL
+          value: {{ include "wachd.databaseURL" . | quote }}
+        - name: REDIS_URL
+          value: {{ include "wachd.redisURL" . | quote }}
+        # Encryption key — required to decrypt per-team GitHub/Loki tokens stored in team_config
+        - name: WACHD_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.auth.encryptionKeySecret.name }}
+              key: {{ .Values.auth.encryptionKeySecret.key }}
+        {{- if .Values.license.keySecret }}
+        - name: WACHD_LICENSE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.license.keySecret }}
+              key: {{ .Values.license.keySecretKey }}
+        {{- end }}
+        {{- if eq .Values.analysis.backend "claude" }}
+        - name: CLAUDE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.analysis.claudeApiKeySecret }}
+              key: {{ .Values.analysis.claudeApiKeyKey }}
+        {{- end }}
+        {{- if eq .Values.analysis.backend "openai" }}
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.analysis.openaiApiKeySecret }}
+              key: {{ .Values.analysis.openaiApiKeyKey }}
+        {{- end }}
+        {{- if .Values.config.notifications.slack.enabled }}
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.slack.webhookUrlSecret }}
+              key: {{ .Values.config.notifications.slack.webhookUrlKey }}
+        {{- end }}
+        {{- if .Values.config.notifications.email.enabled }}
+        - name: SMTP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.email.usernameSecret }}
+              key: {{ .Values.config.notifications.email.usernameKey }}
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.email.passwordSecret }}
+              key: {{ .Values.config.notifications.email.passwordKey }}
+        {{- end }}
+        {{- if .Values.config.notifications.twilio.enabled }}
+        - name: TWILIO_ACCOUNT_SID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.twilio.accountSidSecret }}
+              key: {{ .Values.config.notifications.twilio.accountSidKey }}
+        - name: TWILIO_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.twilio.authTokenSecret }}
+              key: {{ .Values.config.notifications.twilio.authTokenKey }}
+        {{- end }}
+        envFrom:
+        - configMapRef:
+            name: {{ include "wachd.fullname" . }}-config
+
+        resources:
+          {{- toYaml .Values.worker.resources | nindent 10 }}
+
+        volumeMounts:
+        {{- if not .Values.postgres.enabled }}
+        - name: postgres-password
+          mountPath: /secrets/postgres
+          readOnly: true
+        {{- end }}
+        {{- if not .Values.redis.enabled }}
+        - name: redis-password
+          mountPath: /secrets/redis
+          readOnly: true
+        {{- end }}
+        - name: tmp
+          mountPath: /tmp
+
+      volumes:
+      {{- if not .Values.postgres.enabled }}
+      - name: postgres-password
+        secret:
+          secretName: {{ .Values.postgres.external.passwordSecret }}
+          items:
+          - key: {{ .Values.postgres.external.passwordKey }}
+            path: {{ .Values.postgres.external.passwordKey }}
+          defaultMode: 0400
+      {{- end }}
+      {{- if not .Values.redis.enabled }}
+      - name: redis-password
+        secret:
+          secretName: {{ .Values.redis.external.passwordSecret }}
+          items:
+          - key: {{ .Values.redis.external.passwordKey }}
+            path: {{ .Values.redis.external.passwordKey }}
+          defaultMode: 0400
+      {{- end }}
+      - name: tmp
+        emptyDir: {}
+
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

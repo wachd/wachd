@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wachd.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wachd.labels" . | nindent 4 }}
+data:
+  # Application Configuration
+  LOG_LEVEL: {{ .Values.config.logging.level | quote }}
+  LOG_FORMAT: {{ .Values.config.logging.format | quote }}
+  ENVIRONMENT: {{ .Values.config.environment | quote }}
+
+  # Analysis Backend Configuration
+  AI_BACKEND: {{ .Values.analysis.backend | quote }}
+  {{- if eq .Values.analysis.backend "ollama" }}
+  OLLAMA_ENDPOINT: {{ .Values.analysis.ollama.endpoint | quote }}
+  OLLAMA_MODEL: {{ .Values.analysis.ollama.model | quote }}
+  {{- else if eq .Values.analysis.backend "claude" }}
+  CLAUDE_MODEL: {{ .Values.analysis.claudeModel | quote }}
+  {{- else if eq .Values.analysis.backend "openai" }}
+  OPENAI_MODEL: {{ .Values.analysis.openaiModel | quote }}
+  {{- end }}
+
+  # Notification Configuration
+  {{- if .Values.config.notifications.slack.enabled }}
+  SLACK_CHANNEL: {{ .Values.config.notifications.slack.channel | quote }}
+  {{- end }}
+  {{- if .Values.config.notifications.email.enabled }}
+  SMTP_HOST: {{ .Values.config.notifications.email.smtpHost | quote }}
+  SMTP_PORT: {{ .Values.config.notifications.email.smtpPort | quote }}
+  SMTP_FROM: {{ .Values.config.notifications.email.from | quote }}
+  {{- end }}
+  {{- if .Values.config.notifications.twilio.enabled }}
+  # Twilio non-sensitive config (secrets are injected via secretKeyRef in the worker deployment)
+  TWILIO_FROM_NUMBER: {{ .Values.config.notifications.twilio.fromNumber | quote }}
+  TWILIO_TWIML_URL: {{ .Values.config.notifications.twilio.twimlURL | quote }}
+  {{- end }}
+
+  # Data Sources Configuration
+  # NOTE: Global endpoints below are for local dev convenience only.
+  # In production, each team configures its own data sources via the API
+  # and they are stored encrypted in the team_config database table.
+  {{- if .Values.config.dataSources.prometheus.enabled }}
+  PROMETHEUS_ENDPOINT: {{ .Values.config.dataSources.prometheus.endpoint | quote }}
+  {{- end }}
+  {{- if .Values.config.dataSources.loki.enabled }}
+  LOKI_ENDPOINT: {{ .Values.config.dataSources.loki.endpoint | quote }}
+  {{- end }}
+
+  # License Configuration
+  LICENSE_TYPE: {{ .Values.license.type | quote }}
+
+  # Authentication Configuration
+  {{- if .Values.auth.enabled }}
+  AUTH_DISABLED: "false"
+  ENTRA_TENANT_ID: {{ .Values.auth.entra.tenantId | quote }}
+  ENTRA_CLIENT_ID: {{ .Values.auth.entra.clientId | quote }}
+  AUTH_REDIRECT_URI: {{ .Values.auth.entra.redirectURI | quote }}
+  {{- else }}
+  AUTH_DISABLED: "true"
+  {{- end }}
+
+  # Group mappings (bootstrapped on server startup)
+  {{- range $i, $m := .Values.auth.groupMappings }}
+  GROUP_MAPPING_{{ $i }}_GROUP_ID: {{ $m.groupId | quote }}
+  GROUP_MAPPING_{{ $i }}_GROUP_NAME: {{ default "" $m.groupName | quote }}
+  GROUP_MAPPING_{{ $i }}_TEAM_NAME: {{ $m.teamName | quote }}
+  GROUP_MAPPING_{{ $i }}_ROLE: {{ default "viewer" $m.role | quote }}
+  GROUP_MAPPING_{{ $i }}_PROVIDER: "entra"
+  {{- end }}

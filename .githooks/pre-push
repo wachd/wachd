@@ -1,0 +1,16 @@
+#!/bin/sh
+# Pre-push hook — runs golangci-lint before every push.
+# Install once with: make hooks
+
+set -e
+
+export PATH="$PATH:$(go env GOPATH)/bin"
+
+if ! command -v golangci-lint > /dev/null 2>&1; then
+  echo "golangci-lint not found. Install it or skip with: git push --no-verify"
+  exit 1
+fi
+
+echo "Running golangci-lint..."
+golangci-lint run ./...
+echo "Lint passed."

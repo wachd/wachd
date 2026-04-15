@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wachd-postgres
+    environment:
+      POSTGRES_DB: wachd
+      POSTGRES_USER: wachd
+      POSTGRES_PASSWORD: wachd_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wachd"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: wachd-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Ollama for local analysis (optional — only needed if you don't have Ollama installed locally)
+  # If you have the Ollama app running on your machine, set OLLAMA_ENDPOINT=http://localhost:11434 in .env.
+  # Uncomment below only if you want Ollama running inside Docker:
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: wachd-ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   # After starting, pull a model: docker exec wachd-ollama ollama pull llama3.2
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:

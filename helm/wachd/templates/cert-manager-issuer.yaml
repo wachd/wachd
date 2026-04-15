@@ -1,0 +1,55 @@
+{{- if .Values.certManager.createIssuer }}
+---
+# Self-Signed Issuer (Bootstrap CA)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.certManager.issuerName }}-bootstrap
+  labels:
+    {{- include "wachd.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+
+---
+# Root CA Certificate (3-year validity)
+# NOTE: Created in cert-manager namespace because ClusterIssuer of type CA
+# reads its secret from the namespace where cert-manager is installed.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.certManager.issuerName }}-ca
+  namespace: cert-manager
+  labels:
+    {{- include "wachd.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: "Wachd Internal CA"
+  secretName: {{ .Values.certManager.issuerName }}-ca-secret
+  duration: {{ .Values.tls.internal.ca.duration }}
+  renewBefore: {{ .Values.tls.internal.ca.renewBefore }}
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 4096
+  subject:
+    organizations:
+      - "Wachd"
+    organizationalUnits:
+      - "Internal Services"
+  issuerRef:
+    name: {{ .Values.certManager.issuerName }}-bootstrap
+    kind: ClusterIssuer
+    group: cert-manager.io
+
+---
+# CA ClusterIssuer (used by all internal services)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.certManager.issuerName }}
+  labels:
+    {{- include "wachd.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ .Values.certManager.issuerName }}-ca-secret
+{{- end }}

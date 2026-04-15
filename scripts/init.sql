@@ -1,0 +1,7 @@
+-- Wachd reference schema
+--
+-- NOTE: You do NOT need to run this manually.
+-- The server and worker auto-migrate the schema on every startup.
+-- This file is provided as a reference only.
+--
+-- The canonical schema is embedded in the binary at internal/store/schema.sql
