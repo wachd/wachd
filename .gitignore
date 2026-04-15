@@ -1,8 +1,8 @@
 # Binaries
 cmd/server/server
 cmd/worker/worker
-server
-worker
+/server
+/worker
 *.exe
 *.dll
 *.so
