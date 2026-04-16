@@ -57,6 +57,8 @@ data:
   ENTRA_TENANT_ID: {{ .Values.auth.entra.tenantId | quote }}
   ENTRA_CLIENT_ID: {{ .Values.auth.entra.clientId | quote }}
   AUTH_REDIRECT_URI: {{ .Values.auth.entra.redirectURI | quote }}
+  FRONTEND_URL: {{ .Values.auth.frontendURL | quote }}
+  CORS_ORIGIN: {{ .Values.auth.frontendURL | quote }}
   {{- else }}
   AUTH_DISABLED: "true"
   {{- end }}

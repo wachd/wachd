@@ -374,6 +374,9 @@ auth:
       name: wachd-entra-secret
       key: client-secret
     redirectURI: "https://wachd.example.com/auth/callback"
+  # Frontend base URL — used for post-auth redirects and CORS origin.
+  # Must match the hostname users access Wachd on.
+  frontendURL: "https://wachd.example.com"
 
   # Bootstrap group → team mappings on first deploy.
   # These are seeded into the DB via numbered env vars from the configmap.
