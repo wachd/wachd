@@ -112,7 +112,7 @@ function LoginForm() {
           <div className="mt-4">
             <button
               type="button"
-              onClick={() => { window.location.href = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'}/auth/login`; }}
+              onClick={() => { window.location.href = `${process.env.NEXT_PUBLIC_API_URL || ''}/auth/login`; }}
               className="flex items-center justify-center gap-3 w-full bg-white text-gray-900 font-medium py-2.5 px-4 rounded-lg hover:bg-gray-100 transition-colors"
             >
               <MicrosoftIcon />

@@ -7,7 +7,7 @@ import type { TeamMember } from '@/lib/types';
 
 type Tab = 'general' | 'datasources' | 'notifications' | 'members' | 'escalation';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 export default function SettingsPage() {
   const { session, loading: sessionLoading, primaryTeamId } = useSession();

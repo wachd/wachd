@@ -2,7 +2,7 @@
 
 import type { Incident, TeamMember, Schedule, OnCallUser, ScheduleOverride } from './types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
