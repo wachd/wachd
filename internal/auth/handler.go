@@ -126,6 +126,12 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		if pid != nil {
 			providerID = *pid
 		}
+	} else if provider != nil && h.providerCache != nil {
+		// Provider was configured from env vars — look up its DB record to get the UUID
+		// so group mappings created via the admin UI (which require a real provider UUID) work.
+		if _, pid, _, err := h.providerCache.GetFirst(ctx); err == nil && pid != nil {
+			providerID = *pid
+		}
 	}
 	if provider == nil {
 		http.Error(w, "No SSO provider configured", http.StatusServiceUnavailable)
