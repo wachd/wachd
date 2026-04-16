@@ -157,6 +157,16 @@ func main() {
 			log.Printf("⚠ OpenAI API key not configured (will skip AI analysis)")
 		}
 
+	case "gemini":
+		apiKey := os.Getenv("GEMINI_API_KEY")
+		model := os.Getenv("GEMINI_MODEL")
+		aiEngine = ai.NewGeminiBackend(apiKey, model)
+		if aiEngine.IsAvailable(context.Background()) {
+			log.Printf("✓ Gemini backend configured (model: %s)", aiEngine.GetModelName())
+		} else {
+			log.Printf("⚠ Gemini API key not configured (will skip AI analysis)")
+		}
+
 	default: // "ollama" or unset
 		endpoint := os.Getenv("OLLAMA_ENDPOINT")
 		if endpoint == "" {

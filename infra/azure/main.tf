@@ -58,7 +58,7 @@ resource "azurerm_kubernetes_cluster" "wachd" {
     vm_size    = var.aks_system_vm_size
 
     # Autoscaling (optional — set aks_enable_auto_scaling: true)
-    enable_auto_scaling = var.aks_enable_auto_scaling
+    auto_scaling_enabled = var.aks_enable_auto_scaling
     min_count           = var.aks_enable_auto_scaling ? var.aks_min_node_count : null
     max_count           = var.aks_enable_auto_scaling ? var.aks_max_node_count : null
 
@@ -97,6 +97,9 @@ resource "azurerm_kubernetes_cluster" "wachd" {
   oms_agent {
     log_analytics_workspace_id = azurerm_log_analytics_workspace.wachd.id
   }
+
+  # Managed Prometheus — scrapes AKS metrics into the Monitor workspace
+  monitor_metrics {}
 
   # Defender for Containers (security scanning)
   microsoft_defender {
@@ -285,6 +288,95 @@ resource "azurerm_container_registry" "wachd" {
   admin_enabled       = false  # Use Managed Identity instead
 
   tags = var.tags
+}
+
+# ============================================================================
+# Azure Monitor Workspace — Managed Prometheus
+# ============================================================================
+
+resource "azurerm_monitor_workspace" "wachd" {
+  name                = "amw-wachd-${var.environment}"
+  resource_group_name = azurerm_resource_group.wachd.name
+  location            = azurerm_resource_group.wachd.location
+  tags                = var.tags
+}
+
+# ============================================================================
+# Azure Managed Grafana
+# ============================================================================
+
+resource "azurerm_dashboard_grafana" "wachd" {
+  name                              = "grafana-wachd-${var.environment}"
+  resource_group_name               = azurerm_resource_group.wachd.name
+  location                          = azurerm_resource_group.wachd.location
+  grafana_major_version             = 11
+  sku                               = "Standard"
+  public_network_access_enabled     = true
+  zone_redundancy_enabled           = false
+
+  # Link to Azure Monitor workspace so Grafana can query Prometheus metrics
+  azure_monitor_workspace_integrations {
+    resource_id = azurerm_monitor_workspace.wachd.id
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  tags = var.tags
+}
+
+# Grant Grafana's managed identity read access to Prometheus metrics
+resource "azurerm_role_assignment" "grafana_monitoring_reader" {
+  scope                = azurerm_monitor_workspace.wachd.id
+  role_definition_name = "Monitoring Data Reader"
+  principal_id         = azurerm_dashboard_grafana.wachd.identity[0].principal_id
+}
+
+# Grant Grafana read access to Azure resources (for Azure dashboards)
+resource "azurerm_role_assignment" "grafana_reader" {
+  scope                = azurerm_resource_group.wachd.id
+  role_definition_name = "Monitoring Reader"
+  principal_id         = azurerm_dashboard_grafana.wachd.identity[0].principal_id
+}
+
+# ============================================================================
+# Prometheus metrics scraping — link AKS to the Monitor workspace
+# ============================================================================
+
+# Data collection rule — defines what to scrape from AKS
+resource "azurerm_monitor_data_collection_rule" "wachd" {
+  name                = "dcr-wachd-${var.environment}"
+  resource_group_name = azurerm_resource_group.wachd.name
+  location            = azurerm_resource_group.wachd.location
+
+  destinations {
+    monitor_account {
+      monitor_account_id = azurerm_monitor_workspace.wachd.id
+      name               = "MonitoringAccount"
+    }
+  }
+
+  data_flow {
+    streams      = ["Microsoft-PrometheusMetrics"]
+    destinations = ["MonitoringAccount"]
+  }
+
+  data_sources {
+    prometheus_forwarder {
+      streams = ["Microsoft-PrometheusMetrics"]
+      name    = "PrometheusDataSource"
+    }
+  }
+
+  tags = var.tags
+}
+
+# Associate the DCR with the AKS cluster
+resource "azurerm_monitor_data_collection_rule_association" "wachd" {
+  name                    = "dcra-wachd-${var.environment}"
+  target_resource_id      = azurerm_kubernetes_cluster.wachd.id
+  data_collection_rule_id = azurerm_monitor_data_collection_rule.wachd.id
 }
 
 # Grant AKS pull access to ACR (Managed Identity — no secrets needed)

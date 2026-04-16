@@ -397,10 +397,16 @@ auth:
 # Analysis Backend Configuration
 # =============================================================================
 analysis:
-  # Backend type: ollama | claude | openai
+  # Backend type: ollama | claude | openai | gemini
+  # ollama  — local/air-gapped, no API key needed, runs in-cluster
+  # claude  — Anthropic Claude (best quality, requires CLAUDE_API_KEY)
+  # openai  — OpenAI GPT (requires OPENAI_API_KEY)
+  # gemini  — Google Gemini (free tier available, requires GEMINI_API_KEY)
   backend: ollama
 
-  # Ollama Configuration (local, air-gapped)
+  # ---------------------------------------------------------------------------
+  # Ollama — local LLM, air-gapped, no external API calls
+  # ---------------------------------------------------------------------------
   ollama:
     enabled: true  # Deploy Ollama in cluster
     endpoint: http://wachd-ollama:11434
@@ -416,14 +422,26 @@ analysis:
       enabled: false
       count: 1
 
-  # Cloud backend secrets (SMB/Enterprise only)
+  # ---------------------------------------------------------------------------
+  # Claude (Anthropic) — highest quality analysis
+  # ---------------------------------------------------------------------------
   claudeApiKeySecret: wachd-claude-key
   claudeApiKeyKey: api-key
   claudeModel: claude-sonnet-4-6
 
+  # ---------------------------------------------------------------------------
+  # OpenAI — GPT-4o class models
+  # ---------------------------------------------------------------------------
   openaiApiKeySecret: wachd-openai-key
   openaiApiKeyKey: api-key
   openaiModel: gpt-4o-mini
+
+  # ---------------------------------------------------------------------------
+  # Gemini (Google) — free tier available, fast
+  # ---------------------------------------------------------------------------
+  geminiApiKeySecret: wachd-gemini-key
+  geminiApiKeyKey: api-key
+  geminiModel: gemini-2.0-flash
 
 # =============================================================================
 # Application Configuration

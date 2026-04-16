@@ -155,23 +155,39 @@ output "log_analytics_workspace_id" {
 }
 
 # ============================================================================
+# Prometheus + Grafana
+# ============================================================================
+
+output "grafana_endpoint" {
+  description = "Azure Managed Grafana URL"
+  value       = azurerm_dashboard_grafana.wachd.endpoint
+}
+
+output "prometheus_query_endpoint" {
+  description = "Azure Monitor Workspace Prometheus query endpoint"
+  value       = azurerm_monitor_workspace.wachd.query_endpoint
+}
+
+# ============================================================================
 # Summary (non-sensitive — safe to print in CI logs)
 # ============================================================================
 
 output "deployment_summary" {
   description = "Non-sensitive deployment summary — safe to log in CI"
   value = {
-    resource_group   = azurerm_resource_group.wachd.name
-    location         = azurerm_resource_group.wachd.location
-    aks_cluster      = azurerm_kubernetes_cluster.wachd.name
-    postgres_host    = "${azurerm_postgresql_flexible_server.wachd.name}.postgres.database.azure.com"
-    redis_host       = azurerm_redis_cache.wachd.hostname
-    redis_tls_port   = azurerm_redis_cache.wachd.ssl_port
-    entra_tenant_id  = data.azurerm_client_config.current.tenant_id
-    entra_client_id  = azuread_application.wachd.client_id
-    key_vault        = azurerm_key_vault.wachd.name
-    acr_server       = var.create_acr ? azurerm_container_registry.wachd[0].login_server : "not created (using ghcr.io)"
-    wachd_url        = "https://${var.wachd_hostname}"
-    admin_consent    = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/adminconsent?client_id=${azuread_application.wachd.client_id}"
+    resource_group    = azurerm_resource_group.wachd.name
+    location          = azurerm_resource_group.wachd.location
+    aks_cluster       = azurerm_kubernetes_cluster.wachd.name
+    postgres_host     = "${azurerm_postgresql_flexible_server.wachd.name}.postgres.database.azure.com"
+    redis_host        = azurerm_redis_cache.wachd.hostname
+    redis_tls_port    = azurerm_redis_cache.wachd.ssl_port
+    entra_tenant_id   = data.azurerm_client_config.current.tenant_id
+    entra_client_id   = azuread_application.wachd.client_id
+    key_vault         = azurerm_key_vault.wachd.name
+    acr_server        = var.create_acr ? azurerm_container_registry.wachd[0].login_server : "not created (using ghcr.io)"
+    wachd_url         = "https://${var.wachd_hostname}"
+    grafana_url       = azurerm_dashboard_grafana.wachd.endpoint
+    prometheus_url    = azurerm_monitor_workspace.wachd.query_endpoint
+    admin_consent     = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/adminconsent?client_id=${azuread_application.wachd.client_id}"
   }
 }

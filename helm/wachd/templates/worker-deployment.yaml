@@ -78,6 +78,13 @@ spec:
               name: {{ .Values.analysis.openaiApiKeySecret }}
               key: {{ .Values.analysis.openaiApiKeyKey }}
         {{- end }}
+        {{- if eq .Values.analysis.backend "gemini" }}
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.analysis.geminiApiKeySecret }}
+              key: {{ .Values.analysis.geminiApiKeyKey }}
+        {{- end }}
         {{- if .Values.config.notifications.slack.enabled }}
         - name: SLACK_WEBHOOK_URL
           valueFrom:

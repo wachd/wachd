@@ -31,6 +31,8 @@ func (db *DB) GetTeamConfig(ctx context.Context, teamID uuid.UUID) (*TeamConfig,
 			team_id, slack_webhook_url, slack_channel, slack_bot_token,
 			github_token_encrypted, github_repos,
 			prometheus_endpoint, loki_endpoint,
+			dynatrace_endpoint, dynatrace_token_encrypted,
+			splunk_endpoint, splunk_token_encrypted,
 			ai_backend, ai_model,
 			created_at, updated_at
 		FROM team_config
@@ -47,6 +49,10 @@ func (db *DB) GetTeamConfig(ctx context.Context, teamID uuid.UUID) (*TeamConfig,
 		&tc.GitHubRepos,
 		&tc.PrometheusEndpoint,
 		&tc.LokiEndpoint,
+		&tc.DynatraceEndpoint,
+		&tc.DynatraceTokenEncrypted,
+		&tc.SplunkEndpoint,
+		&tc.SplunkTokenEncrypted,
 		&tc.AIBackend,
 		&tc.AIModel,
 		&tc.CreatedAt,
@@ -69,20 +75,26 @@ func (db *DB) UpsertTeamConfig(ctx context.Context, tc *TeamConfig) error {
 			team_id, slack_webhook_url, slack_channel, slack_bot_token,
 			github_token_encrypted, github_repos,
 			prometheus_endpoint, loki_endpoint,
+			dynatrace_endpoint, dynatrace_token_encrypted,
+			splunk_endpoint, splunk_token_encrypted,
 			ai_backend, ai_model,
 			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (team_id) DO UPDATE SET
-			slack_webhook_url     = EXCLUDED.slack_webhook_url,
-			slack_channel         = EXCLUDED.slack_channel,
-			slack_bot_token       = EXCLUDED.slack_bot_token,
-			github_token_encrypted = EXCLUDED.github_token_encrypted,
-			github_repos          = EXCLUDED.github_repos,
-			prometheus_endpoint   = EXCLUDED.prometheus_endpoint,
-			loki_endpoint         = EXCLUDED.loki_endpoint,
-			ai_backend            = EXCLUDED.ai_backend,
-			ai_model              = EXCLUDED.ai_model,
-			updated_at            = EXCLUDED.updated_at
+			slack_webhook_url         = EXCLUDED.slack_webhook_url,
+			slack_channel             = EXCLUDED.slack_channel,
+			slack_bot_token           = EXCLUDED.slack_bot_token,
+			github_token_encrypted    = EXCLUDED.github_token_encrypted,
+			github_repos              = EXCLUDED.github_repos,
+			prometheus_endpoint       = EXCLUDED.prometheus_endpoint,
+			loki_endpoint             = EXCLUDED.loki_endpoint,
+			dynatrace_endpoint        = EXCLUDED.dynatrace_endpoint,
+			dynatrace_token_encrypted = EXCLUDED.dynatrace_token_encrypted,
+			splunk_endpoint           = EXCLUDED.splunk_endpoint,
+			splunk_token_encrypted    = EXCLUDED.splunk_token_encrypted,
+			ai_backend                = EXCLUDED.ai_backend,
+			ai_model                  = EXCLUDED.ai_model,
+			updated_at                = EXCLUDED.updated_at
 	`
 
 	now := time.Now()
@@ -95,6 +107,10 @@ func (db *DB) UpsertTeamConfig(ctx context.Context, tc *TeamConfig) error {
 		tc.GitHubRepos,
 		tc.PrometheusEndpoint,
 		tc.LokiEndpoint,
+		tc.DynatraceEndpoint,
+		tc.DynatraceTokenEncrypted,
+		tc.SplunkEndpoint,
+		tc.SplunkTokenEncrypted,
 		tc.AIBackend,
 		tc.AIModel,
 		now,

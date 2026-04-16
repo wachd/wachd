@@ -281,10 +281,21 @@ CREATE TABLE IF NOT EXISTS team_config (
     slack_bot_token        VARCHAR(255),
     github_token_encrypted TEXT,
     github_repos           JSONB,
-    prometheus_endpoint    VARCHAR(500),
-    loki_endpoint          VARCHAR(500),
+    prometheus_endpoint         VARCHAR(500),
+    loki_endpoint               VARCHAR(500),
+    dynatrace_endpoint          VARCHAR(500),
+    dynatrace_token_encrypted   TEXT,
+    splunk_endpoint             VARCHAR(500),
+    splunk_token_encrypted      TEXT,
     ai_backend             VARCHAR(50)  NOT NULL DEFAULT 'ollama',
     ai_model               VARCHAR(100),
     created_at             TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at             TIMESTAMP    NOT NULL DEFAULT NOW()
 );
+
+-- Idempotent migration: add Dynatrace and Splunk columns if they don't exist yet.
+-- Safe to run on existing databases (no-op if columns already present).
+ALTER TABLE team_config ADD COLUMN IF NOT EXISTS dynatrace_endpoint        VARCHAR(500);
+ALTER TABLE team_config ADD COLUMN IF NOT EXISTS dynatrace_token_encrypted TEXT;
+ALTER TABLE team_config ADD COLUMN IF NOT EXISTS splunk_endpoint            VARCHAR(500);
+ALTER TABLE team_config ADD COLUMN IF NOT EXISTS splunk_token_encrypted    TEXT;

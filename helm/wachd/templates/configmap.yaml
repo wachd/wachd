@@ -20,6 +20,8 @@ data:
   CLAUDE_MODEL: {{ .Values.analysis.claudeModel | quote }}
   {{- else if eq .Values.analysis.backend "openai" }}
   OPENAI_MODEL: {{ .Values.analysis.openaiModel | quote }}
+  {{- else if eq .Values.analysis.backend "gemini" }}
+  GEMINI_MODEL: {{ .Values.analysis.geminiModel | quote }}
   {{- end }}
 
   # Notification Configuration

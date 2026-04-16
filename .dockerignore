@@ -17,3 +17,6 @@ redis_data/
 ollama_data/
 .env
 .env.local
+web/.env
+web/.env.local
+web/.env*.local

@@ -113,6 +113,85 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 		}
 	}
 
+	// Dynatrace — problems, logs, and metrics
+	if cfg.DynatraceEndpoint != nil && *cfg.DynatraceEndpoint != "" && cfg.DynatraceTokenEncrypted != nil && w.enc != nil {
+		dtToken, err := w.enc.Decrypt(*cfg.DynatraceTokenEncrypted)
+		if err != nil {
+			log.Printf("  ⚠ Failed to decrypt Dynatrace token: %v", err)
+		} else if dtToken != "" {
+			dc := collector.NewDynatraceCollector(*cfg.DynatraceEndpoint, dtToken)
+
+			// Problems (Dynatrace pre-correlated anomalies)
+			problems, err := dc.FetchProblems(ctx, serviceName, since, 10)
+			if err != nil {
+				log.Printf("  ⚠ Dynatrace problems: %v", err)
+			} else if len(problems) > 0 {
+				for _, p := range problems {
+					result.Logs = append(result.Logs, collector.LogLine{
+						Timestamp: p.StartTime,
+						Message:   "[Dynatrace Problem] " + p.Title + " (severity: " + p.Severity + ", status: " + p.Status + ")",
+						Level:     p.Severity,
+						Labels:    map[string]string{"source": "dynatrace", "problem_id": p.ID},
+					})
+				}
+				log.Printf("  ✓ %d problems from Dynatrace", len(problems))
+			}
+
+			// Error logs
+			dtLogs, err := dc.FetchLogs(ctx, serviceName, since, incident.FiredAt, 50)
+			if err != nil {
+				log.Printf("  ⚠ Dynatrace logs: %v", err)
+			} else if len(dtLogs) > 0 {
+				result.Logs = append(result.Logs, dtLogs...)
+				log.Printf("  ✓ %d log lines from Dynatrace", len(dtLogs))
+			}
+
+			// Error rate metric
+			dtMetrics, err := dc.FetchMetrics(ctx, serviceName, "builtin:service.errors.total.rate", since, incident.FiredAt)
+			if err != nil {
+				log.Printf("  ⚠ Dynatrace metrics: %v", err)
+			} else if len(dtMetrics) > 0 {
+				result.Metrics = append(result.Metrics, dtMetrics...)
+				log.Printf("  ✓ %d metric points from Dynatrace", len(dtMetrics))
+			}
+		}
+	}
+
+	// Splunk — error logs and notable events
+	if cfg.SplunkEndpoint != nil && *cfg.SplunkEndpoint != "" && cfg.SplunkTokenEncrypted != nil && w.enc != nil {
+		splunkToken, err := w.enc.Decrypt(*cfg.SplunkTokenEncrypted)
+		if err != nil {
+			log.Printf("  ⚠ Failed to decrypt Splunk token: %v", err)
+		} else if splunkToken != "" {
+			sc := collector.NewSplunkCollector(*cfg.SplunkEndpoint, splunkToken)
+
+			// Error logs via SPL
+			splunkLogs, err := sc.FetchLogs(ctx, serviceName, since, incident.FiredAt, 50)
+			if err != nil {
+				log.Printf("  ⚠ Splunk logs: %v", err)
+			} else if len(splunkLogs) > 0 {
+				result.Logs = append(result.Logs, splunkLogs...)
+				log.Printf("  ✓ %d log lines from Splunk", len(splunkLogs))
+			}
+
+			// Notable events (ITSI/ES)
+			notables, err := sc.FetchNotableEvents(ctx, serviceName, since, 10)
+			if err != nil {
+				log.Printf("  ⚠ Splunk notable events: %v", err)
+			} else if len(notables) > 0 {
+				for _, n := range notables {
+					result.Logs = append(result.Logs, collector.LogLine{
+						Timestamp: n.Timestamp,
+						Message:   "[Splunk Notable] " + n.Raw,
+						Level:     "error",
+						Labels:    n.Fields,
+					})
+				}
+				log.Printf("  ✓ %d notable events from Splunk", len(notables))
+			}
+		}
+	}
+
 	return result
 }
 
@@ -156,24 +235,141 @@ func (w *Worker) updateIncidentContext(ctx context.Context, incident *store.Inci
 }
 
 // extractServiceName attempts to determine the affected service from the alert payload.
+// Handles multiple alert source formats:
+//   - Grafana legacy:          payload.tags.service
+//   - Grafana unified alerting: payload.commonLabels.service / alerts[0].labels.service
+//   - Prometheus Alertmanager:  payload.labels.service
+//   - Kubernetes labels:        deployment / pod (with hash suffix stripped)
+//   - Title fallback:           "High CPU — web-server" or "High CPU - web-server"
 func (w *Worker) extractServiceName(incident *store.Incident) string {
 	var payload map[string]interface{}
 	if err := json.Unmarshal(incident.AlertPayload, &payload); err != nil {
 		return ""
 	}
-	if tags, ok := payload["tags"].(map[string]interface{}); ok {
-		if svc, ok := tags["service"].(string); ok && svc != "" {
-			return svc
+
+	// Helper: extract string from a nested map
+	strVal := func(m map[string]interface{}, key string) string {
+		if v, ok := m[key].(string); ok {
+			return strings.TrimSpace(v)
 		}
+		return ""
 	}
-	// Fallback: "High CPU — web-server" → "web-server"
-	if strings.Contains(incident.Title, " — ") {
-		parts := strings.SplitN(incident.Title, " — ", 2)
-		return strings.TrimSpace(parts[1])
+
+	// Helper: strip k8s pod hash suffix — "demo-backend-5cc9f44fd6-66scm" → "demo-backend"
+	stripPodSuffix := func(pod string) string {
+		parts := strings.Split(pod, "-")
+		if len(parts) >= 3 {
+			// Last two segments are the ReplicaSet hash + pod hash (5 chars each)
+			last := parts[len(parts)-1]
+			secondLast := parts[len(parts)-2]
+			if len(last) == 5 && len(secondLast) == 10 {
+				return strings.Join(parts[:len(parts)-2], "-")
+			}
+		}
+		return pod
 	}
-	if strings.Contains(incident.Title, " - ") {
-		parts := strings.SplitN(incident.Title, " - ", 2)
-		return strings.TrimSpace(parts[1])
+
+	// Candidates in priority order — first non-empty wins
+	candidates := []func() string{
+		// 1. Grafana legacy: tags.service
+		func() string {
+			if tags, ok := payload["tags"].(map[string]interface{}); ok {
+				return strVal(tags, "service")
+			}
+			return ""
+		},
+		// 2. Grafana unified / Alertmanager: commonLabels.service
+		func() string {
+			if cl, ok := payload["commonLabels"].(map[string]interface{}); ok {
+				return strVal(cl, "service")
+			}
+			return ""
+		},
+		// 3. Grafana unified: alerts[0].labels.service
+		func() string {
+			if alerts, ok := payload["alerts"].([]interface{}); ok && len(alerts) > 0 {
+				if a, ok := alerts[0].(map[string]interface{}); ok {
+					if labels, ok := a["labels"].(map[string]interface{}); ok {
+						return strVal(labels, "service")
+					}
+				}
+			}
+			return ""
+		},
+		// 4. Prometheus Alertmanager: labels.service
+		func() string {
+			if labels, ok := payload["labels"].(map[string]interface{}); ok {
+				return strVal(labels, "service")
+			}
+			return ""
+		},
+		// 5. Kubernetes deployment label (commonLabels or alerts[0].labels)
+		func() string {
+			for _, src := range []string{"commonLabels", "labels"} {
+				if m, ok := payload[src].(map[string]interface{}); ok {
+					if d := strVal(m, "deployment"); d != "" {
+						return d
+					}
+				}
+			}
+			if alerts, ok := payload["alerts"].([]interface{}); ok && len(alerts) > 0 {
+				if a, ok := alerts[0].(map[string]interface{}); ok {
+					if labels, ok := a["labels"].(map[string]interface{}); ok {
+						if d := strVal(labels, "deployment"); d != "" {
+							return d
+						}
+					}
+				}
+			}
+			return ""
+		},
+		// 6. Kubernetes pod label — strip hash suffix
+		func() string {
+			for _, src := range []string{"commonLabels", "labels"} {
+				if m, ok := payload[src].(map[string]interface{}); ok {
+					if p := strVal(m, "pod"); p != "" {
+						return stripPodSuffix(p)
+					}
+				}
+			}
+			if alerts, ok := payload["alerts"].([]interface{}); ok && len(alerts) > 0 {
+				if a, ok := alerts[0].(map[string]interface{}); ok {
+					if labels, ok := a["labels"].(map[string]interface{}); ok {
+						if p := strVal(labels, "pod"); p != "" {
+							return stripPodSuffix(p)
+						}
+					}
+				}
+			}
+			return ""
+		},
+		// 7. Grafana legacy: tags.app / tags.job
+		func() string {
+			if tags, ok := payload["tags"].(map[string]interface{}); ok {
+				for _, key := range []string{"app", "job", "container"} {
+					if v := strVal(tags, key); v != "" {
+						return v
+					}
+				}
+			}
+			return ""
+		},
+		// 8. Title split: "High CPU — web-server" or "High CPU - web-server"
+		func() string {
+			for _, sep := range []string{" — ", " - "} {
+				if strings.Contains(incident.Title, sep) {
+					parts := strings.SplitN(incident.Title, sep, 2)
+					return strings.TrimSpace(parts[1])
+				}
+			}
+			return ""
+		},
+	}
+
+	for _, fn := range candidates {
+		if s := fn(); s != "" {
+			return s
+		}
 	}
 	return ""
 }

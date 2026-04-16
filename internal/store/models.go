@@ -135,8 +135,12 @@ type TeamConfig struct {
 	SlackBotToken         *string    `json:"slack_bot_token,omitempty"`
 	GitHubTokenEncrypted  *string    `json:"github_token_encrypted,omitempty"`
 	GitHubRepos           []byte     `json:"github_repos,omitempty"` // JSONB
-	PrometheusEndpoint    *string    `json:"prometheus_endpoint,omitempty"`
-	LokiEndpoint          *string    `json:"loki_endpoint,omitempty"`
+	PrometheusEndpoint          *string    `json:"prometheus_endpoint,omitempty"`
+	LokiEndpoint                *string    `json:"loki_endpoint,omitempty"`
+	DynatraceEndpoint           *string    `json:"dynatrace_endpoint,omitempty"`
+	DynatraceTokenEncrypted     *string    `json:"dynatrace_token_encrypted,omitempty"`
+	SplunkEndpoint              *string    `json:"splunk_endpoint,omitempty"`
+	SplunkTokenEncrypted        *string    `json:"splunk_token_encrypted,omitempty"`
 	AIBackend             string     `json:"ai_backend"` // ollama, claude, openai
 	AIModel               *string    `json:"ai_model,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
