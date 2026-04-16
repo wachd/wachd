@@ -132,15 +132,17 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Retrieve and atomically delete the PKCE verifier from Redis
+	// Retrieve and atomically delete the PKCE verifier from Redis.
+	// Use GET + DEL instead of GETDEL for Redis 6.0 compatibility (GETDEL requires 6.2+).
 	key := statePrefix + state
-	verifier, err := h.sessions.client.GetDel(ctx, key).Result()
+	verifier, err := h.sessions.client.Get(ctx, key).Result()
 	if err != nil {
 		// Do not reveal whether state was invalid vs expired
 		log.Printf("auth: state lookup failed: %v", err)
 		http.Error(w, "authentication failed", http.StatusBadRequest)
 		return
 	}
+	h.sessions.client.Del(ctx, key)
 
 	// Exchange code for tokens
 	idToken, accessToken, err := provider.Exchange(ctx, code, verifier)
