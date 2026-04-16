@@ -201,6 +201,11 @@ resource "azuread_application" "wachd" {
 
   sign_in_audience = "AzureADMyOrg"  # Single tenant — only your directory
 
+  # Include security group IDs in ID tokens and access tokens.
+  # This is the primary way Wachd resolves group → team mappings on login
+  # without needing a separate Graph API call.
+  group_membership_claims = ["SecurityGroup"]
+
   web {
     redirect_uris = [
       "https://${var.wachd_hostname}/auth/callback",
@@ -244,6 +249,20 @@ resource "azuread_service_principal" "wachd" {
   client_id                    = azuread_application.wachd.client_id
   app_role_assignment_required = false
   owners                       = [data.azuread_client_config.current.object_id]
+}
+
+# Grant admin consent for GroupMember.Read.All (application permission).
+# Without this, Wachd cannot call the Graph API to fetch group memberships as fallback.
+# The primary path uses groups embedded in the token (group_membership_claims above),
+# but this consent ensures the Graph API fallback also works.
+data "azuread_service_principal" "msgraph" {
+  client_id = "00000003-0000-0000-c000-000000000000"  # Microsoft Graph
+}
+
+resource "azuread_app_role_assignment" "wachd_group_member_read" {
+  app_role_id         = "98830695-27a2-44f7-8c18-0c3ebc9698f6"  # GroupMember.Read.All
+  principal_object_id = azuread_service_principal.wachd.object_id
+  resource_object_id  = data.azuread_service_principal.msgraph.object_id
 }
 
 resource "azuread_application_password" "wachd" {
