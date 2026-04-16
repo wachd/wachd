@@ -149,9 +149,16 @@ func (db *DB) SyncTeamAccess(ctx context.Context, identityID uuid.UUID, groupIDs
 	for i, g := range groupIDs {
 		trimmed[i] = strings.TrimSpace(g)
 	}
+	// Match group mappings by either:
+	//   (a) explicit sso_provider_id UUID — for providers created via the admin API
+	//   (b) provider="entra" with NULL sso_provider_id — for bootstrap mappings from Helm values
 	query := `
 		SELECT team_id, role FROM group_mappings
-		WHERE sso_provider_id = $1 AND group_id = ANY($2)
+		WHERE group_id = ANY($2)
+		  AND (
+		        (sso_provider_id = $1 AND $1 != '00000000-0000-0000-0000-000000000000'::uuid)
+		     OR (sso_provider_id IS NULL AND provider = 'entra')
+		      )
 	`
 	log.Printf("store: SyncTeamAccess providerID=%s groupIDs=%v", providerID, trimmed)
 	rows, err := db.pool.Query(ctx, query, providerID, trimmed)
