@@ -104,18 +104,20 @@ func (db *DB) GetMemberByID(ctx context.Context, id uuid.UUID) (*TeamMember, err
 // UpdateMemberPhone sets the phone number on the correct auth table.
 // source must be "local" or "sso".
 func (db *DB) UpdateMemberPhone(ctx context.Context, id uuid.UUID, source string, phone *string) error {
-	var table string
 	switch source {
 	case "local":
-		table = "local_users"
+		_, err := db.pool.Exec(ctx,
+			`UPDATE local_users SET phone = $1, updated_at = NOW() WHERE id = $2`,
+			phone, id,
+		)
+		return err
 	case "sso":
-		table = "sso_identities"
+		_, err := db.pool.Exec(ctx,
+			`UPDATE sso_identities SET phone = $1, updated_at = NOW() WHERE id = $2`,
+			phone, id,
+		)
+		return err
 	default:
 		return fmt.Errorf("unknown member source %q", source)
 	}
-	_, err := db.pool.Exec(ctx,
-		fmt.Sprintf(`UPDATE %s SET phone = $1, updated_at = NOW() WHERE id = $2`, table),
-		phone, id,
-	)
-	return err
 }

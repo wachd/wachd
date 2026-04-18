@@ -26,6 +26,7 @@ import (
 	"github.com/wachd/wachd/internal/collector"
 	"github.com/wachd/wachd/internal/correlator"
 	"github.com/wachd/wachd/internal/store"
+	"github.com/wachd/wachd/internal/validate"
 )
 
 // collectContext gathers context from the team's configured data sources.
@@ -87,107 +88,123 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 
 	// Loki logs
 	if cfg.LokiEndpoint != nil && *cfg.LokiEndpoint != "" {
-		lc := collector.NewLogsCollector(*cfg.LokiEndpoint)
-		logs, err := lc.FetchErrorLogs(ctx, serviceName, since, incident.FiredAt, 50)
-		if err != nil {
-			log.Printf("  ⚠ Loki: %v", err)
-		} else if len(logs) > 0 {
-			result.Logs = logs
-			log.Printf("  ✓ %d error logs from Loki", len(logs))
+		if err := validate.EndpointURL(*cfg.LokiEndpoint); err != nil {
+			log.Printf("  ⚠ Loki endpoint blocked (SSRF): %v", err)
+		} else {
+			lc := collector.NewLogsCollector(*cfg.LokiEndpoint)
+			logs, err := lc.FetchErrorLogs(ctx, serviceName, since, incident.FiredAt, 50)
+			if err != nil {
+				log.Printf("  ⚠ Loki: %v", err)
+			} else if len(logs) > 0 {
+				result.Logs = logs
+				log.Printf("  ✓ %d error logs from Loki", len(logs))
+			}
 		}
 	}
 
 	// Prometheus metrics
 	if cfg.PrometheusEndpoint != nil && *cfg.PrometheusEndpoint != "" {
-		mc, err := collector.NewMetricsCollector(*cfg.PrometheusEndpoint)
-		if err != nil {
-			log.Printf("  ⚠ Prometheus client: %v", err)
+		if err := validate.EndpointURL(*cfg.PrometheusEndpoint); err != nil {
+			log.Printf("  ⚠ Prometheus endpoint blocked (SSRF): %v", err)
 		} else {
-			metrics, err := mc.FetchErrorRate(ctx, serviceName, 30*time.Minute)
+			mc, err := collector.NewMetricsCollector(*cfg.PrometheusEndpoint)
 			if err != nil {
-				log.Printf("  ⚠ Prometheus query: %v", err)
-			} else if len(metrics) > 0 {
-				result.Metrics = metrics
-				log.Printf("  ✓ %d metric points from Prometheus", len(metrics))
+				log.Printf("  ⚠ Prometheus client: %v", err)
+			} else {
+				metrics, err := mc.FetchErrorRate(ctx, serviceName, 30*time.Minute)
+				if err != nil {
+					log.Printf("  ⚠ Prometheus query: %v", err)
+				} else if len(metrics) > 0 {
+					result.Metrics = metrics
+					log.Printf("  ✓ %d metric points from Prometheus", len(metrics))
+				}
 			}
 		}
 	}
 
 	// Dynatrace — problems, logs, and metrics
 	if cfg.DynatraceEndpoint != nil && *cfg.DynatraceEndpoint != "" && cfg.DynatraceTokenEncrypted != nil && w.enc != nil {
-		dtToken, err := w.enc.Decrypt(*cfg.DynatraceTokenEncrypted)
-		if err != nil {
-			log.Printf("  ⚠ Failed to decrypt Dynatrace token: %v", err)
-		} else if dtToken != "" {
-			dc := collector.NewDynatraceCollector(*cfg.DynatraceEndpoint, dtToken)
-
-			// Problems (Dynatrace pre-correlated anomalies)
-			problems, err := dc.FetchProblems(ctx, serviceName, since, 10)
+		if err := validate.EndpointURL(*cfg.DynatraceEndpoint); err != nil {
+			log.Printf("  ⚠ Dynatrace endpoint blocked (SSRF): %v", err)
+		} else {
+			dtToken, err := w.enc.Decrypt(*cfg.DynatraceTokenEncrypted)
 			if err != nil {
-				log.Printf("  ⚠ Dynatrace problems: %v", err)
-			} else if len(problems) > 0 {
-				for _, p := range problems {
-					result.Logs = append(result.Logs, collector.LogLine{
-						Timestamp: p.StartTime,
-						Message:   "[Dynatrace Problem] " + p.Title + " (severity: " + p.Severity + ", status: " + p.Status + ")",
-						Level:     p.Severity,
-						Labels:    map[string]string{"source": "dynatrace", "problem_id": p.ID},
-					})
+				log.Printf("  ⚠ Failed to decrypt Dynatrace token: %v", err)
+			} else if dtToken != "" {
+				dc := collector.NewDynatraceCollector(*cfg.DynatraceEndpoint, dtToken)
+
+				// Problems (Dynatrace pre-correlated anomalies)
+				problems, err := dc.FetchProblems(ctx, serviceName, since, 10)
+				if err != nil {
+					log.Printf("  ⚠ Dynatrace problems: %v", err)
+				} else if len(problems) > 0 {
+					for _, p := range problems {
+						result.Logs = append(result.Logs, collector.LogLine{
+							Timestamp: p.StartTime,
+							Message:   "[Dynatrace Problem] " + p.Title + " (severity: " + p.Severity + ", status: " + p.Status + ")",
+							Level:     p.Severity,
+							Labels:    map[string]string{"source": "dynatrace", "problem_id": p.ID},
+						})
+					}
+					log.Printf("  ✓ %d problems from Dynatrace", len(problems))
 				}
-				log.Printf("  ✓ %d problems from Dynatrace", len(problems))
-			}
 
-			// Error logs
-			dtLogs, err := dc.FetchLogs(ctx, serviceName, since, incident.FiredAt, 50)
-			if err != nil {
-				log.Printf("  ⚠ Dynatrace logs: %v", err)
-			} else if len(dtLogs) > 0 {
-				result.Logs = append(result.Logs, dtLogs...)
-				log.Printf("  ✓ %d log lines from Dynatrace", len(dtLogs))
-			}
+				// Error logs
+				dtLogs, err := dc.FetchLogs(ctx, serviceName, since, incident.FiredAt, 50)
+				if err != nil {
+					log.Printf("  ⚠ Dynatrace logs: %v", err)
+				} else if len(dtLogs) > 0 {
+					result.Logs = append(result.Logs, dtLogs...)
+					log.Printf("  ✓ %d log lines from Dynatrace", len(dtLogs))
+				}
 
-			// Error rate metric
-			dtMetrics, err := dc.FetchMetrics(ctx, serviceName, "builtin:service.errors.total.rate", since, incident.FiredAt)
-			if err != nil {
-				log.Printf("  ⚠ Dynatrace metrics: %v", err)
-			} else if len(dtMetrics) > 0 {
-				result.Metrics = append(result.Metrics, dtMetrics...)
-				log.Printf("  ✓ %d metric points from Dynatrace", len(dtMetrics))
+				// Error rate metric
+				dtMetrics, err := dc.FetchMetrics(ctx, serviceName, "builtin:service.errors.total.rate", since, incident.FiredAt)
+				if err != nil {
+					log.Printf("  ⚠ Dynatrace metrics: %v", err)
+				} else if len(dtMetrics) > 0 {
+					result.Metrics = append(result.Metrics, dtMetrics...)
+					log.Printf("  ✓ %d metric points from Dynatrace", len(dtMetrics))
+				}
 			}
 		}
 	}
 
 	// Splunk — error logs and notable events
 	if cfg.SplunkEndpoint != nil && *cfg.SplunkEndpoint != "" && cfg.SplunkTokenEncrypted != nil && w.enc != nil {
-		splunkToken, err := w.enc.Decrypt(*cfg.SplunkTokenEncrypted)
-		if err != nil {
-			log.Printf("  ⚠ Failed to decrypt Splunk token: %v", err)
-		} else if splunkToken != "" {
-			sc := collector.NewSplunkCollector(*cfg.SplunkEndpoint, splunkToken)
-
-			// Error logs via SPL
-			splunkLogs, err := sc.FetchLogs(ctx, serviceName, since, incident.FiredAt, 50)
+		if err := validate.EndpointURL(*cfg.SplunkEndpoint); err != nil {
+			log.Printf("  ⚠ Splunk endpoint blocked (SSRF): %v", err)
+		} else {
+			splunkToken, err := w.enc.Decrypt(*cfg.SplunkTokenEncrypted)
 			if err != nil {
-				log.Printf("  ⚠ Splunk logs: %v", err)
-			} else if len(splunkLogs) > 0 {
-				result.Logs = append(result.Logs, splunkLogs...)
-				log.Printf("  ✓ %d log lines from Splunk", len(splunkLogs))
-			}
+				log.Printf("  ⚠ Failed to decrypt Splunk token: %v", err)
+			} else if splunkToken != "" {
+				sc := collector.NewSplunkCollector(*cfg.SplunkEndpoint, splunkToken)
 
-			// Notable events (ITSI/ES)
-			notables, err := sc.FetchNotableEvents(ctx, serviceName, since, 10)
-			if err != nil {
-				log.Printf("  ⚠ Splunk notable events: %v", err)
-			} else if len(notables) > 0 {
-				for _, n := range notables {
-					result.Logs = append(result.Logs, collector.LogLine{
-						Timestamp: n.Timestamp,
-						Message:   "[Splunk Notable] " + n.Raw,
-						Level:     "error",
-						Labels:    n.Fields,
-					})
+				// Error logs via SPL
+				splunkLogs, err := sc.FetchLogs(ctx, serviceName, since, incident.FiredAt, 50)
+				if err != nil {
+					log.Printf("  ⚠ Splunk logs: %v", err)
+				} else if len(splunkLogs) > 0 {
+					result.Logs = append(result.Logs, splunkLogs...)
+					log.Printf("  ✓ %d log lines from Splunk", len(splunkLogs))
 				}
-				log.Printf("  ✓ %d notable events from Splunk", len(notables))
+
+				// Notable events (ITSI/ES)
+				notables, err := sc.FetchNotableEvents(ctx, serviceName, since, 10)
+				if err != nil {
+					log.Printf("  ⚠ Splunk notable events: %v", err)
+				} else if len(notables) > 0 {
+					for _, n := range notables {
+						result.Logs = append(result.Logs, collector.LogLine{
+							Timestamp: n.Timestamp,
+							Message:   "[Splunk Notable] " + n.Raw,
+							Level:     "error",
+							Labels:    n.Fields,
+						})
+					}
+					log.Printf("  ✓ %d notable events from Splunk", len(notables))
+				}
 			}
 		}
 	}

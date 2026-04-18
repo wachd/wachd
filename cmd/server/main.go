@@ -23,13 +23,10 @@ import (
 	"io"
 	"log"
 	"math/big"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -41,6 +38,7 @@ import (
 	"github.com/wachd/wachd/internal/oncall"
 	"github.com/wachd/wachd/internal/queue"
 	"github.com/wachd/wachd/internal/store"
+	"github.com/wachd/wachd/internal/validate"
 )
 
 type Server struct {
@@ -414,42 +412,6 @@ func writeForbidden(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
-}
-
-// validateEndpointURL rejects URLs that could be used for SSRF attacks.
-// Only public http/https URLs are allowed — no private IP ranges, no localhost.
-func validateEndpointURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid URL")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("only http and https schemes are allowed")
-	}
-	host := u.Hostname()
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// DNS name — block obvious internal names.
-		if host == "localhost" || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
-			return fmt.Errorf("private hostnames are not allowed")
-		}
-		return nil
-	}
-	// Block RFC 1918, loopback, link-local, and metadata service ranges.
-	privateRanges := []string{
-		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-		"127.0.0.0/8", "169.254.0.0/16", "::1/128", "fc00::/7",
-	}
-	for _, cidr := range privateRanges {
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		if network.Contains(ip) {
-			return fmt.Errorf("private IP addresses are not allowed")
-		}
-	}
-	return nil
 }
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
@@ -1203,7 +1165,7 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 	// Validate URLs to prevent SSRF — only public http/https endpoints allowed.
 	for _, u := range []*string{input.PrometheusEndpoint, input.LokiEndpoint, input.SlackWebhookURL} {
 		if u != nil && *u != "" {
-			if err := validateEndpointURL(*u); err != nil {
+			if err := validate.EndpointURL(*u); err != nil {
 				http.Error(w, "invalid endpoint URL: "+err.Error(), http.StatusBadRequest)
 				return
 			}
