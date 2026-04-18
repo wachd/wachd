@@ -1,0 +1,286 @@
+# =============================================================================
+# Wachd — AWS / EKS Enterprise Values Override (EXAMPLE)
+#
+# Copy this file to values-aws.yaml and fill in your real values.
+#   cp helm/wachd/values-aws.example.yaml helm/wachd/values-aws.yaml
+#
+# values-aws.yaml is git-ignored — never commit it (it contains real endpoints).
+#
+# Fill in <PLACEHOLDER> values from Terraform outputs:
+#   cd infra/aws
+#   terraform output deployment_summary       (non-sensitive — safe to read)
+#   terraform output -raw postgres_host
+#   terraform output -raw redis_host
+#   terraform output -raw wachd_hostname
+# =============================================================================
+
+# =============================================================================
+# Image — pull from ghcr.io (default) or your own ECR
+# If using ECR: set repository to <account-id>.dkr.ecr.<region>.amazonaws.com/wachd-<suffix>
+# Run: terraform output -raw ecr_repository_url
+# =============================================================================
+image:
+  repository: wachd/wachd
+  tag: "0.3.0"
+  pullPolicy: IfNotPresent
+
+# =============================================================================
+# PostgreSQL — AWS RDS PostgreSQL
+# Password is injected from K8s Secret synced by External Secrets Operator.
+# Never put the password directly in this file.
+# =============================================================================
+postgres:
+  enabled: false   # Never use in-cluster PostgreSQL in production
+
+  external:
+    host: "<rds-wachd-prod.xxxxxxxxxxxx.us-east-1.rds.amazonaws.com>"   # terraform output -raw postgres_host
+    port: 5432
+    database: wachd
+    username: "wachdadmin"
+    passwordSecret: wachd-db-secret    # K8s secret synced by ESO from Secrets Manager
+    passwordKey: password
+    sslMode: require
+    maxConnections: 100
+    maxIdleConnections: 10
+    connMaxLifetime: 3600
+
+# =============================================================================
+# Redis — AWS ElastiCache Redis
+# AWS ElastiCache uses TLS on port 6379 (unlike Azure which uses 6380).
+# Auth token is injected from K8s Secret synced by External Secrets Operator.
+# =============================================================================
+redis:
+  enabled: false   # Never use in-cluster Redis in production
+
+  external:
+    host: "<master.redis-wachd-prod.xxxxxx.use1.cache.amazonaws.com>"   # terraform output -raw redis_host
+    port: 6379
+    passwordSecret: wachd-redis-secret   # K8s secret synced by ESO from Secrets Manager
+    passwordKey: password
+    tls: true
+    tlsSkipVerify: false
+
+# =============================================================================
+# Server — 3 replicas with HPA for enterprise HA
+# =============================================================================
+server:
+  replicaCount: 3
+
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2   # Keep 2 running during node drains
+
+# =============================================================================
+# Worker — 2 replicas (processes AI analysis jobs)
+# =============================================================================
+worker:
+  replicaCount: 2
+
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilization: 70
+
+  resources:
+    requests:
+      cpu: 150m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+# =============================================================================
+# Web — 2 replicas
+# =============================================================================
+web:
+  enabled: true
+  replicaCount: 2
+
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilization: 70
+
+# =============================================================================
+# Ingress — nginx ingress controller
+# Get the public IP after installing the ingress controller:
+#   kubectl get svc ingress-nginx-controller -n ingress-nginx
+# For testing without a domain: wachd.<EXTERNAL-IP>.nip.io
+# For production: use a real domain with an alias A record pointing to the ELB DNS name.
+# =============================================================================
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # Rate limit webhooks to prevent DoS
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+  hosts:
+    - host: "<wachd.yourdomain.com>"   # terraform output -raw wachd_hostname
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: server
+        - path: /auth
+          pathType: Prefix
+          service: server
+        - path: /
+          pathType: Prefix
+          service: web
+  tls:
+    - secretName: wachd-tls
+      hosts:
+        - "<wachd.yourdomain.com>"
+
+# =============================================================================
+# TLS — cert-manager with Let's Encrypt
+# Requires port 80 accessible from the internet for HTTP-01 ACME challenge.
+# =============================================================================
+certManager:
+  createIssuer: true
+  issuerName: wachd-ca-issuer
+  externalIssuer: "letsencrypt-prod"
+
+tls:
+  internal:
+    enabled: true
+  external:
+    enabled: true
+    issuer: "letsencrypt-prod"
+    commonName: "<wachd.yourdomain.com>"
+
+# =============================================================================
+# Authentication
+# SSO provider is configured via the GUI after first login (superadmin sets it up).
+# To pre-configure Cognito SSO, set provider: cognito and fill in the block below.
+# =============================================================================
+auth:
+  enabled: true
+  provider: ""   # Leave empty — superadmin configures IdP via GUI after first login
+
+  # Encryption key K8s secret — synced by ESO from Secrets Manager
+  encryptionKeySecret:
+    name: wachd-encryption-key
+    key: encryption-key
+
+  legacyEnvMigration:
+    enabled: false
+
+  frontendURL: "https://<wachd.yourdomain.com>"
+
+  # Uncomment to pre-configure Cognito SSO:
+  # provider: cognito
+  # cognito:
+  #   userPoolId: "<us-east-1_xxxxxxxxx>"        # terraform output -raw cognito_user_pool_id
+  #   clientId: "<your-cognito-client-id>"        # terraform output -raw cognito_client_id
+  #   clientSecretRef:
+  #     name: wachd-oidc-secret
+  #     key: client-secret
+  #   region: "us-east-1"
+
+# =============================================================================
+# Analysis Backend — Claude (default for cloud) or Ollama (air-gapped)
+# Switch backend with one line: ollama | claude | openai | gemini
+# Secrets are synced automatically by ESO from Secrets Manager.
+# To set your Claude key: aws secretsmanager put-secret-value \
+#   --secret-id wachd/prod/claude-api-key --secret-string "sk-ant-..."
+# =============================================================================
+analysis:
+  backend: claude   # ollama | claude | openai | gemini
+
+  ollama:
+    enabled: false   # Set true for air-gapped deployments (no external API calls)
+
+  claudeApiKeySecret: wachd-claude-key   # K8s secret synced by ESO from Secrets Manager
+  claudeApiKeyKey: api-key
+  claudeModel: claude-sonnet-4-6
+
+  # Uncomment for OpenAI:
+  # backend: openai
+  # openaiApiKeySecret: wachd-openai-key
+  # openaiApiKeyKey: api-key
+  # openaiModel: gpt-4o
+
+# =============================================================================
+# Notifications — enable and populate secrets in Secrets Manager for each channel.
+# ESO syncs secrets automatically — no kubectl create secret needed.
+# =============================================================================
+config:
+  notifications:
+    slack:
+      enabled: false
+      # enabled: true
+      # webhookUrlSecret: wachd-slack-webhook
+      # webhookUrlKey: url
+      # channel: "alerts"
+
+    email:
+      enabled: false
+
+    twilio:
+      enabled: false
+
+  dataSources:
+    github:
+      enabled: false
+      # enabled: true
+      # tokenSecret: wachd-github-token
+      # tokenKey: token
+
+    prometheus:
+      enabled: false
+
+    loki:
+      enabled: false
+
+  logging:
+    level: info
+    format: json
+
+  environment: production
+
+# =============================================================================
+# License
+# opensource = no key needed (1 team, 5 users, 1k alerts/month)
+# smb/enterprise = populate wachd/prod/license-key in Secrets Manager
+# =============================================================================
+license:
+  type: opensource
+  keySecret: ""
+  # type: enterprise
+  # keySecret: "wachd-license"
+  # keySecretKey: license-key
+
+# =============================================================================
+# Monitoring — enable ServiceMonitor if prometheus-operator is installed
+# =============================================================================
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false   # Set true if prometheus-operator is installed in EKS
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000

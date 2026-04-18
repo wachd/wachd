@@ -141,10 +141,17 @@ type TeamConfig struct {
 	DynatraceTokenEncrypted     *string    `json:"dynatrace_token_encrypted,omitempty"`
 	SplunkEndpoint              *string    `json:"splunk_endpoint,omitempty"`
 	SplunkTokenEncrypted        *string    `json:"splunk_token_encrypted,omitempty"`
-	AIBackend             string     `json:"ai_backend"` // ollama, claude, openai
-	AIModel               *string    `json:"ai_model,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
 	UpdatedAt             time.Time  `json:"updated_at"`
+}
+
+// SystemConfig holds platform-wide settings managed by the superadmin only.
+// There is exactly one row in the system_config table (id = 1).
+type SystemConfig struct {
+	AIBackend string     `json:"ai_backend"` // ollama | claude | openai | gemini
+	AIModel   *string    `json:"ai_model,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	UpdatedBy *uuid.UUID `json:"updated_by,omitempty"`
 }
 
 // ── Enterprise Auth Models ────────────────────────────────────────────────────

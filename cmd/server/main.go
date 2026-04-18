@@ -276,6 +276,10 @@ func main() {
 			superRouter.HandleFunc("/tokens", adminH.HandleListTokens).Methods("GET")
 			superRouter.HandleFunc("/tokens", adminH.HandleCreateToken).Methods("POST")
 			superRouter.HandleFunc("/tokens/{id}", adminH.HandleDeleteToken).Methods("DELETE")
+
+			// Platform-wide AI backend config (superadmin only)
+			superRouter.HandleFunc("/system/ai", server.handleGetSystemAI).Methods("GET")
+			superRouter.HandleFunc("/system/ai", server.handleUpsertSystemAI).Methods("PUT")
 		}
 
 		// Bootstrap admin on first run (if no local users exist)
@@ -1123,8 +1127,6 @@ type teamConfigPublic struct {
 	GitHubRepos        []string `json:"github_repos,omitempty"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint,omitempty"`
 	LokiEndpoint       *string  `json:"loki_endpoint,omitempty"`
-	AIBackend          string   `json:"ai_backend"`
-	AIModel            *string  `json:"ai_model,omitempty"`
 }
 
 // teamConfigInput is the request body for PUT /{teamId}/config.
@@ -1135,8 +1137,6 @@ type teamConfigInput struct {
 	GitHubRepos        []string `json:"github_repos"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint"`
 	LokiEndpoint       *string  `json:"loki_endpoint"`
-	AIBackend          string   `json:"ai_backend"`
-	AIModel            *string  `json:"ai_model"`
 }
 
 func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
@@ -1163,7 +1163,7 @@ func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pub := teamConfigPublic{TeamID: teamID.String(), AIBackend: "ollama"}
+	pub := teamConfigPublic{TeamID: teamID.String()}
 	if team != nil {
 		pub.WebhookSecret = team.WebhookSecret
 	}
@@ -1173,8 +1173,6 @@ func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 		pub.GitHubTokenSet = cfg.GitHubTokenEncrypted != nil && *cfg.GitHubTokenEncrypted != ""
 		pub.PrometheusEndpoint = cfg.PrometheusEndpoint
 		pub.LokiEndpoint = cfg.LokiEndpoint
-		pub.AIBackend = cfg.AIBackend
-		pub.AIModel = cfg.AIModel
 		if cfg.GitHubRepos != nil {
 			_ = json.Unmarshal(cfg.GitHubRepos, &pub.GitHubRepos)
 		}
@@ -1228,13 +1226,6 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "too many github_repos (max 50)", http.StatusBadRequest)
 		return
 	}
-	if input.AIBackend != "" {
-		allowed := map[string]bool{"ollama": true, "claude": true, "openai": true}
-		if !allowed[input.AIBackend] {
-			http.Error(w, "invalid ai_backend: must be ollama, claude, or openai", http.StatusBadRequest)
-			return
-		}
-	}
 
 	// Load existing config so we preserve fields the caller didn't send
 	existing, err := s.db.GetTeamConfig(r.Context(), teamID)
@@ -1243,7 +1234,7 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	tc := &store.TeamConfig{TeamID: teamID, AIBackend: "ollama"}
+	tc := &store.TeamConfig{TeamID: teamID}
 	if existing != nil {
 		*tc = *existing
 	}
@@ -1260,12 +1251,6 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 	}
 	if input.LokiEndpoint != nil {
 		tc.LokiEndpoint = input.LokiEndpoint
-	}
-	if input.AIBackend != "" {
-		tc.AIBackend = input.AIBackend
-	}
-	if input.AIModel != nil {
-		tc.AIModel = input.AIModel
 	}
 
 	// Encrypt GitHub token if provided
@@ -1305,8 +1290,6 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		GitHubTokenSet:     tc.GitHubTokenEncrypted != nil && *tc.GitHubTokenEncrypted != "",
 		PrometheusEndpoint: tc.PrometheusEndpoint,
 		LokiEndpoint:       tc.LokiEndpoint,
-		AIBackend:          tc.AIBackend,
-		AIModel:            tc.AIModel,
 	}
 	if tc.GitHubRepos != nil {
 		_ = json.Unmarshal(tc.GitHubRepos, &pub.GitHubRepos)
@@ -1314,6 +1297,52 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(pub)
+}
+
+// handleGetSystemAI returns the platform-wide AI backend configuration.
+// Only superadmins can access this endpoint (enforced by superRouter middleware).
+func (s *Server) handleGetSystemAI(w http.ResponseWriter, r *http.Request) {
+	sc, err := s.db.GetSystemConfig(r.Context())
+	if err != nil {
+		http.Error(w, "failed to load system config", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(sc)
+}
+
+// handleUpsertSystemAI updates the platform-wide AI backend configuration.
+// Only superadmins can access this endpoint (enforced by superRouter middleware).
+func (s *Server) handleUpsertSystemAI(w http.ResponseWriter, r *http.Request) {
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil || sess.LocalUserID == nil {
+		writeForbidden(w)
+		return
+	}
+
+	var input struct {
+		AIBackend string  `json:"ai_backend"`
+		AIModel   *string `json:"ai_model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	allowed := map[string]bool{"ollama": true, "claude": true, "openai": true, "gemini": true}
+	if input.AIBackend == "" || !allowed[input.AIBackend] {
+		http.Error(w, "ai_backend is required: must be ollama, claude, openai, or gemini", http.StatusBadRequest)
+		return
+	}
+
+	sc, err := s.db.UpsertSystemConfig(r.Context(), input.AIBackend, input.AIModel, *sess.LocalUserID)
+	if err != nil {
+		http.Error(w, "failed to save system config", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(sc)
 }
 
 func (s *Server) handleGetEscalationPolicy(w http.ResponseWriter, r *http.Request) {

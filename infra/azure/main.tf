@@ -402,23 +402,31 @@ resource "azurerm_key_vault" "wachd" {
   soft_delete_retention_days  = 7
   purge_protection_enabled    = false  # Set true for production
 
-  # Access policy for the Terraform deployer
-  access_policy {
-    tenant_id = data.azurerm_client_config.current.tenant_id
-    object_id = data.azurerm_client_config.current.object_id
-
-    secret_permissions = ["Get", "List", "Set", "Delete", "Purge"]
-  }
-
-  # Access policy for AKS (to read secrets at deploy time)
-  access_policy {
-    tenant_id = data.azurerm_client_config.current.tenant_id
-    object_id = azurerm_kubernetes_cluster.wachd.identity[0].principal_id
-
-    secret_permissions = ["Get", "List"]
-  }
-
   tags = var.tags
+}
+
+# ============================================================================
+# Key Vault Access Policies
+# Defined as separate resources (not inline) so ESO and other consumers
+# can each manage their own policy without Terraform conflicts.
+# ============================================================================
+
+# Terraform deployer — full secret management during apply/destroy
+resource "azurerm_key_vault_access_policy" "terraform" {
+  key_vault_id = azurerm_key_vault.wachd.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = data.azurerm_client_config.current.object_id
+
+  secret_permissions = ["Get", "List", "Set", "Delete", "Purge"]
+}
+
+# AKS cluster system identity — read-only (used for legacy CSI driver access if needed)
+resource "azurerm_key_vault_access_policy" "aks" {
+  key_vault_id = azurerm_key_vault.wachd.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = azurerm_kubernetes_cluster.wachd.identity[0].principal_id
+
+  secret_permissions = ["Get", "List"]
 }
 
 # Store all secrets in Key Vault
@@ -427,6 +435,8 @@ resource "azurerm_key_vault_secret" "postgres_password" {
   value        = random_password.postgres.result
   key_vault_id = azurerm_key_vault.wachd.id
   tags         = var.tags
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
 }
 
 resource "azurerm_key_vault_secret" "redis_password" {
@@ -434,6 +444,8 @@ resource "azurerm_key_vault_secret" "redis_password" {
   value        = azurerm_redis_cache.wachd.primary_access_key
   key_vault_id = azurerm_key_vault.wachd.id
   tags         = var.tags
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
 }
 
 resource "azurerm_key_vault_secret" "entra_client_secret" {
@@ -441,6 +453,8 @@ resource "azurerm_key_vault_secret" "entra_client_secret" {
   value        = azuread_application_password.wachd.value
   key_vault_id = azurerm_key_vault.wachd.id
   tags         = var.tags
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
 }
 
 resource "azurerm_key_vault_secret" "encryption_key" {
@@ -448,4 +462,264 @@ resource "azurerm_key_vault_secret" "encryption_key" {
   value        = random_id.wachd_encryption_key.hex
   key_vault_id = azurerm_key_vault.wachd.id
   tags         = var.tags
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
+}
+
+# ============================================================================
+# Key Vault — Placeholder secrets for optional features
+# Update these in the Azure Portal or via:
+#   az keyvault secret set --vault-name kv-wachd-<env> --name <name> --value "..."
+# ESO syncs updated values into Kubernetes within 1 hour automatically.
+# ============================================================================
+
+resource "azurerm_key_vault_secret" "slack_webhook_url" {
+  name         = "wachd-slack-webhook-url"
+  value        = "placeholder"  # Update in Key Vault to enable Slack notifications
+  key_vault_id = azurerm_key_vault.wachd.id
+  tags         = var.tags
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
+
+  lifecycle {
+    ignore_changes = [value]  # Don't overwrite after first apply
+  }
+}
+
+resource "azurerm_key_vault_secret" "github_token" {
+  name         = "wachd-github-token"
+  value        = "placeholder"  # Update in Key Vault to enable GitHub context collection
+  key_vault_id = azurerm_key_vault.wachd.id
+  tags         = var.tags
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "azurerm_key_vault_secret" "claude_api_key" {
+  name         = "wachd-claude-api-key"
+  value        = "placeholder"  # Update in Key Vault to enable Claude AI backend
+  key_vault_id = azurerm_key_vault.wachd.id
+  tags         = var.tags
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "azurerm_key_vault_secret" "license_key" {
+  name         = "wachd-license-key"
+  value        = "placeholder"  # Update in Key Vault with your SMB/Enterprise license key
+  key_vault_id = azurerm_key_vault.wachd.id
+  tags         = var.tags
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+# ============================================================================
+# External Secrets Operator — Managed Identity (Workload Identity)
+#
+# ESO needs its own User-Assigned Managed Identity so it can authenticate to
+# Azure Key Vault via Workload Identity. This is the Azure equivalent of the
+# IRSA role used on AWS.
+# ============================================================================
+
+resource "azurerm_user_assigned_identity" "eso" {
+  name                = "id-eso-wachd-${var.environment}"
+  location            = azurerm_resource_group.wachd.location
+  resource_group_name = azurerm_resource_group.wachd.name
+  tags                = var.tags
+}
+
+# Federated credential — links the UAMI to the ESO service account in the cluster.
+# This is what allows the ESO pod to get Azure tokens without any stored credentials.
+resource "azurerm_federated_identity_credential" "eso" {
+  name                = "fc-eso-wachd-${var.environment}"
+  resource_group_name = azurerm_resource_group.wachd.name
+  parent_id           = azurerm_user_assigned_identity.eso.id
+
+  # The AKS OIDC issuer URL — AKS acts as the token issuer for Workload Identity
+  issuer  = azurerm_kubernetes_cluster.wachd.oidc_issuer_url
+  subject = "system:serviceaccount:external-secrets:external-secrets"
+
+  audience = ["api://AzureADTokenExchange"]
+}
+
+# Key Vault access policy for the ESO UAMI — read-only is all it needs
+resource "azurerm_key_vault_access_policy" "eso" {
+  key_vault_id = azurerm_key_vault.wachd.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = azurerm_user_assigned_identity.eso.principal_id
+
+  secret_permissions = ["Get", "List"]
+}
+
+# ============================================================================
+# Wachd Namespace
+# ============================================================================
+
+resource "kubernetes_namespace" "wachd" {
+  metadata {
+    name = "wachd"
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  depends_on = [azurerm_kubernetes_cluster.wachd]
+}
+
+# ============================================================================
+# External Secrets Operator — Helm Install
+# Annotates ESO's service account with the UAMI client ID so Workload Identity
+# can exchange the pod's projected token for an Azure access token.
+# ============================================================================
+
+resource "helm_release" "external_secrets" {
+  name             = "external-secrets"
+  repository       = "https://charts.external-secrets.io"
+  chart            = "external-secrets"
+  version          = "0.10.3"
+  namespace        = "external-secrets"
+  create_namespace = true
+  wait             = true
+
+  set {
+    name  = "serviceAccount.name"
+    value = "external-secrets"
+  }
+
+  # Annotate ESO service account with UAMI client ID — triggers Workload Identity token exchange
+  set {
+    name  = "serviceAccount.annotations.azure\\.workload\\.identity/client-id"
+    value = azurerm_user_assigned_identity.eso.client_id
+  }
+
+  # Label ESO pods so the AKS Workload Identity webhook injects the projected token
+  set {
+    name  = "podLabels.azure\\.workload\\.identity/use"
+    value = "true"
+  }
+
+  depends_on = [
+    azurerm_kubernetes_cluster.wachd,
+    azurerm_federated_identity_credential.eso,
+    azurerm_key_vault_access_policy.eso,
+  ]
+}
+
+# ============================================================================
+# ClusterSecretStore — connects ESO to Azure Key Vault via Workload Identity
+# ============================================================================
+
+resource "kubectl_manifest" "cluster_secret_store" {
+  yaml_body = yamlencode({
+    apiVersion = "external-secrets.io/v1beta1"
+    kind       = "ClusterSecretStore"
+    metadata = {
+      name = "azure-key-vault"
+    }
+    spec = {
+      provider = {
+        azurekv = {
+          tenantId = data.azurerm_client_config.current.tenant_id
+          vaultUrl = azurerm_key_vault.wachd.vault_uri
+          authType = "WorkloadIdentity"
+          serviceAccountRef = {
+            name      = "external-secrets"
+            namespace = "external-secrets"
+          }
+        }
+      }
+    }
+  })
+
+  depends_on = [helm_release.external_secrets]
+}
+
+# ============================================================================
+# ExternalSecret resources
+# Each maps one Key Vault secret → one K8s secret in the wachd namespace.
+# K8s secret names match the AWS deployment so the Helm chart is cloud-agnostic.
+# ============================================================================
+
+locals {
+  external_secrets = {
+    "wachd-db-secret" = {
+      secretKey  = "password"
+      kvSecretName = "wachd-postgres-password"
+    }
+    "wachd-redis-secret" = {
+      secretKey  = "password"
+      kvSecretName = "wachd-redis-password"
+    }
+    "wachd-encryption-key" = {
+      secretKey  = "encryption-key"
+      kvSecretName = "wachd-encryption-key"
+    }
+    "wachd-entra-secret" = {
+      secretKey  = "client-secret"
+      kvSecretName = "wachd-entra-client-secret"
+    }
+    "wachd-slack-webhook" = {
+      secretKey  = "url"
+      kvSecretName = "wachd-slack-webhook-url"
+    }
+    "wachd-github-token" = {
+      secretKey  = "token"
+      kvSecretName = "wachd-github-token"
+    }
+    "wachd-claude-key" = {
+      secretKey  = "api-key"
+      kvSecretName = "wachd-claude-api-key"
+    }
+    "wachd-license" = {
+      secretKey  = "license-key"
+      kvSecretName = "wachd-license-key"
+    }
+  }
+}
+
+resource "kubectl_manifest" "external_secrets" {
+  for_each = local.external_secrets
+
+  yaml_body = yamlencode({
+    apiVersion = "external-secrets.io/v1beta1"
+    kind       = "ExternalSecret"
+    metadata = {
+      name      = each.key
+      namespace = "wachd"
+    }
+    spec = {
+      refreshInterval = "1h"
+      secretStoreRef = {
+        name = "azure-key-vault"
+        kind = "ClusterSecretStore"
+      }
+      target = {
+        name           = each.key
+        creationPolicy = "Owner"
+      }
+      data = [{
+        secretKey = each.value.secretKey
+        remoteRef = {
+          key = each.value.kvSecretName
+        }
+      }]
+    }
+  })
+
+  depends_on = [
+    kubectl_manifest.cluster_secret_store,
+    kubernetes_namespace.wachd,
+  ]
 }

@@ -306,6 +306,64 @@ Paste that webhook URL into Grafana / Datadog alert routing and you are live.
 
 > **Redis without authentication:** If your Redis instance has no password, skip creating `wachd-redis-secret` and add `--set redis.external.passwordSecret=""` to your install command.
 
+### First login — superadmin setup
+
+After deployment, log in with the bootstrap superadmin credentials printed in the server log. **Everything below is done via the GUI or API — no redeployment needed.**
+
+#### AI backend
+
+The AI backend is a **platform-wide setting** configured by the superadmin — not a per-team choice. The enterprise decides whether to run Ollama (air-gapped), Claude, or OpenAI for the whole platform. Set the initial backend in `values.yaml` before deployment:
+
+```yaml
+analysis:
+  backend: claude    # ollama | claude | openai | gemini
+```
+
+> GUI/API configuration of the AI backend (without redeploying) is tracked in [wachd/wachd#1](https://github.com/wachd/wachd/issues/1).
+
+#### SSO / identity providers
+
+Configure one or more OIDC providers so team members sign in with their existing directory:
+
+```
+POST /api/v1/admin/sso/providers
+```
+
+Supported out of the box: Microsoft Entra, Okta, Google Workspace, or any OIDC-compliant IdP. Then map directory groups to Wachd teams and roles — members are provisioned automatically on first login:
+
+```
+POST /api/v1/admin/group-mappings
+```
+
+#### Teams and users
+
+Create teams for each engineering group, then add local users or grant SSO group access:
+
+```
+POST /api/v1/admin/teams
+POST /api/v1/admin/users
+POST /api/v1/admin/groups
+POST /api/v1/admin/groups/{id}/access
+```
+
+---
+
+### What team admins configure (not a deployment task)
+
+The following are **team admin responsibilities**, done self-service after the platform is live. The superadmin does not configure these — each team owns their own setup:
+
+| Feature | Who | Endpoint |
+|---|---|---|
+| GitHub / GitLab repos | Team admin | `POST /api/v1/teams/{teamId}/datasources` |
+| Slack / Teams channels | Team admin | `POST /api/v1/teams/{teamId}/channels` |
+| Email notifications | Team admin | `POST /api/v1/teams/{teamId}/channels` |
+| Prometheus / Loki / Datadog | Team admin | `POST /api/v1/teams/{teamId}/datasources` |
+| Webhook integrations | Team admin | `POST /api/v1/teams/{teamId}/webhooks` |
+| On-call schedules | Team admin | `PUT /api/v1/teams/{teamId}/schedule` |
+| Alert routing rules | Team admin | Team settings in the GUI |
+
+A team admin can complete their full configuration in under 5 minutes without involving the platform superadmin.
+
 ### Configuration reference
 
 See [`helm/wachd/values.yaml`](helm/wachd/values.yaml) for all available options.

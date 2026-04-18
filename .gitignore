@@ -60,6 +60,7 @@ helm/charts/
 *.tgz
 helm/wachd/values-azure.yaml
 helm/wachd/values-azure-patched.yaml
+helm/wachd/values-aws.yaml
 
 # License keys (never commit!)
 *.license

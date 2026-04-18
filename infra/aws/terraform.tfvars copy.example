@@ -1,0 +1,78 @@
+# terraform.tfvars — fill in your values before running terraform apply
+# Copy this file: cp terraform.tfvars.example terraform.tfvars
+# terraform.tfvars is git-ignored — never commit it
+
+# ============================================================================
+# Required: fill these in
+# ============================================================================
+
+region      = "us-east-1"   # AWS region closest to your users
+environment = "prod"
+
+# Your Wachd hostname — must match DNS you will configure after deployment
+# Options:
+#   - Custom domain:  "wachd.mycompany.com"        (add DNS A record after deploy)
+#   - nip.io (quick): "wachd.<ALB-IP>.nip.io"      (fill IP after ALB is created)
+#
+# NOTE: To get the ALB IP, first deploy with a placeholder, then after nginx
+# ingress is installed run: kubectl get svc ingress-nginx-controller -n ingress-nginx
+# and use the EXTERNAL-IP value.
+wachd_hostname = "wachd.mycompany.com"
+
+# ============================================================================
+# VPC
+# ============================================================================
+
+vpc_cidr           = "10.0.0.0/16"
+single_nat_gateway = true   # false for production HA (3 NAT gateways, one per AZ)
+
+# ============================================================================
+# EKS — adjust size to your budget
+# ============================================================================
+
+eks_kubernetes_version  = "1.31"
+eks_node_instance_type  = "t3.medium"   # prod: m5.large or m5.xlarge
+eks_node_desired_count  = 3
+eks_node_min_count      = 2
+eks_node_max_count      = 10
+
+# Restrict kubectl API access to your office/VPN IPs (recommended for production)
+eks_public_access_cidrs = ["0.0.0.0/0"]
+# eks_public_access_cidrs = ["203.0.113.0/24", "198.51.100.10/32"]
+
+# ============================================================================
+# PostgreSQL — adjust tier to workload
+# ============================================================================
+
+postgres_instance_class        = "db.t3.medium"   # prod: db.m5.large
+postgres_version               = "16"
+postgres_allocated_storage_gb  = 32
+postgres_multi_az              = false            # true for production
+postgres_backup_retention_days = 7
+
+# ============================================================================
+# Redis — cache.t3.medium (3GB) is sufficient for Wachd job queue
+# ============================================================================
+
+redis_node_type    = "cache.t3.medium"
+redis_num_replicas = 0   # 1 for production HA
+
+# ============================================================================
+# Optional features
+# ============================================================================
+
+create_ecr     = false   # true to host Wachd image in your own ECR
+create_grafana = true    # Amazon Managed Grafana (requires SAML setup after creation)
+create_cognito = false   # Cognito User Pool for SSO (set true if no existing OIDC provider)
+
+# ============================================================================
+# Tags — applied to every resource for cost tracking
+# ============================================================================
+
+tags = {
+  Project     = "wachd"
+  ManagedBy   = "terraform"
+  Environment = "prod"
+  Owner       = "platform-team"
+  CostCenter  = "engineering"
+}

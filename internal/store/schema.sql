@@ -287,8 +287,6 @@ CREATE TABLE IF NOT EXISTS team_config (
     dynatrace_token_encrypted   TEXT,
     splunk_endpoint             VARCHAR(500),
     splunk_token_encrypted      TEXT,
-    ai_backend             VARCHAR(50)  NOT NULL DEFAULT 'ollama',
-    ai_model               VARCHAR(100),
     created_at             TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at             TIMESTAMP    NOT NULL DEFAULT NOW()
 );
@@ -299,3 +297,21 @@ ALTER TABLE team_config ADD COLUMN IF NOT EXISTS dynatrace_endpoint        VARCH
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS dynatrace_token_encrypted TEXT;
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS splunk_endpoint            VARCHAR(500);
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS splunk_token_encrypted    TEXT;
+
+-- Idempotent migration: move AI backend config out of team_config (per-team) into
+-- system_config (platform-wide). Drop the columns so the schema stays clean.
+ALTER TABLE team_config DROP COLUMN IF EXISTS ai_backend;
+ALTER TABLE team_config DROP COLUMN IF EXISTS ai_model;
+
+-- ============================================================
+-- Platform-wide system configuration (superadmin only)
+-- Singleton row: always use id = 1.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS system_config (
+    id          INT          PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    ai_backend  VARCHAR(50)  NOT NULL DEFAULT 'ollama',
+    ai_model    VARCHAR(100),
+    updated_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by  UUID         REFERENCES local_users(id) ON DELETE SET NULL
+);

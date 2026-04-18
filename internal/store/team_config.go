@@ -33,7 +33,6 @@ func (db *DB) GetTeamConfig(ctx context.Context, teamID uuid.UUID) (*TeamConfig,
 			prometheus_endpoint, loki_endpoint,
 			dynatrace_endpoint, dynatrace_token_encrypted,
 			splunk_endpoint, splunk_token_encrypted,
-			ai_backend, ai_model,
 			created_at, updated_at
 		FROM team_config
 		WHERE team_id = $1
@@ -53,8 +52,6 @@ func (db *DB) GetTeamConfig(ctx context.Context, teamID uuid.UUID) (*TeamConfig,
 		&tc.DynatraceTokenEncrypted,
 		&tc.SplunkEndpoint,
 		&tc.SplunkTokenEncrypted,
-		&tc.AIBackend,
-		&tc.AIModel,
 		&tc.CreatedAt,
 		&tc.UpdatedAt,
 	)
@@ -77,9 +74,8 @@ func (db *DB) UpsertTeamConfig(ctx context.Context, tc *TeamConfig) error {
 			prometheus_endpoint, loki_endpoint,
 			dynatrace_endpoint, dynatrace_token_encrypted,
 			splunk_endpoint, splunk_token_encrypted,
-			ai_backend, ai_model,
 			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (team_id) DO UPDATE SET
 			slack_webhook_url         = EXCLUDED.slack_webhook_url,
 			slack_channel             = EXCLUDED.slack_channel,
@@ -92,8 +88,6 @@ func (db *DB) UpsertTeamConfig(ctx context.Context, tc *TeamConfig) error {
 			dynatrace_token_encrypted = EXCLUDED.dynatrace_token_encrypted,
 			splunk_endpoint           = EXCLUDED.splunk_endpoint,
 			splunk_token_encrypted    = EXCLUDED.splunk_token_encrypted,
-			ai_backend                = EXCLUDED.ai_backend,
-			ai_model                  = EXCLUDED.ai_model,
 			updated_at                = EXCLUDED.updated_at
 	`
 
@@ -111,8 +105,6 @@ func (db *DB) UpsertTeamConfig(ctx context.Context, tc *TeamConfig) error {
 		tc.DynatraceTokenEncrypted,
 		tc.SplunkEndpoint,
 		tc.SplunkTokenEncrypted,
-		tc.AIBackend,
-		tc.AIModel,
 		now,
 		now,
 	)

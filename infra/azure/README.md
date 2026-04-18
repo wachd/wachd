@@ -69,11 +69,14 @@ terraform apply
 ```
 
 Takes ~10–15 minutes. Provisions:
-- AKS cluster (3 nodes, Kubernetes 1.32)
+- AKS cluster (3 nodes, Kubernetes 1.32, Workload Identity enabled)
 - Azure Database for PostgreSQL Flexible Server
 - Azure Cache for Redis (TLS, port 6380)
 - Entra App Registration (SSO)
-- Key Vault (stores all generated secrets)
+- Key Vault (stores all secrets — auto-populated by Terraform)
+- User-Assigned Managed Identity for ESO (Workload Identity auth to Key Vault)
+- External Secrets Operator installed via Helm
+- `ClusterSecretStore` and `ExternalSecret` resources created automatically
 - Log Analytics workspace
 
 When complete, read the outputs you will need in later steps:
@@ -212,69 +215,81 @@ Update `values-azure.yaml` with the same hostname (replace all `<wachd.mycompany
 
 ---
 
-## Step 6 — Create Kubernetes namespace and secrets
+## Step 6 — Verify ESO is syncing secrets
+
+Terraform already installed ESO and created all `ExternalSecret` resources pointing at
+Azure Key Vault. Verify the sync worked before deploying Wachd:
 
 ```bash
-kubectl create namespace wachd
-```
+# Check ESO pods are running
+kubectl get pods -n external-secrets
 
-Create each secret from the Terraform outputs collected in Step 2:
+# Check the ClusterSecretStore is ready
+kubectl get clustersecretstore azure-key-vault
 
-```bash
-# Encryption key (required — AES-256 for secrets at rest)
-kubectl create secret generic wachd-encryption-key \
-  --namespace wachd \
-  --from-literal=encryption-key="$(cd infra/azure && terraform output -raw wachd_encryption_key)"
+# Check all ExternalSecrets are synced (STATUS should be SecretSynced)
+kubectl get externalsecrets -n wachd
 
-# PostgreSQL password
-kubectl create secret generic wachd-db-secret \
-  --namespace wachd \
-  --from-literal=password="$(cd infra/azure && terraform output -raw postgres_password)"
-
-# Redis password
-kubectl create secret generic wachd-redis-secret \
-  --namespace wachd \
-  --from-literal=password="$(cd infra/azure && terraform output -raw redis_primary_key)"
-
-# Entra client secret (for SSO)
-kubectl create secret generic wachd-entra-secret \
-  --namespace wachd \
-  --from-literal=client-secret="$(cd infra/azure && terraform output -raw entra_client_secret)"
-```
-
-Optional secrets (enable features as needed):
-
-```bash
-# Slack notifications
-kubectl create secret generic wachd-slack-webhook \
-  --namespace wachd \
-  --from-literal=url="https://hooks.slack.com/services/..."
-
-# GitHub context collection
-kubectl create secret generic wachd-github-token \
-  --namespace wachd \
-  --from-literal=token="ghp_..."
-
-# Claude AI analysis (enterprise)
-kubectl create secret generic wachd-claude-key \
-  --namespace wachd \
-  --from-literal=api-key="sk-ant-..."
-
-# License key (SMB/Enterprise tier)
-kubectl create secret generic wachd-license \
-  --namespace wachd \
-  --from-literal=license-key="..."
-```
-
-Verify all secrets exist:
-
-```bash
+# Verify K8s secrets exist (created by ESO from Key Vault)
 kubectl get secrets -n wachd
 ```
 
+Expected output — all ExternalSecrets should show `SecretSynced`:
+```
+NAME                   STORE              REFRESH INTERVAL   STATUS         READY
+wachd-claude-key       azure-key-vault    1h                 SecretSynced   True
+wachd-db-secret        azure-key-vault    1h                 SecretSynced   True
+wachd-encryption-key   azure-key-vault    1h                 SecretSynced   True
+wachd-entra-secret     azure-key-vault    1h                 SecretSynced   True
+wachd-github-token     azure-key-vault    1h                 SecretSynced   True
+wachd-license          azure-key-vault    1h                 SecretSynced   True
+wachd-redis-secret     azure-key-vault    1h                 SecretSynced   True
+wachd-slack-webhook    azure-key-vault    1h                 SecretSynced   True
+```
+
+> **No `kubectl create secret` needed.** All K8s secrets are managed by ESO.
+
 ---
 
-## Step 7 — Update values-azure.yaml
+## Step 7 — Enable optional features via Key Vault
+
+To enable Slack notifications, Claude AI, GitHub context collection, or a license key,
+update the corresponding secret value in Key Vault. ESO syncs the new value into
+Kubernetes within 1 hour (or force an immediate sync — see below).
+
+```bash
+KV_NAME=$(cd infra/azure && terraform output -raw key_vault_name)
+
+# Enable Slack notifications
+az keyvault secret set --vault-name "$KV_NAME" \
+  --name wachd-slack-webhook-url \
+  --value "https://hooks.slack.com/services/T.../B.../..."
+
+# Enable Claude AI backend
+az keyvault secret set --vault-name "$KV_NAME" \
+  --name wachd-claude-api-key \
+  --value "sk-ant-..."
+
+# Enable GitHub context collection
+az keyvault secret set --vault-name "$KV_NAME" \
+  --name wachd-github-token \
+  --value "ghp_..."
+
+# Apply a license key
+az keyvault secret set --vault-name "$KV_NAME" \
+  --name wachd-license-key \
+  --value "WACHD-XXXX-XXXX-XXXX"
+
+# Force immediate resync (instead of waiting 1h)
+kubectl annotate externalsecret <secret-name> -n wachd \
+  force-sync=$(date +%s) --overwrite
+```
+
+You can also update secrets via the Azure Portal — navigate to your Key Vault → Secrets.
+
+---
+
+## Step 8 — Update values-azure.yaml
 
 Open `helm/wachd/values-azure.yaml` and replace every `<placeholder>` with the real values:
 
@@ -288,7 +303,7 @@ Open `helm/wachd/values-azure.yaml` and replace every `<placeholder>` with the r
 
 ---
 
-## Step 8 — Deploy Wachd via Helm
+## Step 9 — Deploy Wachd via Helm
 
 ```bash
 cd <repo root>
@@ -308,7 +323,7 @@ kubectl get ingress -n wachd   # should show your hostname with an IP
 
 ---
 
-## Step 9 — Get bootstrap admin credentials
+## Step 10 — Get bootstrap admin credentials
 
 On first startup, Wachd creates a superadmin account and prints the credentials to the server log:
 
@@ -323,7 +338,64 @@ You will be forced to change the password on first login.
 
 ---
 
-## Step 10 — Grant Entra admin consent
+## Step 11 — Superadmin setup (via GUI or API)
+
+**Everything in this step is done through the Wachd GUI or API — no redeployment needed.**
+
+### AI backend
+
+The AI backend is **platform-wide** — set once by the superadmin for the whole platform, not per team. You already set this in `values-azure.yaml` (`analysis.backend`). All teams use this backend.
+
+> GUI/API management of the AI backend without redeploying is tracked in [wachd/wachd#1](https://github.com/wachd/wachd/issues/1).
+
+### SSO / identity providers
+
+Your Entra App Registration was created by Terraform. Register it as an SSO provider in Wachd so engineers can sign in with their Entra accounts:
+
+```
+POST /api/v1/admin/sso/providers
+{
+  "name": "Entra",
+  "provider_type": "oidc",
+  "issuer_url": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+  "client_id": "<entra_client_id>",
+  "client_secret": "<entra_client_secret>",
+  "scopes": ["openid", "email", "profile", "GroupMember.Read.All"]
+}
+```
+
+Map Entra security groups to Wachd teams and roles — members are provisioned automatically on first login:
+
+```
+POST /api/v1/admin/group-mappings
+```
+
+### Teams and users
+
+Create a team for each engineering group. Add local users, or rely on SSO group mappings for automatic provisioning:
+
+```
+POST /api/v1/admin/teams
+POST /api/v1/admin/users
+POST /api/v1/admin/groups
+POST /api/v1/admin/groups/{id}/access
+```
+
+### What team admins configure (not a deployment task)
+
+Once the platform is live, team admins own their own setup — the superadmin does not configure these:
+
+| Feature | Endpoint |
+|---|---|
+| GitHub / GitLab repos | `POST /api/v1/teams/{teamId}/datasources` |
+| Slack / Teams / email | `POST /api/v1/teams/{teamId}/channels` |
+| Prometheus / Loki / Datadog | `POST /api/v1/teams/{teamId}/datasources` |
+| Webhook integrations | `POST /api/v1/teams/{teamId}/webhooks` |
+| On-call schedule | `PUT /api/v1/teams/{teamId}/schedule` |
+
+---
+
+## Step 12 — Grant Entra admin consent
 
 The `GroupMember.Read.All` permission (used for automatic team provisioning from Entra groups) requires a one-time admin consent. Visit this URL as a Global Admin:
 

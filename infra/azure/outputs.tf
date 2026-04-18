@@ -122,6 +122,20 @@ output "key_vault_uri" {
 }
 
 # ============================================================================
+# External Secrets Operator
+# ============================================================================
+
+output "eso_managed_identity_client_id" {
+  description = "Client ID of the ESO User-Assigned Managed Identity (used by Workload Identity)"
+  value       = azurerm_user_assigned_identity.eso.client_id
+}
+
+output "eso_managed_identity_name" {
+  description = "Name of the ESO User-Assigned Managed Identity"
+  value       = azurerm_user_assigned_identity.eso.name
+}
+
+# ============================================================================
 # Encryption Key
 # ============================================================================
 
@@ -184,6 +198,8 @@ output "deployment_summary" {
     entra_tenant_id   = data.azurerm_client_config.current.tenant_id
     entra_client_id   = azuread_application.wachd.client_id
     key_vault         = azurerm_key_vault.wachd.name
+    eso_identity      = azurerm_user_assigned_identity.eso.name
+    eso_client_id     = azurerm_user_assigned_identity.eso.client_id
     acr_server        = var.create_acr ? azurerm_container_registry.wachd[0].login_server : "not created (using ghcr.io)"
     wachd_url         = "https://${var.wachd_hostname}"
     grafana_url       = azurerm_dashboard_grafana.wachd.endpoint

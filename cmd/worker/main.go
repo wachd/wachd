@@ -134,12 +134,55 @@ func main() {
 	cor := correlator.NewCorrelator()
 	log.Printf("✓ PII sanitiser loaded with %d patterns", san.GetPatternCount())
 
-	// AI backend
+	// AI backend — seed system_config from env vars on first startup, then load from DB.
+	// This means: env vars configure the initial value; after that the superadmin
+	// controls the backend via PUT /api/v1/admin/system/ai without redeploying.
+	envBackend := os.Getenv("AI_BACKEND")
+	if envBackend == "" {
+		envBackend = "ollama"
+	}
+	var envModel *string
+	switch envBackend {
+	case "claude":
+		m := os.Getenv("CLAUDE_MODEL")
+		if m != "" {
+			envModel = &m
+		}
+	case "openai":
+		m := os.Getenv("OPENAI_MODEL")
+		if m != "" {
+			envModel = &m
+		}
+	case "gemini":
+		m := os.Getenv("GEMINI_MODEL")
+		if m != "" {
+			envModel = &m
+		}
+	default: // ollama
+		m := os.Getenv("OLLAMA_MODEL")
+		if m == "" {
+			m = "phi3"
+		}
+		envModel = &m
+	}
+	if err := db.SeedSystemConfig(context.Background(), envBackend, envModel); err != nil {
+		log.Printf("Warning: failed to seed system_config: %v", err)
+	}
+
+	sc, err := db.GetSystemConfig(context.Background())
+	if err != nil {
+		log.Printf("Warning: failed to load system_config, falling back to env: %v", err)
+		sc = &store.SystemConfig{AIBackend: envBackend, AIModel: envModel}
+	}
+
 	var aiEngine ai.Backend
-	switch backend := os.Getenv("AI_BACKEND"); backend {
+	switch sc.AIBackend {
 	case "claude":
 		apiKey := os.Getenv("CLAUDE_API_KEY")
-		model := os.Getenv("CLAUDE_MODEL")
+		model := ""
+		if sc.AIModel != nil {
+			model = *sc.AIModel
+		}
 		aiEngine = ai.NewClaudeBackend(apiKey, model)
 		if aiEngine.IsAvailable(context.Background()) {
 			log.Printf("✓ Claude backend configured (model: %s)", aiEngine.GetModelName())
@@ -149,7 +192,10 @@ func main() {
 
 	case "openai":
 		apiKey := os.Getenv("OPENAI_API_KEY")
-		model := os.Getenv("OPENAI_MODEL")
+		model := ""
+		if sc.AIModel != nil {
+			model = *sc.AIModel
+		}
 		aiEngine = ai.NewOpenAIBackend(apiKey, model)
 		if aiEngine.IsAvailable(context.Background()) {
 			log.Printf("✓ OpenAI backend configured (model: %s)", aiEngine.GetModelName())
@@ -159,7 +205,10 @@ func main() {
 
 	case "gemini":
 		apiKey := os.Getenv("GEMINI_API_KEY")
-		model := os.Getenv("GEMINI_MODEL")
+		model := ""
+		if sc.AIModel != nil {
+			model = *sc.AIModel
+		}
 		aiEngine = ai.NewGeminiBackend(apiKey, model)
 		if aiEngine.IsAvailable(context.Background()) {
 			log.Printf("✓ Gemini backend configured (model: %s)", aiEngine.GetModelName())
@@ -172,9 +221,9 @@ func main() {
 		if endpoint == "" {
 			endpoint = "http://localhost:11434"
 		}
-		model := os.Getenv("OLLAMA_MODEL")
-		if model == "" {
-			model = "phi3"
+		model := "phi3"
+		if sc.AIModel != nil {
+			model = *sc.AIModel
 		}
 		aiEngine = ai.NewOllamaBackend(endpoint, model)
 		if aiEngine.IsAvailable(context.Background()) {
