@@ -167,12 +167,12 @@ func resolveLayeredAllLayers(raw []byte, t time.Time) ([]LayerResult, error) {
 
 // Manager handles on-call scheduling.
 type Manager struct {
-	db *store.DB
+	cfg store.ConfigStore
 }
 
 // NewManager creates a new on-call manager.
-func NewManager(db *store.DB) *Manager {
-	return &Manager{db: db}
+func NewManager(cfg store.ConfigStore) *Manager {
+	return &Manager{cfg: cfg}
 }
 
 // GetCurrentOnCall returns the member who is currently on-call for a team.
@@ -183,7 +183,7 @@ func (m *Manager) GetCurrentOnCall(ctx context.Context, teamID uuid.UUID) (*stor
 
 // GetOnCallAt returns the on-call member at a specific time, respecting overrides.
 func (m *Manager) GetOnCallAt(ctx context.Context, teamID uuid.UUID, t time.Time) (*store.TeamMember, error) {
-	schedule, err := m.db.GetSchedule(ctx, teamID)
+	schedule, err := m.cfg.GetSchedule(ctx, teamID)
 	if err != nil {
 		return nil, fmt.Errorf("loading schedule: %w", err)
 	}
@@ -192,12 +192,12 @@ func (m *Manager) GetOnCallAt(ctx context.Context, teamID uuid.UUID, t time.Time
 	}
 
 	// Check for an active override first.
-	override, err := m.db.GetActiveOverrideForSchedule(ctx, schedule.ID, teamID, t)
+	override, err := m.cfg.GetActiveOverrideForSchedule(ctx, schedule.ID, teamID, t)
 	if err != nil {
 		return nil, fmt.Errorf("checking overrides: %w", err)
 	}
 	if override != nil {
-		member, err := m.db.GetMemberByID(ctx, override.UserID)
+		member, err := m.cfg.GetMemberByID(ctx, override.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("loading override member: %w", err)
 		}
@@ -213,7 +213,7 @@ func (m *Manager) GetOnCallAt(ctx context.Context, teamID uuid.UUID, t time.Time
 // Falls back to a single-step chain using the schedule's current on-call user
 // if no escalation policy is configured.
 func (m *Manager) GetEscalationChain(ctx context.Context, teamID uuid.UUID) ([]EscalationStep, error) {
-	policy, err := m.db.GetEscalationPolicy(ctx, teamID)
+	policy, err := m.cfg.GetEscalationPolicy(ctx, teamID)
 	if err != nil {
 		return nil, fmt.Errorf("loading escalation policy: %w", err)
 	}
@@ -240,12 +240,12 @@ func (m *Manager) GetEscalationChain(ctx context.Context, teamID uuid.UUID) ([]E
 			log.Printf("escalation layer %d: invalid schedule_id %q: %v", i, layer.ScheduleID, err)
 			continue
 		}
-		schedule, err := m.db.GetScheduleByID(ctx, schedID, teamID)
+		schedule, err := m.cfg.GetScheduleByID(ctx, schedID, teamID)
 		if err != nil {
 			log.Printf("escalation layer %d (%s): schedule not found: %v", i, layer.LayerName, err)
 			continue
 		}
-		override, err := m.db.GetActiveOverrideForSchedule(ctx, schedule.ID, teamID, now)
+		override, err := m.cfg.GetActiveOverrideForSchedule(ctx, schedule.ID, teamID, now)
 		if err != nil {
 			log.Printf("escalation layer %d (%s): override check failed: %v", i, layer.LayerName, err)
 			// Fall through to rotation — don't skip the layer entirely.
@@ -265,7 +265,7 @@ func (m *Manager) GetEscalationChain(ctx context.Context, teamID uuid.UUID) ([]E
 			}
 			memberID = uid
 		}
-		member, err := m.db.GetMemberByID(ctx, memberID)
+		member, err := m.cfg.GetMemberByID(ctx, memberID)
 		if err != nil {
 			log.Printf("escalation layer %d (%s): member %s not found: %v", i, layer.LayerName, memberID, err)
 			continue
@@ -295,7 +295,7 @@ func (m *Manager) resolveRotation(ctx context.Context, schedule *store.Schedule,
 	if memberID == uuid.Nil {
 		return nil, nil // today is not covered by the rotation
 	}
-	member, err := m.db.GetMemberByID(ctx, memberID)
+	member, err := m.cfg.GetMemberByID(ctx, memberID)
 	if err != nil {
 		return nil, fmt.Errorf("loading on-call member: %w", err)
 	}

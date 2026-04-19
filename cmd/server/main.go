@@ -42,7 +42,8 @@ import (
 )
 
 type Server struct {
-	db            *store.DB
+	cfg           store.ConfigStore // team config, schedules, members — swappable (YAML future)
+	db            *store.DB         // incidents, audit log, snooze — always PostgreSQL
 	queue         *queue.Queue
 	oncallManager *oncall.Manager
 	sessions      *auth.SessionStore
@@ -152,6 +153,7 @@ func main() {
 
 	// Create server
 	server := &Server{
+		cfg:           db,
 		db:            db,
 		queue:         q,
 		oncallManager: oncallMgr,
@@ -427,7 +429,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify webhook secret
-	team, err := s.db.GetTeamByWebhookSecret(r.Context(), secret)
+	team, err := s.cfg.GetTeamByWebhookSecret(r.Context(), secret)
 	if err != nil {
 		log.Printf("Invalid webhook secret for team %s: %v", teamIDStr, err)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -612,7 +614,7 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	schedule, err := s.db.GetScheduleForAPI(r.Context(), teamID)
+	schedule, err := s.cfg.GetScheduleForAPI(r.Context(), teamID)
 	if err != nil {
 		log.Printf("Failed to get schedule: %v", err)
 		http.Error(w, "Failed to load schedule", http.StatusInternalServerError)
@@ -708,7 +710,7 @@ func (s *Server) handleGetOnCallTimeline(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	schedule, err := s.db.GetSchedule(ctx, teamID)
+	schedule, err := s.cfg.GetSchedule(ctx, teamID)
 	if err != nil {
 		log.Printf("timeline: get schedule: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -726,7 +728,7 @@ func (s *Server) handleGetOnCallTimeline(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Member name lookup.
-	teamMembers, err := s.db.GetTeamMembers(ctx, teamID)
+	teamMembers, err := s.cfg.GetTeamMembers(ctx, teamID)
 	if err != nil {
 		log.Printf("timeline: get members: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -741,7 +743,7 @@ func (s *Server) handleGetOnCallTimeline(w http.ResponseWriter, r *http.Request)
 
 	// Overrides for the range.
 	to := from.AddDate(0, 0, days)
-	overrides, _ := s.db.ListOverridesForRange(ctx, schedule.ID, teamID, from, to)
+	overrides, _ := s.cfg.ListOverridesForRange(ctx, schedule.ID, teamID, from, to)
 
 	type tLayer struct {
 		LayerName string `json:"layer_name"`
@@ -1113,13 +1115,13 @@ func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	team, err := s.db.GetTeam(r.Context(), teamID)
+	team, err := s.cfg.GetTeam(r.Context(), teamID)
 	if err != nil {
 		http.Error(w, "failed to load team", http.StatusInternalServerError)
 		return
 	}
 
-	cfg, err := s.db.GetTeamConfig(r.Context(), teamID)
+	cfg, err := s.cfg.GetTeamConfig(r.Context(), teamID)
 	if err != nil {
 		http.Error(w, "failed to load config", http.StatusInternalServerError)
 		return
@@ -1190,7 +1192,7 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Load existing config so we preserve fields the caller didn't send
-	existing, err := s.db.GetTeamConfig(r.Context(), teamID)
+	existing, err := s.cfg.GetTeamConfig(r.Context(), teamID)
 	if err != nil {
 		http.Error(w, "failed to load existing config", http.StatusInternalServerError)
 		return
@@ -1239,7 +1241,7 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		tc.GitHubRepos = reposJSON
 	}
 
-	if err := s.db.UpsertTeamConfig(r.Context(), tc); err != nil {
+	if err := s.cfg.UpsertTeamConfig(r.Context(), tc); err != nil {
 		http.Error(w, "failed to save config", http.StatusInternalServerError)
 		return
 	}
@@ -1319,7 +1321,7 @@ func (s *Server) handleGetEscalationPolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	policy, err := s.db.GetEscalationPolicy(r.Context(), teamID)
+	policy, err := s.cfg.GetEscalationPolicy(r.Context(), teamID)
 	if err != nil {
 		http.Error(w, "failed to load escalation policy", http.StatusInternalServerError)
 		return
@@ -1374,7 +1376,7 @@ func (s *Server) handleUpsertEscalationPolicy(w http.ResponseWriter, r *http.Req
 		TeamID: teamID,
 		Config: []byte(input.Config),
 	}
-	if err := s.db.UpsertEscalationPolicy(r.Context(), policy); err != nil {
+	if err := s.cfg.UpsertEscalationPolicy(r.Context(), policy); err != nil {
 		http.Error(w, "failed to save escalation policy", http.StatusInternalServerError)
 		return
 	}
@@ -1435,7 +1437,7 @@ func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
 		writeForbidden(w)
 		return
 	}
-	members, err := s.db.GetTeamMembers(r.Context(), teamID)
+	members, err := s.cfg.GetTeamMembers(r.Context(), teamID)
 	if err != nil {
 		log.Printf("handleListMembers: %v", err)
 		http.Error(w, "failed to list members", http.StatusInternalServerError)
@@ -1478,12 +1480,12 @@ func (s *Server) handleUpdateMember(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source must be local or sso", http.StatusBadRequest)
 		return
 	}
-	if err := s.db.UpdateMemberPhone(r.Context(), userID, input.Source, input.Phone); err != nil {
+	if err := s.cfg.UpdateMemberPhone(r.Context(), userID, input.Source, input.Phone); err != nil {
 		log.Printf("handleUpdateMember: %v", err)
 		http.Error(w, "failed to update phone", http.StatusInternalServerError)
 		return
 	}
-	member, err := s.db.GetMemberByID(r.Context(), userID)
+	member, err := s.cfg.GetMemberByID(r.Context(), userID)
 	if err != nil || member == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -1535,13 +1537,13 @@ func (s *Server) handleUpsertSchedule(w http.ResponseWriter, r *http.Request) {
 		RotationConfig: rotationJSON,
 		Enabled:        enabled,
 	}
-	if err := s.db.UpsertSchedule(r.Context(), sched); err != nil {
+	if err := s.cfg.UpsertSchedule(r.Context(), sched); err != nil {
 		log.Printf("handleUpsertSchedule: %v", err)
 		http.Error(w, "failed to save schedule", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	resp, err := s.db.GetScheduleForAPI(r.Context(), teamID)
+	resp, err := s.cfg.GetScheduleForAPI(r.Context(), teamID)
 	if err != nil || resp == nil {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(sched)
@@ -1562,7 +1564,7 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 		writeForbidden(w)
 		return
 	}
-	sched, err := s.db.GetSchedule(r.Context(), teamID)
+	sched, err := s.cfg.GetSchedule(r.Context(), teamID)
 	if err != nil {
 		log.Printf("handleListOverrides: get schedule: %v", err)
 		http.Error(w, "failed to get schedule", http.StatusInternalServerError)
@@ -1573,7 +1575,7 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"overrides": []interface{}{}, "count": 0})
 		return
 	}
-	overrides, err := s.db.ListOverridesForSchedule(r.Context(), sched.ID, teamID)
+	overrides, err := s.cfg.ListOverridesForSchedule(r.Context(), sched.ID, teamID)
 	if err != nil {
 		log.Printf("handleListOverrides: %v", err)
 		http.Error(w, "failed to list overrides", http.StatusInternalServerError)
@@ -1626,7 +1628,7 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "end_at must be after start_at", http.StatusBadRequest)
 		return
 	}
-	sched, err := s.db.GetSchedule(r.Context(), teamID)
+	sched, err := s.cfg.GetSchedule(r.Context(), teamID)
 	if err != nil {
 		log.Printf("handleCreateOverride: get schedule: %v", err)
 		http.Error(w, "failed to get schedule", http.StatusInternalServerError)
@@ -1645,7 +1647,7 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 		Reason:     input.Reason,
 		CreatedBy:  s.callerID(r),
 	}
-	if err := s.db.CreateOverride(r.Context(), o); err != nil {
+	if err := s.cfg.CreateOverride(r.Context(), o); err != nil {
 		log.Printf("handleCreateOverride: %v", err)
 		http.Error(w, "failed to create override", http.StatusInternalServerError)
 		return
@@ -1671,7 +1673,7 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 		writeForbidden(w)
 		return
 	}
-	if err := s.db.DeleteOverride(r.Context(), overrideID, teamID); err != nil {
+	if err := s.cfg.DeleteOverride(r.Context(), overrideID, teamID); err != nil {
 		log.Printf("handleDeleteOverride: %v", err)
 		http.Error(w, "failed to delete override", http.StatusInternalServerError)
 		return
