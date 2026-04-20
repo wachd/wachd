@@ -288,10 +288,11 @@ func TestSessionFromContext_Absent(t *testing.T) {
 // ── isSecureRequest ───────────────────────────────────────────────────────────
 
 func TestIsSecureRequest_DirectTLS(t *testing.T) {
+	t.Setenv("AUTH_COOKIE_SECURE", "")
 	r := httptest.NewRequest("GET", "https://example.com/", nil)
-	// httptest.NewRequest does not set r.TLS — expect false without forwarded header
-	if isSecureRequest(r) {
-		t.Error("expected false: httptest does not set r.TLS")
+	// Go 1.16+ sets r.TLS for https URLs in httptest.NewRequest
+	if !isSecureRequest(r) {
+		t.Error("expected true: r.TLS is set by httptest for https URLs")
 	}
 }
 
