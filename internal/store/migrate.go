@@ -23,13 +23,31 @@ import (
 //go:embed schema.sql
 var schema string
 
+// migrateAdvisoryLockID is the pg_advisory_xact_lock key used to serialize
+// concurrent Migrate calls (e.g. multiple test processes hitting the same DB).
+const migrateAdvisoryLockID = 7428374293
+
 // Migrate runs the embedded schema SQL against the database.
 // All statements use IF NOT EXISTS so it is safe to call on every startup.
+// A transaction-scoped advisory lock prevents concurrent callers from
+// deadlocking when multiple processes (e.g. test suites) start simultaneously.
 func (db *DB) Migrate(ctx context.Context) error {
-	if _, err := db.pool.Exec(ctx, schema); err != nil {
+	tx, err := db.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("migration begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Serialize concurrent migrations. pg_advisory_xact_lock blocks until the
+	// lock is available and releases it automatically on commit/rollback.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", migrateAdvisoryLockID); err != nil {
+		return fmt.Errorf("migration lock: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, schema); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // CountTeams returns the number of teams in the database.

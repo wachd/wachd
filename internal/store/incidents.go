@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // CreateIncident creates a new incident in the database
@@ -94,6 +95,9 @@ func (db *DB) GetIncident(ctx context.Context, teamID, incidentID uuid.UUID) (*I
 		&incident.AssignedTo,
 	)
 
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get incident: %w", err)
 	}

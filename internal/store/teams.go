@@ -41,6 +41,9 @@ func (db *DB) GetTeamByWebhookSecret(ctx context.Context, secret string) (*Team,
 		&team.UpdatedAt,
 	)
 
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get team by webhook secret: %w", err)
 	}
@@ -101,6 +104,9 @@ func (db *DB) GetTeam(ctx context.Context, teamID uuid.UUID) (*Team, error) {
 		&team.UpdatedAt,
 	)
 
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get team: %w", err)
 	}

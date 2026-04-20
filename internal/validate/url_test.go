@@ -41,12 +41,50 @@ func TestEndpointURL_Blocked(t *testing.T) {
 		{"http://host.local/api", ".local suffix"},
 		{"http://host.localdomain/api", ".localdomain suffix"},
 		{"http://metadata/metrics", "metadata short hostname"},
+		{"http://metadata.google/metrics", "metadata.google short hostname"},
 		{"ftp://example.com/data", "non-http scheme"},
 		{"file:///etc/passwd", "file scheme"},
 	}
 	for _, tc := range cases {
 		if err := EndpointURL(tc.url); err == nil {
 			t.Errorf("blocked URL %q (%s) was allowed", tc.url, tc.reason)
+		}
+	}
+}
+
+func TestEndpointURL_InvalidURL(t *testing.T) {
+	cases := []string{
+		"://no-scheme",
+		"not-a-url",
+	}
+	for _, u := range cases {
+		if err := EndpointURL(u); err == nil {
+			t.Errorf("invalid URL %q was allowed", u)
+		}
+	}
+}
+
+func TestEndpointURL_IPv4RangeEdges(t *testing.T) {
+	// Boundary checks for RFC 1918 / reserved ranges
+	allowed := []string{
+		"http://11.0.0.1/metrics",    // not in 10/8
+		"http://172.32.0.1/metrics",  // not in 172.16/12
+		"http://193.0.0.1/metrics",   // not in 192.168/16
+	}
+	for _, u := range allowed {
+		if err := EndpointURL(u); err != nil {
+			t.Errorf("public IP in %q was rejected: %v", u, err)
+		}
+	}
+
+	blocked := []string{
+		"http://10.255.255.255/metrics", // end of 10/8
+		"http://172.31.255.255/metrics", // end of 172.16/12
+		"http://192.168.255.255/metrics", // end of 192.168/16
+	}
+	for _, u := range blocked {
+		if err := EndpointURL(u); err == nil {
+			t.Errorf("private IP in %q was allowed", u)
 		}
 	}
 }

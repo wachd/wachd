@@ -245,6 +245,10 @@ func (m *Manager) GetEscalationChain(ctx context.Context, teamID uuid.UUID) ([]E
 			log.Printf("escalation layer %d (%s): schedule not found: %v", i, layer.LayerName, err)
 			continue
 		}
+		if schedule == nil {
+			log.Printf("escalation layer %d (%s): schedule %s not found", i, layer.LayerName, schedID)
+			continue
+		}
 		override, err := m.cfg.GetActiveOverrideForSchedule(ctx, schedule.ID, teamID, now)
 		if err != nil {
 			log.Printf("escalation layer %d (%s): override check failed: %v", i, layer.LayerName, err)

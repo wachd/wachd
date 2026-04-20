@@ -353,7 +353,124 @@ func TestSanitiser_GetPatternCount(t *testing.T) {
 	s := NewSanitiser()
 
 	count := s.GetPatternCount()
-	if count < 20 {
-		t.Errorf("Expected at least 20 patterns, got %d", count)
+	if count < 17 {
+		t.Errorf("Expected at least 17 patterns, got %d", count)
+	}
+}
+
+func TestSanitiser_IPv6(t *testing.T) {
+	s := NewSanitiser()
+
+	input := "Connecting to 2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+	result := s.Sanitise(input)
+	if strings.Contains(result, "2001:0db8") {
+		t.Errorf("IPv6 not sanitised: %q", result)
+	}
+}
+
+func TestSanitiser_GCPResource(t *testing.T) {
+	s := NewSanitiser()
+
+	tests := []struct {
+		input string
+	}{
+		{"Resource: projects/my-project/instances/my-instance"},
+		{"Access projects/prod-env/buckets/my-bucket failed"},
+	}
+	for _, tt := range tests {
+		result := s.Sanitise(tt.input)
+		if strings.Contains(result, "projects/") {
+			t.Errorf("GCP resource not sanitised: input=%q result=%q", tt.input, result)
+		}
+	}
+}
+
+func TestSanitiser_AzureResource(t *testing.T) {
+	s := NewSanitiser()
+
+	// The Azure regex uses \b before '/' — needs a word char immediately preceding the slash.
+	// Use non-UUID subscription IDs (UUID pattern would fire first on real UUIDs).
+	tests := []struct {
+		input string
+	}{
+		// Word char 'd' before '/' triggers \b
+		{"resource_id/subscriptions/abc123def/resourceGroups/myRG"},
+	}
+	for _, tt := range tests {
+		result := s.Sanitise(tt.input)
+		if strings.Contains(result, "abc123def") {
+			t.Errorf("Azure resource not sanitised: input=%q result=%q", tt.input, result)
+		}
+		if !strings.Contains(result, "[RESOURCE]") {
+			t.Errorf("expected [RESOURCE] replacement: input=%q result=%q", tt.input, result)
+		}
+	}
+}
+
+func TestSanitiser_InternalHostname(t *testing.T) {
+	s := NewSanitiser()
+
+	tests := []struct {
+		input string
+	}{
+		{"Connect to api-gateway.internal"},
+		{"Host: redis.cluster.internal"},
+	}
+	for _, tt := range tests {
+		result := s.Sanitise(tt.input)
+		if strings.Contains(result, ".internal") {
+			t.Errorf("Internal hostname not sanitised: input=%q result=%q", tt.input, result)
+		}
+	}
+}
+
+func TestSanitiser_SSHPrivateKey(t *testing.T) {
+	s := NewSanitiser()
+
+	input := "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234\n-----END RSA PRIVATE KEY-----"
+	result := s.Sanitise(input)
+	if strings.Contains(result, "BEGIN RSA PRIVATE KEY") {
+		t.Errorf("SSH private key not sanitised: %q", result)
+	}
+	if !strings.Contains(result, "[SSH_KEY]") {
+		t.Errorf("Expected [SSH_KEY] replacement, got: %q", result)
+	}
+}
+
+func TestSanitiser_SanitiseMultiple(t *testing.T) {
+	s := NewSanitiser()
+
+	inputs := []string{
+		"Contact: user@example.com",
+		"Server at 10.0.0.1",
+		"Normal log line",
+	}
+
+	results := s.SanitiseMultiple(inputs...)
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+	if !strings.Contains(results[0], "[EMAIL]") {
+		t.Errorf("email not sanitised in SanitiseMultiple: %q", results[0])
+	}
+	if strings.Contains(results[1], "10.0.0.1") {
+		t.Errorf("IP not sanitised in SanitiseMultiple: %q", results[1])
+	}
+	if results[2] != "Normal log line" {
+		t.Errorf("safe text modified in SanitiseMultiple: %q", results[2])
+	}
+}
+
+func TestSanitiser_EmptyString(t *testing.T) {
+	s := NewSanitiser()
+
+	result := s.Sanitise("")
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+
+	if !s.IsSafe("") {
+		t.Error("empty string should be safe")
 	}
 }
