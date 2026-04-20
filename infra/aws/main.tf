@@ -248,15 +248,15 @@ resource "aws_security_group" "eks_nodes" {
 
 resource "aws_security_group" "rds" {
   name        = "rds-wachd-${var.environment}"
-  description = "RDS PostgreSQL - allow from EKS nodes only"
+  description = "RDS PostgreSQL - allow from VPC only"
   vpc_id      = aws_vpc.wachd.id
 
   ingress {
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.eks_nodes.id]
-    description     = "PostgreSQL from EKS nodes"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+    description = "PostgreSQL from VPC"
   }
 
   egress {
@@ -274,15 +274,15 @@ resource "aws_security_group" "rds" {
 
 resource "aws_security_group" "redis" {
   name        = "redis-wachd-${var.environment}"
-  description = "ElastiCache Redis - allow from EKS nodes only"
+  description = "ElastiCache Redis - allow from VPC only"
   vpc_id      = aws_vpc.wachd.id
 
   ingress {
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.eks_nodes.id]
-    description     = "Redis from EKS nodes"
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+    description = "Redis from VPC"
   }
 
   egress {
@@ -466,30 +466,6 @@ resource "aws_eks_addon" "ebs_csi_driver" {
   depends_on               = [aws_eks_node_group.wachd]
 }
 
-# ============================================================================
-# Allow EKS nodes → RDS and Redis
-# EKS managed node groups attach the cluster's auto-created security group
-# (eks-cluster-sg-*), not the custom SG defined above. These rules reference
-# the cluster SG directly and are created after EKS exists.
-# ============================================================================
-
-resource "aws_vpc_security_group_ingress_rule" "rds_from_eks_cluster" {
-  security_group_id            = aws_security_group.rds.id
-  referenced_security_group_id = aws_eks_cluster.wachd.vpc_config[0].cluster_security_group_id
-  from_port                    = 5432
-  to_port                      = 5432
-  ip_protocol                  = "tcp"
-  description                  = "PostgreSQL from EKS cluster nodes"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "redis_from_eks_cluster" {
-  security_group_id            = aws_security_group.redis.id
-  referenced_security_group_id = aws_eks_cluster.wachd.vpc_config[0].cluster_security_group_id
-  from_port                    = 6379
-  to_port                      = 6379
-  ip_protocol                  = "tcp"
-  description                  = "Redis from EKS cluster nodes"
-}
 
 # IRSA role for EBS CSI driver
 resource "aws_iam_role" "ebs_csi" {

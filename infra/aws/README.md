@@ -482,6 +482,29 @@ curl -v http://<wachd_hostname>/.well-known/acme-challenge/test
 kubectl delete certificaterequest -n wachd -l cert-manager.io/certificate-name=wachd-tls
 ```
 
+### Pods crash with `context deadline exceeded` connecting to RDS or Redis
+
+```bash
+kubectl logs -n wachd -l app.kubernetes.io/component=server --previous
+# Failed to connect to database: failed to ping database: context deadline exceeded
+```
+
+**Cause:** EKS automatically creates a cluster-managed security group (`eks-cluster-sg-*`) and
+attaches it to all nodes. If the RDS/Redis security groups only allow traffic from a specific
+node SG, pods are blocked because their traffic originates from the cluster SG, not the node SG.
+
+This was fixed in the Terraform by allowing the full VPC CIDR on ports 5432 and 6379. RDS and
+Redis are in private subnets — no public route exists — so VPC-scoped rules are the right boundary.
+
+If you hit this on a cluster provisioned before this fix, run:
+```bash
+cd infra/aws
+terraform apply
+```
+
+Terraform will update the RDS and Redis security group rules in place. No cluster or database
+restart is needed — the rule change takes effect within seconds.
+
 ### Worker crashes with nil pointer on first alert
 
 ```bash
@@ -507,10 +530,32 @@ kubectl get pods -n wachd -w
 
 ## Teardown
 
+AWS manages ENIs for RDS, ElastiCache, and EKS internally. If you run a single `terraform destroy`,
+Terraform may try to delete security groups before those ENIs are released — causing
+`DependencyViolation` or `AuthFailure` errors. Use a two-phase destroy instead.
+
+**Phase 1 — delete the data plane resources and wait for ENIs to release:**
+
 ```bash
 helm uninstall wachd -n wachd
 kubectl delete namespace wachd
 
 cd infra/aws
+terraform destroy \
+  -target=aws_db_instance.wachd \
+  -target=aws_elasticache_replication_group.wachd \
+  -target=aws_eks_node_group.wachd
+
+# Wait for AWS to fully release managed ENIs after RDS and ElastiCache deletion
+sleep 90
+```
+
+**Phase 2 — destroy everything else:**
+
+```bash
 terraform destroy
 ```
+
+> If Phase 2 still fails with a `DependencyViolation` on a security group, wait 60 seconds
+> and re-run `terraform destroy`. EKS cluster deletion can take up to 15 minutes and may hold
+> ENIs until it fully completes.

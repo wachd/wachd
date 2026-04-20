@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -172,15 +173,16 @@ func main() {
 		clientID := os.Getenv("ENTRA_CLIENT_ID")
 		clientSecret := os.Getenv("ENTRA_CLIENT_SECRET")
 		redirectURI := os.Getenv("AUTH_REDIRECT_URI")
+		if redirectURI == "" {
+			if fe := os.Getenv("FRONTEND_URL"); fe != "" {
+				redirectURI = strings.TrimRight(fe, "/") + "/auth/callback"
+			}
+		}
 
 		// Provider cache for DB-stored SSO providers (60-second TTL)
 		var providerCache *auth.ProviderCache
 		if enc != nil {
-			cbURL := redirectURI
-			if cbURL == "" {
-				cbURL = "http://localhost:8080/auth/callback"
-			}
-			providerCache = auth.NewProviderCache(db, enc, cbURL, 60*time.Second)
+			providerCache = auth.NewProviderCache(db, enc, redirectURI, 60*time.Second)
 
 			// Migrate legacy Entra env-var config to DB on first deploy
 			if err := migrateLegacyEntraConfig(context.Background(), db, enc, tenantID, clientID, clientSecret, redirectURI); err != nil {

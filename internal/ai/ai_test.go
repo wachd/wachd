@@ -250,7 +250,7 @@ func TestOllamaBackend_Analyze_ServerError(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		case "/api/generate":
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(w, "internal error")
+			fmt.Fprint(w, "internal error") //nolint:errcheck
 		}
 	}))
 	defer srv.Close()
@@ -342,7 +342,7 @@ func TestClaudeBackend_Analyze_APIError(t *testing.T) {
 		model:  "claude-sonnet-4-6",
 		client: mockClient(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
-			fmt.Fprint(w, `{"error":"invalid key"}`)
+			fmt.Fprint(w, `{"error":"invalid key"}`) //nolint:errcheck
 		}),
 	}
 
@@ -454,7 +454,7 @@ func TestOpenAIBackend_Analyze_APIError(t *testing.T) {
 		model:  "gpt-4o-mini",
 		client: mockClient(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprint(w, `{"error":"rate limit"}`)
+			fmt.Fprint(w, `{"error":"rate limit"}`) //nolint:errcheck
 		}),
 	}
 

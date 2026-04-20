@@ -69,10 +69,10 @@ func requireAuthSessions(t *testing.T) *SessionStore {
 	}
 	client := redis.NewClient(opts)
 	if err := client.Ping(context.Background()).Err(); err != nil {
-		client.Close()
+		_ = client.Close()
 		t.Skipf("skipping integration test: Redis unavailable (%v) — run make docker-up", err)
 	}
-	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 	return NewSessionStore(client)
 }
 
@@ -118,13 +118,6 @@ func makeHandlers(db *store.DB, sessions *SessionStore) *Handlers {
 func makeAdminHandlers(t *testing.T, db *store.DB) *AdminHandlers {
 	t.Helper()
 	return NewAdminHandlers(db, testEncryptor(t), nil, testLicense())
-}
-
-// helper to build mux.Router with {id} var — needed for parseUUID
-func routerWithVar(method, path string, handler http.HandlerFunc) (*mux.Router, string) {
-	r := mux.NewRouter()
-	r.HandleFunc(path, handler).Methods(method)
-	return r, path
 }
 
 // ── SessionStore ──────────────────────────────────────────────────────────────

@@ -373,7 +373,7 @@ auth:
     clientSecretRef:
       name: wachd-entra-secret
       key: client-secret
-    redirectURI: "https://wachd.example.com/auth/callback"
+    redirectURI: ""  # Leave empty — auto-derived from auth.frontendURL as <frontendURL>/auth/callback
   # Frontend base URL — used for post-auth redirects and CORS origin.
   # Must match the hostname users access Wachd on.
   frontendURL: "https://wachd.example.com"

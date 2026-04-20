@@ -289,11 +289,9 @@ func TestSessionFromContext_Absent(t *testing.T) {
 
 func TestIsSecureRequest_DirectTLS(t *testing.T) {
 	r := httptest.NewRequest("GET", "https://example.com/", nil)
-	// httptest.NewRequest doesn't set r.TLS; simulate by checking header approach
-	// Real TLS would set r.TLS != nil — we test via X-Forwarded-Proto instead
+	// httptest.NewRequest does not set r.TLS — expect false without forwarded header
 	if isSecureRequest(r) {
-		// httptest does not actually set r.TLS, so this is expected false unless env var
-		// The test verifies the function doesn't panic.
+		t.Error("expected false: httptest does not set r.TLS")
 	}
 }
 
@@ -322,7 +320,7 @@ func TestIsSecureRequest_EnvVar(t *testing.T) {
 }
 
 func TestIsSecureRequest_EnvVarFalse(t *testing.T) {
-	os.Unsetenv("AUTH_COOKIE_SECURE")
+	_ = os.Unsetenv("AUTH_COOKIE_SECURE")
 	r := httptest.NewRequest("GET", "/", nil)
 	if isSecureRequest(r) {
 		t.Error("expected secure=false with no TLS, no header, no env var")
