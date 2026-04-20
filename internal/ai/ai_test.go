@@ -536,7 +536,7 @@ func TestGeminiBackend_Analyze_APIError(t *testing.T) {
 		model:  "gemini-2.0-flash",
 		client: mockClient(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, `{"error":{"message":"API key invalid","code":403}}`)
+			fmt.Fprint(w, `{"error":{"message":"API key invalid","code":403}}`) //nolint:errcheck
 		}),
 	}
 
