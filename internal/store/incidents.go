@@ -69,7 +69,7 @@ func (db *DB) GetIncident(ctx context.Context, teamID, incidentID uuid.UUID) (*I
 			id, team_id, title, message, severity, status, source,
 			alert_payload, context, analysis,
 			fired_at, acknowledged_at, resolved_at, snoozed_until,
-			created_at, updated_at, assigned_to
+			escalation_step, created_at, updated_at, assigned_to
 		FROM incidents
 		WHERE id = $1 AND team_id = $2
 	`
@@ -90,6 +90,7 @@ func (db *DB) GetIncident(ctx context.Context, teamID, incidentID uuid.UUID) (*I
 		&incident.AcknowledgedAt,
 		&incident.ResolvedAt,
 		&incident.SnoozedUntil,
+		&incident.EscalationStep,
 		&incident.CreatedAt,
 		&incident.UpdatedAt,
 		&incident.AssignedTo,
@@ -112,7 +113,7 @@ func (db *DB) ListIncidents(ctx context.Context, teamID uuid.UUID, limit, offset
 			id, team_id, title, message, severity, status, source,
 			alert_payload, context, analysis,
 			fired_at, acknowledged_at, resolved_at, snoozed_until,
-			created_at, updated_at, assigned_to
+			escalation_step, created_at, updated_at, assigned_to
 		FROM incidents
 		WHERE team_id = $1
 		ORDER BY fired_at DESC
@@ -143,6 +144,7 @@ func (db *DB) ListIncidents(ctx context.Context, teamID uuid.UUID, limit, offset
 			&incident.AcknowledgedAt,
 			&incident.ResolvedAt,
 			&incident.SnoozedUntil,
+			&incident.EscalationStep,
 			&incident.CreatedAt,
 			&incident.UpdatedAt,
 			&incident.AssignedTo,
@@ -255,4 +257,70 @@ func (i *Incident) ToResponse() (*IncidentResponse, error) {
 	}
 
 	return resp, nil
+}
+
+// GetOpenIncidentsForEscalation returns open incidents that fired at least minAge ago.
+// Used by the worker's escalation loop to find candidates for the next escalation step.
+func (db *DB) GetOpenIncidentsForEscalation(ctx context.Context, minAge time.Duration) ([]*Incident, error) {
+	cutoff := time.Now().Add(-minAge)
+	query := `
+		SELECT
+			id, team_id, title, message, severity, status, source,
+			alert_payload, context, analysis,
+			fired_at, acknowledged_at, resolved_at, snoozed_until,
+			escalation_step, created_at, updated_at, assigned_to
+		FROM incidents
+		WHERE status = 'open' AND fired_at < $1
+		ORDER BY fired_at ASC
+		LIMIT 200
+	`
+	rows, err := db.pool.Query(ctx, query, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query escalation candidates: %w", err)
+	}
+	defer rows.Close()
+
+	var incidents []*Incident
+	for rows.Next() {
+		incident := &Incident{}
+		if err := rows.Scan(
+			&incident.ID,
+			&incident.TeamID,
+			&incident.Title,
+			&incident.Message,
+			&incident.Severity,
+			&incident.Status,
+			&incident.Source,
+			&incident.AlertPayload,
+			&incident.Context,
+			&incident.Analysis,
+			&incident.FiredAt,
+			&incident.AcknowledgedAt,
+			&incident.ResolvedAt,
+			&incident.SnoozedUntil,
+			&incident.EscalationStep,
+			&incident.CreatedAt,
+			&incident.UpdatedAt,
+			&incident.AssignedTo,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan escalation candidate: %w", err)
+		}
+		incidents = append(incidents, incident)
+	}
+	return incidents, rows.Err()
+}
+
+// IncrementEscalationStep advances the escalation_step by 1 only when the current
+// value matches fromStep. Returns true if the row was updated (i.e. this caller
+// "won" the escalation — prevents double-escalation with concurrent workers).
+func (db *DB) IncrementEscalationStep(ctx context.Context, teamID, incidentID uuid.UUID, fromStep int) (bool, error) {
+	res, err := db.pool.Exec(ctx, `
+		UPDATE incidents
+		SET escalation_step = escalation_step + 1, updated_at = $1
+		WHERE id = $2 AND team_id = $3 AND escalation_step = $4 AND status = 'open'
+	`, time.Now(), incidentID, teamID, fromStep)
+	if err != nil {
+		return false, fmt.Errorf("failed to increment escalation step: %w", err)
+	}
+	return res.RowsAffected() == 1, nil
 }

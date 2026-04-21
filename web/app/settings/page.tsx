@@ -59,7 +59,10 @@ export default function SettingsPage() {
 
   // Load team config on mount
   useEffect(() => {
-    if (!primaryTeamId) return;
+    if (!primaryTeamId) {
+      setConfigLoading(false);
+      return;
+    }
     setConfigLoading(true);
     api.teamConfig
       .get(primaryTeamId)

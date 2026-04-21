@@ -41,10 +41,12 @@ CREATE TABLE IF NOT EXISTS incidents (
     acknowledged_at  TIMESTAMP,
     resolved_at      TIMESTAMP,
     snoozed_until    TIMESTAMP,
+    escalation_step  INT NOT NULL DEFAULT 0,
     created_at       TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMP NOT NULL DEFAULT NOW(),
     assigned_to   UUID REFERENCES users(id)
 );
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS escalation_step INT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_incidents_team_id     ON incidents(team_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_status      ON incidents(status);

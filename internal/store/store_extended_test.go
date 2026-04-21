@@ -1023,7 +1023,229 @@ func TestDB_UpdateMemberPhone_InvalidSource(t *testing.T) {
 	}
 }
 
-// ── db.Pool ───────────────────────────────────────────────────────────────────
+// ── Escalation step ───────────────────────────────────────────────────────────
+
+func TestDB_Incident_EscalationStepDefaultZero(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	incident := &Incident{
+		TeamID: team.ID, Title: "step default", Severity: "high",
+		Status: "open", Source: "grafana", AlertPayload: []byte(`{}`),
+	}
+	if err := db.CreateIncident(ctx, incident); err != nil {
+		t.Fatalf("CreateIncident: %v", err)
+	}
+
+	got, err := db.GetIncident(ctx, team.ID, incident.ID)
+	if err != nil {
+		t.Fatalf("GetIncident: %v", err)
+	}
+	if got.EscalationStep != 0 {
+		t.Errorf("expected EscalationStep=0, got %d", got.EscalationStep)
+	}
+}
+
+func TestDB_GetOpenIncidentsForEscalation(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	hash := "$2a$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	user, err := db.CreateLocalUser(ctx, unique("u"), unique("u")+"@test.example", "U", hash, false, false)
+	if err != nil {
+		t.Fatalf("CreateLocalUser: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteLocalUser(ctx, user.ID) })
+
+	// Incident A: open, created right now — should NOT appear with minAge=1s
+	incA := &Incident{
+		TeamID: team.ID, Title: "recent open", Severity: "high",
+		Status: "open", Source: "grafana", AlertPayload: []byte(`{}`),
+	}
+	if err := db.CreateIncident(ctx, incA); err != nil {
+		t.Fatalf("CreateIncident A: %v", err)
+	}
+
+	// Incident B: open, old enough — should appear (minAge=0)
+	incB := &Incident{
+		TeamID: team.ID, Title: "old open", Severity: "critical",
+		Status: "open", Source: "grafana", AlertPayload: []byte(`{}`),
+	}
+	if err := db.CreateIncident(ctx, incB); err != nil {
+		t.Fatalf("CreateIncident B: %v", err)
+	}
+
+	// Incident C: old enough but acknowledged — should NOT appear
+	incC := &Incident{
+		TeamID: team.ID, Title: "acknowledged", Severity: "high",
+		Status: "open", Source: "grafana", AlertPayload: []byte(`{}`),
+	}
+	if err := db.CreateIncident(ctx, incC); err != nil {
+		t.Fatalf("CreateIncident C: %v", err)
+	}
+	if err := db.AcknowledgeIncident(ctx, team.ID, incC.ID, user.ID); err != nil {
+		t.Fatalf("AcknowledgeIncident C: %v", err)
+	}
+
+	// minAge=0 returns all open incidents regardless of age.
+	all, err := db.GetOpenIncidentsForEscalation(ctx, 0)
+	if err != nil {
+		t.Fatalf("GetOpenIncidentsForEscalation: %v", err)
+	}
+
+	foundA, foundB, foundC := false, false, false
+	for _, inc := range all {
+		switch inc.ID {
+		case incA.ID:
+			foundA = true
+		case incB.ID:
+			foundB = true
+		case incC.ID:
+			foundC = true
+		}
+	}
+	if !foundA {
+		t.Error("expected recent open incident A in results")
+	}
+	if !foundB {
+		t.Error("expected old open incident B in results")
+	}
+	if foundC {
+		t.Error("acknowledged incident C must not appear in escalation candidates")
+	}
+
+	// minAge=10 minutes: incident B was just created so it will not pass the cutoff either.
+	// Both A and B were created within the last second — neither should appear with 10m minAge.
+	none, err := db.GetOpenIncidentsForEscalation(ctx, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("GetOpenIncidentsForEscalation (10m): %v", err)
+	}
+	for _, inc := range none {
+		if inc.ID == incA.ID || inc.ID == incB.ID {
+			t.Errorf("incident %s was just created — must not appear with 10m minAge", inc.ID)
+		}
+	}
+}
+
+func TestDB_IncrementEscalationStep(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	incident := &Incident{
+		TeamID: team.ID, Title: "esc step test", Severity: "high",
+		Status: "open", Source: "grafana", AlertPayload: []byte(`{}`),
+	}
+	if err := db.CreateIncident(ctx, incident); err != nil {
+		t.Fatalf("CreateIncident: %v", err)
+	}
+
+	// First increment from step 0 → 1: must succeed.
+	advanced, err := db.IncrementEscalationStep(ctx, team.ID, incident.ID, 0)
+	if err != nil {
+		t.Fatalf("IncrementEscalationStep (0→1): %v", err)
+	}
+	if !advanced {
+		t.Fatal("expected advanced=true on first increment")
+	}
+	got, _ := db.GetIncident(ctx, team.ID, incident.ID)
+	if got.EscalationStep != 1 {
+		t.Errorf("expected EscalationStep=1, got %d", got.EscalationStep)
+	}
+
+	// Duplicate call with fromStep=0: must fail (step is now 1 in DB).
+	// This is the concurrent-worker protection — prevents double-escalation.
+	dup, err := db.IncrementEscalationStep(ctx, team.ID, incident.ID, 0)
+	if err != nil {
+		t.Fatalf("IncrementEscalationStep duplicate: %v", err)
+	}
+	if dup {
+		t.Error("expected advanced=false on duplicate increment (compare-and-swap must reject stale fromStep)")
+	}
+	got2, _ := db.GetIncident(ctx, team.ID, incident.ID)
+	if got2.EscalationStep != 1 {
+		t.Errorf("step must remain 1 after rejected duplicate, got %d", got2.EscalationStep)
+	}
+
+	// Second legitimate increment 1 → 2: must succeed.
+	advanced2, err := db.IncrementEscalationStep(ctx, team.ID, incident.ID, 1)
+	if err != nil {
+		t.Fatalf("IncrementEscalationStep (1→2): %v", err)
+	}
+	if !advanced2 {
+		t.Fatal("expected advanced=true on second increment")
+	}
+	got3, _ := db.GetIncident(ctx, team.ID, incident.ID)
+	if got3.EscalationStep != 2 {
+		t.Errorf("expected EscalationStep=2, got %d", got3.EscalationStep)
+	}
+
+	// Wrong team_id: must not advance (tenant isolation).
+	wrongTeamAdvanced, err := db.IncrementEscalationStep(ctx, uuid.New(), incident.ID, 2)
+	if err != nil {
+		t.Fatalf("IncrementEscalationStep wrong team: %v", err)
+	}
+	if wrongTeamAdvanced {
+		t.Error("expected advanced=false with wrong team_id — tenant isolation broken")
+	}
+}
+
+func TestDB_IncrementEscalationStep_AcknowledgedIncident(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	hash := "$2a$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	user, err := db.CreateLocalUser(ctx, unique("u"), unique("u")+"@test.example", "U", hash, false, false)
+	if err != nil {
+		t.Fatalf("CreateLocalUser: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteLocalUser(ctx, user.ID) })
+
+	incident := &Incident{
+		TeamID: team.ID, Title: "already acked", Severity: "low",
+		Status: "open", Source: "grafana", AlertPayload: []byte(`{}`),
+	}
+	if err := db.CreateIncident(ctx, incident); err != nil {
+		t.Fatalf("CreateIncident: %v", err)
+	}
+
+	// Acknowledge — status becomes 'acknowledged', not 'open'
+	if err := db.AcknowledgeIncident(ctx, team.ID, incident.ID, user.ID); err != nil {
+		t.Fatalf("AcknowledgeIncident: %v", err)
+	}
+
+	// IncrementEscalationStep must not fire on an acknowledged incident.
+	advanced, err := db.IncrementEscalationStep(ctx, team.ID, incident.ID, 0)
+	if err != nil {
+		t.Fatalf("IncrementEscalationStep on acked: %v", err)
+	}
+	if advanced {
+		t.Error("expected advanced=false — escalation must not fire on acknowledged incident")
+	}
+}
 
 func TestDB_Pool(t *testing.T) {
 	db := requireDB(t)

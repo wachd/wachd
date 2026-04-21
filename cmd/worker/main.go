@@ -268,6 +268,9 @@ func main() {
 		}
 	}()
 
+	go worker.runEscalationLoop(ctx)
+	log.Println("✓ Escalation loop started (30s poll)")
+
 	<-quit
 	log.Println("Shutting down worker...")
 	cancel()
@@ -324,9 +327,11 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 	if w.aiBackend != nil && w.aiBackend.IsAvailable(ctx) {
 		log.Printf("🤖 Running AI root cause analysis (%s)...", w.aiBackend.GetModelName())
 
+		// Sanitise incident title and message before they reach the AI backend.
+		incidentTitle := w.sanitiser.Sanitise(incident.Title)
 		incidentMessage := ""
 		if incident.Message != nil {
-			incidentMessage = *incident.Message
+			incidentMessage = w.sanitiser.Sanitise(*incident.Message)
 		}
 
 		commitMsgs := make([]string, len(sanitizedCtx.Commits))
@@ -344,7 +349,7 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 		}
 
 		prompt := ai.BuildPrompt(&ai.AnalysisRequest{
-			IncidentTitle:   incident.Title,
+			IncidentTitle:   incidentTitle,
 			IncidentMessage: incidentMessage,
 			Severity:        incident.Severity,
 			Commits:         commitMsgs,
@@ -379,8 +384,20 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 // sendNotifications fans out to every configured notification channel.
 // Each channel is attempted independently — a failure in one does not block others.
 func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
-	if w.slackNotifier != nil {
-		if err := w.slackNotifier.SendIncidentAlert(ctx, incident, onCallUser, analysis); err != nil {
+	// Prefer per-team Slack config from DB over global env-var fallback
+	slackNotifier := w.slackNotifier
+	if cfg, err := w.db.GetTeamConfig(ctx, incident.TeamID); err == nil {
+		if cfg.SlackWebhookURL != nil && *cfg.SlackWebhookURL != "" {
+			channel := ""
+			if cfg.SlackChannel != nil {
+				channel = *cfg.SlackChannel
+			}
+			slackNotifier = notify.NewSlackNotifier(*cfg.SlackWebhookURL, channel)
+		}
+	}
+
+	if slackNotifier != nil {
+		if err := slackNotifier.SendIncidentAlert(ctx, incident, onCallUser, analysis); err != nil {
 			log.Printf("Slack notification failed: %v", err)
 		} else {
 			log.Printf("  ✓ Slack")

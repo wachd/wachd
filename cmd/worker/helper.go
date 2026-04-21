@@ -22,9 +22,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wachd/wachd/internal/ai"
 	"github.com/wachd/wachd/internal/collector"
 	"github.com/wachd/wachd/internal/correlator"
+	"github.com/wachd/wachd/internal/oncall"
 	"github.com/wachd/wachd/internal/store"
 	"github.com/wachd/wachd/internal/validate"
 )
@@ -425,4 +427,120 @@ func formatTimeline(timeline *correlator.Timeline) string {
 		return "No correlations detected"
 	}
 	return strings.Join(timeline.Correlations, "; ")
+}
+
+// runEscalationLoop polls every 30 seconds for open incidents that have exceeded
+// their next escalation threshold and notifies the appropriate layer.
+func (w *Worker) runEscalationLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.checkEscalations(ctx)
+		}
+	}
+}
+
+func (w *Worker) checkEscalations(ctx context.Context) {
+	// Minimum possible notify_after_minutes is 1 — only fetch incidents older than that.
+	incidents, err := w.db.GetOpenIncidentsForEscalation(ctx, time.Minute)
+	if err != nil {
+		log.Printf("escalation: query failed: %v", err)
+		return
+	}
+	for _, incident := range incidents {
+		w.checkEscalationForIncident(ctx, incident)
+	}
+}
+
+func (w *Worker) checkEscalationForIncident(ctx context.Context, incident *store.Incident) {
+	policy, err := w.db.GetEscalationPolicy(ctx, incident.TeamID)
+	if err != nil || policy == nil {
+		return // no policy configured
+	}
+
+	var cfg oncall.EscalationConfig
+	if err := json.Unmarshal(policy.Config, &cfg); err != nil {
+		log.Printf("escalation: invalid policy for team %s: %v", incident.TeamID, err)
+		return
+	}
+
+	// Layer 0 was already notified during initial job processing.
+	// nextIdx is the cfg.Layers index we want to notify next.
+	nextIdx := incident.EscalationStep + 1
+	if nextIdx >= len(cfg.Layers) {
+		return // all layers already notified
+	}
+
+	nextLayer := cfg.Layers[nextIdx]
+	elapsed := time.Since(incident.FiredAt)
+	if elapsed < time.Duration(nextLayer.NotifyAfterMinutes)*time.Minute {
+		return // not yet time for this layer
+	}
+
+	// Resolve the target user directly from the layer's schedule (not via
+	// GetEscalationChain, which returns a filtered slice that may skip
+	// uncovered layers and break index alignment with cfg.Layers).
+	user := w.resolveLayerMember(ctx, incident.TeamID, nextLayer.ScheduleID)
+	if user == nil {
+		// Layer has no on-call coverage right now — advance past it so we
+		// don't block subsequent layers.
+		advanced, _ := w.db.IncrementEscalationStep(ctx, incident.TeamID, incident.ID, incident.EscalationStep)
+		if advanced {
+			log.Printf("escalation: incident %s step %d (%s) no coverage, skipping layer", incident.ID, nextIdx, nextLayer.LayerName)
+		}
+		return
+	}
+
+	// Atomically claim the escalation step — prevents double-escalation with concurrent workers.
+	advanced, err := w.db.IncrementEscalationStep(ctx, incident.TeamID, incident.ID, incident.EscalationStep)
+	if err != nil {
+		log.Printf("escalation: step increment failed for incident %s: %v", incident.ID, err)
+		return
+	}
+	if !advanced {
+		return // another worker already handled this step
+	}
+
+	log.Printf("⬆ Escalating incident %s to step %d (%s): %s", incident.ID, nextIdx, nextLayer.LayerName, user.Name)
+	w.sendNotifications(ctx, incident, user, nil)
+}
+
+// resolveLayerMember returns the on-call member for a specific schedule at the
+// current time, respecting overrides. Returns nil if no coverage or on error.
+func (w *Worker) resolveLayerMember(ctx context.Context, teamID uuid.UUID, scheduleIDStr string) *store.TeamMember {
+	sid, err := uuid.Parse(scheduleIDStr)
+	if err != nil {
+		return nil
+	}
+	schedule, err := w.db.GetScheduleByID(ctx, sid, teamID)
+	if err != nil || schedule == nil {
+		return nil
+	}
+	now := time.Now()
+
+	// Check for active override first.
+	override, err := w.db.GetActiveOverrideForSchedule(ctx, schedule.ID, teamID, now)
+	if err == nil && override != nil {
+		if member, err := w.db.GetMemberByID(ctx, override.UserID); err == nil {
+			return member
+		}
+	}
+
+	// Resolve from rotation.
+	results, err := oncall.ResolveAllLayersAt(schedule.RotationConfig, now)
+	if err != nil {
+		return nil
+	}
+	for _, r := range results {
+		if r.UserID != uuid.Nil {
+			if member, err := w.db.GetMemberByID(ctx, r.UserID); err == nil {
+				return member
+			}
+		}
+	}
+	return nil
 }

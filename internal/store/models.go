@@ -57,6 +57,7 @@ type Incident struct {
 	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
 	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
 	SnoozedUntil   *time.Time `json:"snoozed_until,omitempty"`
+	EscalationStep int        `json:"escalation_step"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	AssignedTo     *uuid.UUID `json:"assigned_to,omitempty"`
