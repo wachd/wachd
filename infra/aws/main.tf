@@ -881,6 +881,17 @@ resource "aws_secretsmanager_secret_version" "license_key" {
   secret_string = "placeholder"  # Update in Secrets Manager with your license key
 }
 
+resource "aws_secretsmanager_secret" "smtp_credentials" {
+  name                    = "${local.secret_prefix}/smtp-credentials"
+  description             = "SMTP credentials for outbound email. JSON with 'username' and 'password' keys. Works with any SMTP provider (Resend, SendGrid, SES, Mailgun, etc.)."
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "smtp_credentials" {
+  secret_id     = aws_secretsmanager_secret.smtp_credentials.id
+  secret_string = jsonencode({ username = "placeholder", password = "placeholder" })  # Update in Secrets Manager to enable email notifications
+}
+
 # ============================================================================
 # IAM Role for External Secrets Operator (IRSA)
 # ============================================================================
@@ -1048,6 +1059,41 @@ locals {
       smKey     = "${local.secret_prefix}/license-key"
     }
   }
+}
+
+# wachd-smtp-creds needs two keys (username + password). Credentials are stored
+# as a JSON object in Secrets Manager; ESO's dataFrom.extract splits them into
+# individual keys. Works with any SMTP provider — just update the SM secret.
+resource "kubectl_manifest" "smtp_creds_secret" {
+  yaml_body = yamlencode({
+    apiVersion = "external-secrets.io/v1beta1"
+    kind       = "ExternalSecret"
+    metadata = {
+      name      = "wachd-smtp-creds"
+      namespace = "wachd"
+    }
+    spec = {
+      refreshInterval = "1h"
+      secretStoreRef = {
+        name = "aws-secrets-manager"
+        kind = "ClusterSecretStore"
+      }
+      target = {
+        name           = "wachd-smtp-creds"
+        creationPolicy = "Owner"
+      }
+      dataFrom = [{
+        extract = {
+          key = "${local.secret_prefix}/smtp-credentials"
+        }
+      }]
+    }
+  })
+
+  depends_on = [
+    kubectl_manifest.cluster_secret_store,
+    kubernetes_namespace.wachd,
+  ]
 }
 
 resource "kubectl_manifest" "external_secrets" {

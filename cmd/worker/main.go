@@ -386,7 +386,7 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
 	// Prefer per-team Slack config from DB over global env-var fallback
 	slackNotifier := w.slackNotifier
-	if cfg, err := w.db.GetTeamConfig(ctx, incident.TeamID); err == nil {
+	if cfg, err := w.db.GetTeamConfig(ctx, incident.TeamID); err == nil && cfg != nil {
 		if cfg.SlackWebhookURL != nil && *cfg.SlackWebhookURL != "" {
 			channel := ""
 			if cfg.SlackChannel != nil {

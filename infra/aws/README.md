@@ -219,6 +219,7 @@ wachd-license          aws-secrets-manager   1h                 SecretSynced   T
 wachd-oidc-secret      aws-secrets-manager   1h                 SecretSynced   True
 wachd-redis-secret     aws-secrets-manager   1h                 SecretSynced   True
 wachd-slack-webhook    aws-secrets-manager   1h                 SecretSynced   True
+wachd-smtp-creds       aws-secrets-manager   1h                 SecretSynced   True
 ```
 
 > **No `kubectl create secret` needed.** All K8s secrets are managed by ESO.
@@ -227,11 +228,18 @@ wachd-slack-webhook    aws-secrets-manager   1h                 SecretSynced   T
 
 ## Step 7 — Enable optional features via Secrets Manager
 
-To enable Slack notifications, Claude AI, GitHub context collection, or a license key,
+To enable Slack notifications, Claude AI, GitHub context collection, email, or a license key,
 update the corresponding secret value in AWS Secrets Manager. ESO will sync the new
 value into Kubernetes within 1 hour (or force an immediate sync — see below).
 
 ```bash
+# Enable email notifications (any SMTP provider — Resend, SendGrid, SES, Mailgun, etc.)
+# Store username and password as a JSON object; ESO extracts both keys automatically.
+aws secretsmanager put-secret-value \
+  --region us-east-1 \
+  --secret-id wachd/prod/smtp-credentials \
+  --secret-string '{"username":"resend","password":"re_..."}'
+
 # Enable Slack notifications
 aws secretsmanager put-secret-value \
   --region us-east-1 \
