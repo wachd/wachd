@@ -929,6 +929,7 @@ func (h *AdminHandlers) provisionGroupMembers(ctx context.Context, providerID uu
 			email = m.UserPrincipalName
 		}
 		if m.ID == "" || email == "" {
+			log.Printf("admin: provision members: skipping member id=%q name=%q mail=%q upn=%q — missing id or email", m.ID, m.DisplayName, m.Mail, m.UserPrincipalName)
 			continue
 		}
 		identity, err := h.db.UpsertSSOIdentity(ctx, "entra", m.ID, email, m.DisplayName, nil)
