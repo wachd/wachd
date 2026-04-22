@@ -15,6 +15,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -779,6 +780,10 @@ func (h *AdminHandlers) HandleCreateGroupMapping(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusCreated, mapping)
+
+	// Best-effort: pre-provision existing group members so they appear in on-call
+	// schedules without waiting for first login. Never blocks the HTTP response.
+	go h.provisionGroupMembers(context.Background(), providerID, req.GroupID)
 }
 
 // HandleDeleteGroupMapping removes a group mapping by ID.
@@ -886,4 +891,56 @@ func (h *AdminHandlers) HandleDeleteToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// provisionGroupMembers fetches the current members of an Entra group via the
+// Microsoft Graph API and upserts them as SSO identities with the correct team
+// access. Runs best-effort in the background — errors are logged, never surfaced.
+func (h *AdminHandlers) provisionGroupMembers(ctx context.Context, providerID uuid.UUID, groupID string) {
+	p, err := h.db.GetSSOProvider(ctx, providerID)
+	if err != nil || p == nil {
+		log.Printf("admin: provision members: load provider %s: %v", providerID, err)
+		return
+	}
+
+	tenantID, ok := TenantIDFromIssuerURL(p.IssuerURL)
+	if !ok {
+		// Not an Entra provider — no Graph API to call.
+		return
+	}
+
+	clientSecret, err := h.enc.Decrypt(p.ClientSecretEnc)
+	if err != nil {
+		log.Printf("admin: provision members: decrypt secret: %v", err)
+		return
+	}
+
+	members, err := GetGroupMembers(ctx, tenantID, p.ClientID, clientSecret, groupID)
+	if err != nil {
+		log.Printf("admin: provision members: graph call failed (app needs GroupMember.Read.All permission): %v", err)
+		return
+	}
+
+	log.Printf("admin: provision members: found %d member(s) in group %s", len(members), groupID)
+	provisioned := 0
+	for _, m := range members {
+		email := m.Mail
+		if email == "" {
+			email = m.UserPrincipalName
+		}
+		if m.ID == "" || email == "" {
+			continue
+		}
+		identity, err := h.db.UpsertSSOIdentity(ctx, "entra", m.ID, email, m.DisplayName, nil)
+		if err != nil {
+			log.Printf("admin: provision members: upsert identity %s: %v", email, err)
+			continue
+		}
+		if err := h.db.SyncTeamAccess(ctx, identity.ID, []string{groupID}, providerID); err != nil {
+			log.Printf("admin: provision members: sync access for %s: %v", email, err)
+			continue
+		}
+		provisioned++
+	}
+	log.Printf("admin: provision members: provisioned %d/%d user(s) for group %s", provisioned, len(members), groupID)
 }

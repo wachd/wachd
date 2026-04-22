@@ -60,6 +60,32 @@ func (db *DB) UpsertSchedule(ctx context.Context, s *Schedule) error {
 	`, s.TeamID, s.Name, s.RotationConfig, s.Enabled).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
 }
 
+// ListSchedules returns all enabled schedules for a team, ordered by creation time.
+func (db *DB) ListSchedules(ctx context.Context, teamID uuid.UUID) ([]*Schedule, error) {
+	query := `
+		SELECT id, team_id, name, rotation_config, enabled, created_at, updated_at
+		FROM schedules
+		WHERE team_id = $1 AND enabled = true
+		ORDER BY created_at ASC
+	`
+	rows, err := db.pool.Query(ctx, query, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var schedules []*Schedule
+	for rows.Next() {
+		var s Schedule
+		if err := rows.Scan(&s.ID, &s.TeamID, &s.Name, &s.RotationConfig,
+			&s.Enabled, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		schedules = append(schedules, &s)
+	}
+	return schedules, rows.Err()
+}
+
 // GetSchedule retrieves the active on-call schedule for a team.
 func (db *DB) GetSchedule(ctx context.Context, teamID uuid.UUID) (*Schedule, error) {
 	query := `

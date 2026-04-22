@@ -55,8 +55,13 @@ export interface TeamConfigInput {
   ai_model?: string | null;
 }
 
+export interface EscalationLayer {
+  schedule_id: string;
+  notify_after_minutes: number;
+}
+
 export interface EscalationConfig {
-  escalation_timeout_minutes: number;
+  layers: EscalationLayer[];
   repeat_interval_minutes: number;
   max_repeats: number;
 }
@@ -98,6 +103,13 @@ export const api = {
 
   // On-call schedule
   schedule: {
+    list: async (teamId: string): Promise<{ id: string; name: string }[]> => {
+      const data = await fetchApi<{ schedules: { id: string; name: string }[] }>(
+        `/api/v1/teams/${teamId}/schedules`
+      );
+      return data?.schedules ?? [];
+    },
+
     get: async (teamId: string): Promise<Schedule | null> => {
       const data = await fetchApi<{ configured?: boolean } & Schedule>(
         `/api/v1/teams/${teamId}/schedule`
@@ -283,6 +295,11 @@ export const api = {
       fetchApi<TeamConfigPublic>(`/api/v1/teams/${teamId}/config`, {
         method: 'PUT',
         body: JSON.stringify(data),
+      }),
+    testNotification: (teamId: string, channel: 'slack' | 'email', email?: string) =>
+      fetchApi<{ status: string }>(`/api/v1/teams/${teamId}/config/test-notification`, {
+        method: 'POST',
+        body: JSON.stringify({ channel, email }),
       }),
   },
 

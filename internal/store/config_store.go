@@ -47,6 +47,7 @@ type ConfigStore interface {
 	GetSchedule(ctx context.Context, teamID uuid.UUID) (*Schedule, error)
 	GetScheduleByID(ctx context.Context, id, teamID uuid.UUID) (*Schedule, error)
 	GetScheduleForAPI(ctx context.Context, teamID uuid.UUID) (*ScheduleResponse, error)
+	ListSchedules(ctx context.Context, teamID uuid.UUID) ([]*Schedule, error)
 	UpsertSchedule(ctx context.Context, s *Schedule) error
 
 	// Schedule overrides

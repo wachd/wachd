@@ -36,6 +36,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/wachd/wachd/internal/auth"
 	"github.com/wachd/wachd/internal/license"
+	"github.com/wachd/wachd/internal/notify"
 	"github.com/wachd/wachd/internal/oncall"
 	"github.com/wachd/wachd/internal/queue"
 	"github.com/wachd/wachd/internal/store"
@@ -317,6 +318,7 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/resolve", server.handleResolveIncident).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/reopen", server.handleReopenIncident).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/snooze", server.handleSnoozeIncident).Methods("POST")
+	apiRouter.HandleFunc("/{teamId}/schedules", server.handleListSchedules).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/schedule", server.handleGetSchedule).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/schedule", server.handleUpsertSchedule).Methods("PUT")
 	apiRouter.HandleFunc("/{teamId}/schedule/overrides", server.handleListOverrides).Methods("GET")
@@ -328,6 +330,7 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/members/{userId}", server.handleUpdateMember).Methods("PUT")
 	apiRouter.HandleFunc("/{teamId}/config", server.handleGetTeamConfig).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/config", server.handleUpsertTeamConfig).Methods("PUT")
+	apiRouter.HandleFunc("/{teamId}/config/test-notification", server.handleTestNotification).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleGetEscalationPolicy).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleUpsertEscalationPolicy).Methods("PUT")
 
@@ -602,6 +605,38 @@ func (s *Server) handleGetIncident(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// GET /api/v1/teams/{teamId}/schedules — list all schedules for a team
+func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
+	teamID, err := uuid.Parse(mux.Vars(r)["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAccess(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+
+	schedules, err := s.cfg.ListSchedules(r.Context(), teamID)
+	if err != nil {
+		log.Printf("handleListSchedules: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	type scheduleItem struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	items := make([]scheduleItem, len(schedules))
+	for i, sc := range schedules {
+		items[i] = scheduleItem{ID: sc.ID.String(), Name: sc.Name}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"schedules": items})
+}
+
 func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	teamIDStr := vars["teamId"]
@@ -796,11 +831,13 @@ func (s *Server) handleGetOnCallTimeline(w http.ResponseWriter, r *http.Request)
 			layers = append(layers, tLayer{LayerName: lr.LayerName, UserID: uid, UserName: name})
 		}
 
-		// Find override covering this day (overlap check: override spans noon).
+		// Find override overlapping this day (any overlap, not just noon).
+		dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
+		dayEnd := dayStart.Add(24 * time.Hour)
 		var dayOverride *tOverride
 		for j := range overrides {
 			o := &overrides[j]
-			if !o.StartAt.After(noon) && o.EndAt.After(noon) {
+			if o.StartAt.Before(dayEnd) && o.EndAt.After(dayStart) {
 				ov := &tOverride{
 					ID: o.ID.String(), UserID: o.UserID.String(),
 					UserName: nameMap[o.UserID],
@@ -1263,6 +1300,90 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(pub)
+}
+
+// handleTestNotification sends a test message on the requested channel (slack or email)
+// using the team's current saved configuration. Returns 200 on success, 400/500 on error.
+func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) {
+	teamID, err := uuid.Parse(mux.Vars(r)["teamId"])
+	if err != nil {
+		http.Error(w, "invalid teamId", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+
+	var req struct {
+		Channel string `json:"channel"` // "slack" or "email"
+		Email   string `json:"email"`   // recipient for email test (optional — falls back to session email)
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	cfg, err := s.cfg.GetTeamConfig(r.Context(), teamID)
+	if err != nil {
+		http.Error(w, "failed to load team config", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+
+	switch req.Channel {
+	case "slack":
+		if cfg == nil || cfg.SlackWebhookURL == nil || *cfg.SlackWebhookURL == "" {
+			http.Error(w, `{"error":"Slack webhook URL not configured"}`, http.StatusBadRequest)
+			return
+		}
+		channel := ""
+		if cfg.SlackChannel != nil {
+			channel = *cfg.SlackChannel
+		}
+		n := notify.NewSlackNotifier(*cfg.SlackWebhookURL, channel)
+		if err := n.SendTestMessage(ctx); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+	case "email":
+		smtpHost := os.Getenv("SMTP_HOST")
+		if smtpHost == "" {
+			http.Error(w, "SMTP not configured on this server", http.StatusBadRequest)
+			return
+		}
+		to := req.Email
+		if to == "" {
+			sess := auth.SessionFromContext(ctx)
+			if sess != nil {
+				to = sess.Email
+			}
+		}
+		if to == "" {
+			http.Error(w, "email recipient required", http.StatusBadRequest)
+			return
+		}
+		n := notify.NewEmailNotifier(
+			smtpHost,
+			os.Getenv("SMTP_PORT"),
+			os.Getenv("SMTP_FROM"),
+			os.Getenv("SMTP_USERNAME"),
+			os.Getenv("SMTP_PASSWORD"),
+		)
+		if err := n.SendTestMessage(ctx, to); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+	default:
+		http.Error(w, "channel must be 'slack' or 'email'", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
 }
 
 // handleGetSystemAI returns the platform-wide AI backend configuration.

@@ -134,6 +134,14 @@ func (s *SlackNotifier) SendIncidentAlert(ctx context.Context, incident *store.I
 	return s.sendMessage(ctx, message)
 }
 
+// SendTestMessage sends a simple test message to verify the Slack webhook is working.
+func (s *SlackNotifier) SendTestMessage(ctx context.Context) error {
+	return s.sendMessage(ctx, SlackMessage{
+		Channel: s.channel,
+		Text:    "Wachd test notification — your Slack integration is working.",
+	})
+}
+
 // sendMessage sends a message to Slack webhook
 func (s *SlackNotifier) sendMessage(ctx context.Context, message SlackMessage) error {
 	if s.webhookURL == "" {

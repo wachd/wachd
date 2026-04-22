@@ -45,6 +45,23 @@ func NewEmailNotifier(smtpHost, smtpPort, from, username, password string) *Emai
 	}
 }
 
+// SendTestMessage sends a test email to the given address to verify SMTP is working.
+func (e *EmailNotifier) SendTestMessage(ctx context.Context, to string) error {
+	if e.smtpHost == "" {
+		return fmt.Errorf("SMTP server not configured")
+	}
+	subject := "[Wachd] Test notification"
+	body := "Wachd test notification — your email integration is working.\r\n\r\n" +
+		"This message was sent from the Wachd Settings → Notifications page.\r\n"
+	message := e.formatEmailMessage([]string{to}, subject, body)
+	auth := smtp.PlainAuth("", e.username, e.password, e.smtpHost)
+	addr := fmt.Sprintf("%s:%s", e.smtpHost, e.smtpPort)
+	if err := smtp.SendMail(addr, auth, e.from, []string{to}, []byte(message)); err != nil {
+		return fmt.Errorf("failed to send test email: %w", err)
+	}
+	return nil
+}
+
 // SendIncidentAlert sends an incident alert via email
 func (e *EmailNotifier) SendIncidentAlert(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) error {
 	if e.smtpHost == "" {

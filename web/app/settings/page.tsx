@@ -34,6 +34,8 @@ export default function SettingsPage() {
   // Notifications form
   const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
   const [slackChannel, setSlackChannel] = useState('');
+  const [testingChannel, setTestingChannel] = useState<'slack' | 'email' | null>(null);
+  const [testResult, setTestResult] = useState<{ channel: string; ok: boolean; message: string } | null>(null);
 
   // Members state
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -44,12 +46,13 @@ export default function SettingsPage() {
 
   // Escalation state
   const [escalation, setEscalation] = useState<EscalationConfig>({
-    escalation_timeout_minutes: 10,
+    layers: [],
     repeat_interval_minutes: 30,
     max_repeats: 3,
   });
   const [escalationLoaded, setEscalationLoaded] = useState(false);
   const [escalationLoading, setEscalationLoading] = useState(false);
+  const [scheduleOptions, setScheduleOptions] = useState<{ id: string; name: string }[]>([]);
 
   // Save state (shared)
   const [saving, setSaving] = useState(false);
@@ -91,13 +94,19 @@ export default function SettingsPage() {
       .finally(() => setMembersLoading(false));
   }, [activeTab, primaryTeamId, membersLoaded]);
 
-  // Load escalation lazily when escalation tab is opened
+  // Load escalation + schedules lazily when escalation tab is opened
   useEffect(() => {
     if (activeTab !== 'escalation' || !primaryTeamId || escalationLoaded) return;
     setEscalationLoading(true);
-    api.escalation
-      .get(primaryTeamId)
-      .then((data) => { if (data.config) setEscalation(data.config); setEscalationLoaded(true); })
+    Promise.all([
+      api.escalation.get(primaryTeamId),
+      api.schedule.list(primaryTeamId),
+    ])
+      .then(([escData, schedules]) => {
+        if (escData.config) setEscalation(escData.config);
+        setScheduleOptions(schedules);
+        setEscalationLoaded(true);
+      })
       .catch(() => setEscalationLoaded(true))
       .finally(() => setEscalationLoading(false));
   }, [activeTab, primaryTeamId, escalationLoaded]);
@@ -152,6 +161,20 @@ export default function SettingsPage() {
       setSaving(false);
     }
   }, [primaryTeamId, slackWebhookUrl, slackChannel]);
+
+  const sendTestNotification = useCallback(async (channel: 'slack' | 'email') => {
+    if (!primaryTeamId) return;
+    setTestingChannel(channel);
+    setTestResult(null);
+    try {
+      await api.teamConfig.testNotification(primaryTeamId, channel);
+      setTestResult({ channel, ok: true, message: `Test ${channel} sent successfully.` });
+    } catch (e: unknown) {
+      setTestResult({ channel, ok: false, message: e instanceof Error ? e.message : 'Test failed' });
+    } finally {
+      setTestingChannel(null);
+    }
+  }, [primaryTeamId]);
 
   const saveEscalation = useCallback(async () => {
     if (!primaryTeamId) return;
@@ -431,13 +454,35 @@ export default function SettingsPage() {
             />
           </div>
 
-          <button
-            onClick={saveNotifications}
-            disabled={saving}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 text-sm"
-          >
-            {saving ? 'Saving…' : 'Save Notifications'}
-          </button>
+          {testResult && (
+            <div className={`text-sm px-3 py-2 rounded-md border ${testResult.ok ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+              {testResult.message}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button
+              onClick={saveNotifications}
+              disabled={saving}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 text-sm"
+            >
+              {saving ? 'Saving…' : 'Save Notifications'}
+            </button>
+            <button
+              onClick={() => sendTestNotification('slack')}
+              disabled={testingChannel !== null || !slackWebhookUrl}
+              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
+            >
+              {testingChannel === 'slack' ? 'Sending…' : 'Send test Slack'}
+            </button>
+            <button
+              onClick={() => sendTestNotification('email')}
+              disabled={testingChannel !== null}
+              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
+            >
+              {testingChannel === 'email' ? 'Sending…' : 'Send test email'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -557,93 +602,148 @@ export default function SettingsPage() {
 
       {/* ── Escalation ── */}
       {activeTab === 'escalation' && isAdmin && (
-        <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">Escalation Policy</h2>
-          <p className="text-sm text-gray-500">
-            Controls how long to wait before escalating an unacknowledged alert to the next on-call
-            layer.
-          </p>
+        <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-6">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Escalation Policy</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Define who gets paged and when. If the current on-call person does not acknowledge,
+              the alert escalates to the next layer. Each layer can point to a different schedule
+              — primary on-call, secondary, team lead, manager.
+            </p>
+          </div>
 
           {escalationLoading ? (
             <div className="text-sm text-gray-500">Loading…</div>
           ) : (
             <>
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Escalation timeout{' '}
-                    <span className="text-gray-400 font-normal">(minutes)</span>
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={120}
-                    value={escalation.escalation_timeout_minutes}
-                    onChange={(e) =>
-                      setEscalation((prev) => ({
-                        ...prev,
-                        escalation_timeout_minutes: Number(e.target.value),
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Wait this long before paging the next layer.
-                  </p>
+              {/* Layers */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-gray-700">Escalation layers</h3>
+                  {scheduleOptions.length === 0 && (
+                    <span className="text-xs text-amber-600">No schedules configured — create a schedule first.</span>
+                  )}
                 </div>
 
+                {escalation.layers.length === 0 && (
+                  <p className="text-sm text-gray-400 italic">No layers yet. Add one below.</p>
+                )}
+
+                {escalation.layers.map((layer, idx) => (
+                  <div key={idx} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    {/* Step badge */}
+                    <span className="flex-shrink-0 w-7 h-7 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">
+                      {idx + 1}
+                    </span>
+
+                    {/* Schedule picker */}
+                    <div className="flex-1 min-w-0">
+                      <label className="block text-xs text-gray-500 mb-0.5">Schedule</label>
+                      <select
+                        value={layer.schedule_id}
+                        onChange={(e) => {
+                          const updated = [...escalation.layers];
+                          updated[idx] = { ...updated[idx], schedule_id: e.target.value };
+                          setEscalation((prev) => ({ ...prev, layers: updated }));
+                        }}
+                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">— pick a schedule —</option>
+                        {scheduleOptions.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Notify after */}
+                    <div className="flex-shrink-0 w-36">
+                      <label className="block text-xs text-gray-500 mb-0.5">
+                        {idx === 0 ? 'Notify immediately' : 'Escalate after (min)'}
+                      </label>
+                      {idx === 0 ? (
+                        <span className="block px-2 py-1.5 text-sm text-gray-400">—</span>
+                      ) : (
+                        <input
+                          type="number"
+                          min={1}
+                          max={120}
+                          value={layer.notify_after_minutes}
+                          onChange={(e) => {
+                            const updated = [...escalation.layers];
+                            updated[idx] = { ...updated[idx], notify_after_minutes: Number(e.target.value) };
+                            setEscalation((prev) => ({ ...prev, layers: updated }));
+                          }}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      )}
+                    </div>
+
+                    {/* Remove */}
+                    <button
+                      onClick={() => {
+                        const updated = escalation.layers.filter((_, i) => i !== idx);
+                        setEscalation((prev) => ({ ...prev, layers: updated }));
+                      }}
+                      className="flex-shrink-0 text-gray-400 hover:text-red-500 transition-colors text-lg leading-none"
+                      title="Remove layer"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+
+                <button
+                  onClick={() =>
+                    setEscalation((prev) => ({
+                      ...prev,
+                      layers: [
+                        ...prev.layers,
+                        { schedule_id: scheduleOptions[0]?.id ?? '', notify_after_minutes: prev.layers.length === 0 ? 0 : 10 },
+                      ],
+                    }))
+                  }
+                  disabled={scheduleOptions.length === 0}
+                  className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 disabled:text-gray-400 disabled:cursor-not-allowed"
+                >
+                  <span className="text-lg leading-none">+</span> Add layer
+                </button>
+              </div>
+
+              {/* Repeat settings */}
+              <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-100">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Repeat interval{' '}
-                    <span className="text-gray-400 font-normal">(minutes)</span>
+                    Repeat interval <span className="text-gray-400 font-normal">(minutes)</span>
                   </label>
                   <input
-                    type="number"
-                    min={1}
-                    max={1440}
+                    type="number" min={1} max={1440}
                     value={escalation.repeat_interval_minutes}
-                    onChange={(e) =>
-                      setEscalation((prev) => ({
-                        ...prev,
-                        repeat_interval_minutes: Number(e.target.value),
-                      }))
-                    }
+                    onChange={(e) => setEscalation((prev) => ({ ...prev, repeat_interval_minutes: Number(e.target.value) }))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Restart the chain after this interval if still unacked.
-                  </p>
+                  <p className="text-xs text-gray-500 mt-1">Restart the full chain after this long if still unacknowledged.</p>
                 </div>
-
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Max repeats
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Max repeats</label>
                   <input
-                    type="number"
-                    min={0}
-                    max={10}
+                    type="number" min={0} max={10}
                     value={escalation.max_repeats}
-                    onChange={(e) =>
-                      setEscalation((prev) => ({
-                        ...prev,
-                        max_repeats: Number(e.target.value),
-                      }))
-                    }
+                    onChange={(e) => setEscalation((prev) => ({ ...prev, max_repeats: Number(e.target.value) }))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Stop after this many full chain repeats.
-                  </p>
+                  <p className="text-xs text-gray-500 mt-1">Stop after this many full chain repeats (0 = repeat forever).</p>
                 </div>
               </div>
 
+              {saveError && <p className="text-sm text-red-600">{saveError}</p>}
+              {saveSuccess && <p className="text-sm text-green-600">Saved.</p>}
+
               <button
                 onClick={saveEscalation}
-                disabled={saving}
+                disabled={saving || escalation.layers.some((l) => !l.schedule_id)}
                 className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 text-sm"
               >
-                {saving ? 'Saving…' : 'Save Escalation Policy'}
+                {saving ? 'Saving…' : 'Save escalation policy'}
               </button>
             </>
           )}
