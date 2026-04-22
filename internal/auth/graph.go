@@ -87,9 +87,31 @@ func TenantIDFromIssuerURL(issuerURL string) (string, bool) {
 	return tenantID, true
 }
 
-// GetGroupMembers fetches direct members of an Entra group using app credentials
-// (client credentials grant). Requires GroupMember.Read.All application permission
-// with admin consent on the app registration.
+// EmailFromGraphUser returns the best available email for a Graph user.
+// For guest accounts the mail field is often empty; the UPN carries the address
+// in the form "alias_domain.com#EXT#@tenant" — this function recovers the
+// original email from that format.
+func EmailFromGraphUser(u GraphUser) string {
+	if u.Mail != "" {
+		return u.Mail
+	}
+	upn := u.UserPrincipalName
+	if idx := strings.Index(upn, "#EXT#"); idx != -1 {
+		// Guest UPN: "user_example.com#EXT#@tenant.onmicrosoft.com"
+		// Recover "user@example.com" by replacing the last '_' before #EXT# with '@'
+		local := upn[:idx]
+		if sep := strings.LastIndex(local, "_"); sep != -1 {
+			return local[:sep] + "@" + local[sep+1:]
+		}
+	}
+	return upn
+}
+
+// GetGroupMembers fetches direct user members of an Entra group using app
+// credentials (client credentials grant). Uses the type-cast URL
+// /members/microsoft.graph.user so nested groups and service principals are
+// excluded — they have no mail or UPN and would be silently skipped otherwise.
+// Requires GroupMember.Read.All application permission with admin consent.
 func GetGroupMembers(ctx context.Context, tenantID, clientID, clientSecret, groupID string) ([]GraphUser, error) {
 	accessToken, err := getAppToken(ctx, tenantID, clientID, clientSecret)
 	if err != nil {
@@ -97,7 +119,7 @@ func GetGroupMembers(ctx context.Context, tenantID, clientID, clientSecret, grou
 	}
 
 	apiURL := fmt.Sprintf(
-		"https://graph.microsoft.com/v1.0/groups/%s/members?$select=id,displayName,mail,userPrincipalName",
+		"https://graph.microsoft.com/v1.0/groups/%s/members/microsoft.graph.user?$select=id,displayName,mail,userPrincipalName",
 		groupID,
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)

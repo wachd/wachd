@@ -924,10 +924,7 @@ func (h *AdminHandlers) provisionGroupMembers(ctx context.Context, providerID uu
 	log.Printf("admin: provision members: found %d member(s) in group %s", len(members), groupID)
 	provisioned := 0
 	for _, m := range members {
-		email := m.Mail
-		if email == "" {
-			email = m.UserPrincipalName
-		}
+		email := EmailFromGraphUser(m)
 		if m.ID == "" || email == "" {
 			log.Printf("admin: provision members: skipping member id=%q name=%q mail=%q upn=%q — missing id or email", m.ID, m.DisplayName, m.Mail, m.UserPrincipalName)
 			continue
