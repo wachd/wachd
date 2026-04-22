@@ -79,6 +79,9 @@ func (m *mockConfigStore) GetScheduleForAPI(_ context.Context, _ uuid.UUID) (*st
 	return nil, nil
 }
 func (m *mockConfigStore) UpsertSchedule(_ context.Context, _ *store.Schedule) error { return nil }
+func (m *mockConfigStore) ListSchedules(_ context.Context, _ uuid.UUID) ([]*store.Schedule, error) {
+	return nil, nil
+}
 func (m *mockConfigStore) ListOverridesForSchedule(_ context.Context, _, _ uuid.UUID) ([]store.ScheduleOverride, error) {
 	return nil, nil
 }
