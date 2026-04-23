@@ -481,10 +481,17 @@ func (w *Worker) checkEscalationForIncident(ctx context.Context, incident *store
 		return // not yet time for this layer
 	}
 
-	// Resolve the target user directly from the layer's schedule (not via
-	// GetEscalationChain, which returns a filtered slice that may skip
-	// uncovered layers and break index alignment with cfg.Layers).
-	user := w.resolveLayerMember(ctx, incident.TeamID, nextLayer.ScheduleID)
+	// Resolve the target user — either a fixed person (user_id) or the current
+	// on-call member from a schedule. user_id takes priority when both are set.
+	var user *store.TeamMember
+	if nextLayer.UserID != "" {
+		uid, err := uuid.Parse(nextLayer.UserID)
+		if err == nil {
+			user, _ = w.db.GetMemberByID(ctx, uid)
+		}
+	} else {
+		user = w.resolveLayerMember(ctx, incident.TeamID, nextLayer.ScheduleID)
+	}
 	if user == nil {
 		// Layer has no on-call coverage right now — advance past it so we
 		// don't block subsequent layers.

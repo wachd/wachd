@@ -617,18 +617,30 @@ export default function OnCallPage() {
                     </td>
                     {entries.map(e => {
                       const ov = e.override;
+                      if (!ov) return (
+                        <td key={e.date} className="px-0.5 py-1.5 border-b border-gray-100 align-middle">
+                          <div className="rounded px-2 py-1 text-[11px] text-gray-200 bg-gray-50 text-center">—</div>
+                        </td>
+                      );
+                      const dayStart = new Date(e.date + 'T00:00:00Z').getTime();
+                      const dayEnd   = dayStart + 86_400_000;
+                      const ovStart  = Math.max(new Date(ov.start_at).getTime(), dayStart);
+                      const ovEnd    = Math.min(new Date(ov.end_at).getTime(),   dayEnd);
+                      const leftPct  = ((ovStart - dayStart) / 86_400_000) * 100;
+                      const widthPct = Math.max(((ovEnd - ovStart) / 86_400_000) * 100, 8);
+                      const startFmt = new Date(ov.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                      const endFmt   = new Date(ov.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                       return (
                         <td key={e.date} className="px-0.5 py-1.5 border-b border-gray-100 align-middle">
-                          {ov ? (
+                          <div className="relative h-6 overflow-hidden">
                             <div
-                              className="rounded px-2 py-1 text-[11px] font-medium truncate bg-amber-200 text-amber-900"
-                              title={ov.reason || ov.user_name}
+                              className="absolute top-0 bottom-0 rounded px-1 flex items-center text-[11px] font-medium truncate bg-amber-200 text-amber-900"
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              title={`${ov.user_name}${ov.reason ? ` — ${ov.reason}` : ''} · ${startFmt}–${endFmt}`}
                             >
                               {ov.user_name}
                             </div>
-                          ) : (
-                            <div className="rounded px-2 py-1 text-[11px] text-gray-200 bg-gray-50 text-center">—</div>
-                          )}
+                          </div>
                         </td>
                       );
                     })}

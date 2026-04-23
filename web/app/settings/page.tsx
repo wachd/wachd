@@ -94,17 +94,19 @@ export default function SettingsPage() {
       .finally(() => setMembersLoading(false));
   }, [activeTab, primaryTeamId, membersLoaded]);
 
-  // Load escalation + schedules lazily when escalation tab is opened
+  // Load escalation + schedules + members lazily when escalation tab is opened
   useEffect(() => {
     if (activeTab !== 'escalation' || !primaryTeamId || escalationLoaded) return;
     setEscalationLoading(true);
     Promise.all([
       api.escalation.get(primaryTeamId),
       api.schedule.list(primaryTeamId),
+      membersLoaded ? Promise.resolve(members) : api.members.list(primaryTeamId),
     ])
-      .then(([escData, schedules]) => {
+      .then(([escData, schedules, memberList]) => {
         if (escData.config) setEscalation(escData.config);
         setScheduleOptions(schedules);
+        if (!membersLoaded) { setMembers(memberList); setMembersLoaded(true); }
         setEscalationLoaded(true);
       })
       .catch(() => setEscalationLoaded(true))
@@ -629,30 +631,75 @@ export default function SettingsPage() {
                   <p className="text-sm text-gray-400 italic">No layers yet. Add one below.</p>
                 )}
 
-                {escalation.layers.map((layer, idx) => (
+                {escalation.layers.map((layer, idx) => {
+                  const isPerson = !!layer.user_id && !layer.schedule_id;
+                  return (
                   <div key={idx} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                     {/* Step badge */}
                     <span className="flex-shrink-0 w-7 h-7 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">
                       {idx + 1}
                     </span>
 
-                    {/* Schedule picker */}
-                    <div className="flex-1 min-w-0">
-                      <label className="block text-xs text-gray-500 mb-0.5">Schedule</label>
+                    {/* Target type toggle */}
+                    <div className="flex-shrink-0">
+                      <label className="block text-xs text-gray-500 mb-0.5">Target</label>
                       <select
-                        value={layer.schedule_id}
+                        value={isPerson ? 'person' : 'schedule'}
                         onChange={(e) => {
                           const updated = [...escalation.layers];
-                          updated[idx] = { ...updated[idx], schedule_id: e.target.value };
+                          if (e.target.value === 'person') {
+                            updated[idx] = { ...updated[idx], schedule_id: '', user_id: members[0]?.id ?? '' };
+                          } else {
+                            updated[idx] = { ...updated[idx], user_id: '', schedule_id: scheduleOptions[0]?.id ?? '' };
+                          }
                           setEscalation((prev) => ({ ...prev, layers: updated }));
                         }}
-                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
-                        <option value="">— pick a schedule —</option>
-                        {scheduleOptions.map((s) => (
-                          <option key={s.id} value={s.id}>{s.name}</option>
-                        ))}
+                        <option value="schedule">Schedule</option>
+                        <option value="person">Person</option>
                       </select>
+                    </div>
+
+                    {/* Schedule or Person picker */}
+                    <div className="flex-1 min-w-0">
+                      {isPerson ? (
+                        <>
+                          <label className="block text-xs text-gray-500 mb-0.5">Person</label>
+                          <select
+                            value={layer.user_id ?? ''}
+                            onChange={(e) => {
+                              const updated = [...escalation.layers];
+                              updated[idx] = { ...updated[idx], user_id: e.target.value, schedule_id: '' };
+                              setEscalation((prev) => ({ ...prev, layers: updated }));
+                            }}
+                            className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">— pick a person —</option>
+                            {members.map((m) => (
+                              <option key={m.id} value={m.id}>{m.name} ({m.email})</option>
+                            ))}
+                          </select>
+                        </>
+                      ) : (
+                        <>
+                          <label className="block text-xs text-gray-500 mb-0.5">Schedule</label>
+                          <select
+                            value={layer.schedule_id ?? ''}
+                            onChange={(e) => {
+                              const updated = [...escalation.layers];
+                              updated[idx] = { ...updated[idx], schedule_id: e.target.value, user_id: '' };
+                              setEscalation((prev) => ({ ...prev, layers: updated }));
+                            }}
+                            className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">— pick a schedule —</option>
+                            {scheduleOptions.map((s) => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                          </select>
+                        </>
+                      )}
                     </div>
 
                     {/* Notify after */}
@@ -690,7 +737,8 @@ export default function SettingsPage() {
                       ×
                     </button>
                   </div>
-                ))}
+                  );
+                })}
 
                 <button
                   onClick={() =>

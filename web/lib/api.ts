@@ -56,7 +56,8 @@ export interface TeamConfigInput {
 }
 
 export interface EscalationLayer {
-  schedule_id: string;
+  schedule_id?: string;
+  user_id?: string;
   notify_after_minutes: number;
 }
 

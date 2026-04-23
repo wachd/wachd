@@ -87,10 +87,13 @@ type EscalationConfig struct {
 }
 
 // EscalationLayer is one step in the escalation chain.
+// Exactly one of ScheduleID or UserID must be set.
+// ScheduleID points to a rotating on-call schedule; UserID targets a fixed person directly.
 type EscalationLayer struct {
-	ScheduleID          string `json:"schedule_id"`           // UUID of the schedule
-	NotifyAfterMinutes  int    `json:"notify_after_minutes"`  // 0 = notify immediately
-	LayerName           string `json:"layer_name"`
+	ScheduleID         string `json:"schedule_id"`          // UUID of the schedule (rotating target)
+	UserID             string `json:"user_id"`              // UUID of a fixed person (non-rotating target)
+	NotifyAfterMinutes int    `json:"notify_after_minutes"` // 0 = notify immediately
+	LayerName          string `json:"layer_name"`
 }
 
 // EscalationStep is a resolved escalation step with the actual member populated.
