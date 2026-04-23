@@ -60,4 +60,17 @@ type ConfigStore interface {
 	// Escalation policy
 	GetEscalationPolicy(ctx context.Context, teamID uuid.UUID) (*EscalationPolicy, error)
 	UpsertEscalationPolicy(ctx context.Context, p *EscalationPolicy) error
+
+	// User notification rules
+	ListUserNotificationRules(ctx context.Context, userID uuid.UUID, userSource string) ([]*UserNotificationRule, error)
+	GetUserNotificationRules(ctx context.Context, userID uuid.UUID, userSource, eventType string) ([]*UserNotificationRule, error)
+	UpsertUserNotificationRule(ctx context.Context, r *UserNotificationRule) (*UserNotificationRule, error)
+	UpdateUserNotificationRule(ctx context.Context, id, userID uuid.UUID, userSource string, enabled bool, delayMinutes int) (*UserNotificationRule, error)
+	DeleteUserNotificationRule(ctx context.Context, id, userID uuid.UUID, userSource string) error
+
+	// Pending (delayed) notifications
+	QueuePendingNotification(ctx context.Context, p *PendingNotification) error
+	GetDuePendingNotifications(ctx context.Context) ([]*PendingNotification, error)
+	MarkPendingNotificationSent(ctx context.Context, id uuid.UUID) error
+	CancelPendingNotificationsForIncident(ctx context.Context, incidentID uuid.UUID) error
 }

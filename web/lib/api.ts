@@ -67,6 +67,30 @@ export interface EscalationConfig {
   max_repeats: number;
 }
 
+export interface UserNotificationRule {
+  id: string;
+  user_id: string;
+  user_source: string;
+  event_type: 'new_alert' | 'ack' | 'resolve';
+  channel: 'email' | 'sms' | 'voice' | 'slack';
+  delay_minutes: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateNotificationRuleInput {
+  event_type: 'new_alert' | 'ack' | 'resolve';
+  channel: 'email' | 'sms' | 'voice' | 'slack';
+  delay_minutes: number;
+  enabled?: boolean;
+}
+
+export interface UpdateNotificationRuleInput {
+  enabled?: boolean;
+  delay_minutes?: number;
+}
+
 export const api = {
   // Incidents
   incidents: {
@@ -315,6 +339,27 @@ export const api = {
         `/api/v1/teams/${teamId}/escalation`,
         { method: 'PUT', body: JSON.stringify({ config }) }
       ),
+  },
+
+  // User notification rules (per-user profile settings)
+  notificationRules: {
+    list: () =>
+      fetchApi<{ data: UserNotificationRule[] }>('/api/v1/profile/notification-rules'),
+    create: (rule: CreateNotificationRuleInput) =>
+      fetchApi<{ data: UserNotificationRule }>('/api/v1/profile/notification-rules', {
+        method: 'POST',
+        body: JSON.stringify(rule),
+      }),
+    update: (id: string, patch: UpdateNotificationRuleInput) =>
+      fetchApi<{ data: UserNotificationRule }>(`/api/v1/profile/notification-rules/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(patch),
+      }),
+    delete: (id: string) =>
+      fetch(`${API_BASE_URL}/api/v1/profile/notification-rules/${id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      }),
   },
 };
 

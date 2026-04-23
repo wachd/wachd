@@ -294,3 +294,33 @@ type APIToken struct {
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
+
+// UserNotificationRule defines how a specific user wants to be notified for a
+// given event type and channel. Delay of 0 means fire immediately; > 0 means
+// queue for later (only sent if the incident is still open/unacked).
+type UserNotificationRule struct {
+	ID           uuid.UUID `json:"id"`
+	UserID       uuid.UUID `json:"user_id"`
+	UserSource   string    `json:"user_source"`   // "local" | "sso"
+	EventType    string    `json:"event_type"`    // "new_alert" | "ack" | "resolve"
+	Channel      string    `json:"channel"`       // "email" | "sms" | "voice" | "slack"
+	DelayMinutes int       `json:"delay_minutes"` // 0 = immediately
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// PendingNotification is a delayed channel send queued when a user's notification
+// rule has delay_minutes > 0. Cancelled automatically when the incident is acked.
+type PendingNotification struct {
+	ID          uuid.UUID  `json:"id"`
+	IncidentID  uuid.UUID  `json:"incident_id"`
+	TeamID      uuid.UUID  `json:"team_id"`
+	UserID      uuid.UUID  `json:"user_id"`
+	UserSource  string     `json:"user_source"`
+	Channel     string     `json:"channel"`
+	ScheduledAt time.Time  `json:"scheduled_at"`
+	SentAt      *time.Time `json:"sent_at,omitempty"`
+	CancelledAt *time.Time `json:"cancelled_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}

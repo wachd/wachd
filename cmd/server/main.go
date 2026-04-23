@@ -273,6 +273,14 @@ func main() {
 			auth.BearerOrCookie(sessions, db)(http.HandlerFunc(authHandlers.HandleMe)),
 		).Methods("GET")
 
+		// User notification rules (per-user profile settings)
+		profileRouter := router.PathPrefix("/api/v1/profile").Subrouter()
+		profileRouter.Use(auth.BearerOrCookie(sessions, db))
+		profileRouter.HandleFunc("/notification-rules", server.handleListNotificationRules).Methods("GET")
+		profileRouter.HandleFunc("/notification-rules", server.handleCreateNotificationRule).Methods("POST")
+		profileRouter.HandleFunc("/notification-rules/{id}", server.handleUpdateNotificationRule).Methods("PUT")
+		profileRouter.HandleFunc("/notification-rules/{id}", server.handleDeleteNotificationRule).Methods("DELETE")
+
 		// Superadmin-only routes
 		superRouter := router.PathPrefix("/api/v1/admin").Subrouter()
 		superRouter.Use(auth.BearerOrCookie(sessions, db))
@@ -993,6 +1001,12 @@ func (s *Server) handleAcknowledgeIncident(w http.ResponseWriter, r *http.Reques
 		log.Printf("Failed to acknowledge incident: %v", err)
 		http.Error(w, "Failed to acknowledge incident", http.StatusInternalServerError)
 		return
+	}
+
+	// Cancel any pending delayed notifications for this incident (e.g. queued voice calls)
+	if err := s.db.CancelPendingNotificationsForIncident(r.Context(), incidentID); err != nil {
+		log.Printf("warn: cancel pending notifications for incident %s: %v", incidentID, err)
+		// non-fatal — ack succeeded
 	}
 
 	log.Printf("✓ Incident %s acknowledged by %s", incident.Title, acknowledgerName)
@@ -2085,4 +2099,184 @@ func generateSecret() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// ── User notification rules ──────────────────────────────────────────────────
+
+func (s *Server) handleListNotificationRules(w http.ResponseWriter, r *http.Request) {
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, userSource := sessionIdentity(sess)
+
+	rules, err := s.db.ListUserNotificationRules(r.Context(), userID, userSource)
+	if err != nil {
+		log.Printf("list notification rules: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if rules == nil {
+		rules = []*store.UserNotificationRule{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": rules})
+}
+
+func (s *Server) handleCreateNotificationRule(w http.ResponseWriter, r *http.Request) {
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, userSource := sessionIdentity(sess)
+
+	var req struct {
+		EventType    string `json:"event_type"`
+		Channel      string `json:"channel"`
+		DelayMinutes int    `json:"delay_minutes"`
+		Enabled      *bool  `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	validEvents := map[string]bool{"new_alert": true, "ack": true, "resolve": true}
+	validChannels := map[string]bool{"email": true, "sms": true, "voice": true, "slack": true}
+	if !validEvents[req.EventType] {
+		http.Error(w, "event_type must be one of: new_alert, ack, resolve", http.StatusBadRequest)
+		return
+	}
+	if !validChannels[req.Channel] {
+		http.Error(w, "channel must be one of: email, sms, voice, slack", http.StatusBadRequest)
+		return
+	}
+	if req.DelayMinutes < 0 || req.DelayMinutes > 1440 {
+		http.Error(w, "delay_minutes must be between 0 and 1440", http.StatusBadRequest)
+		return
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
+	rule := &store.UserNotificationRule{
+		UserID:       userID,
+		UserSource:   userSource,
+		EventType:    req.EventType,
+		Channel:      req.Channel,
+		DelayMinutes: req.DelayMinutes,
+		Enabled:      enabled,
+	}
+	created, err := s.db.UpsertUserNotificationRule(r.Context(), rule)
+	if err != nil {
+		log.Printf("create notification rule: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": created})
+}
+
+func (s *Server) handleUpdateNotificationRule(w http.ResponseWriter, r *http.Request) {
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, userSource := sessionIdentity(sess)
+
+	ruleID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid rule ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Enabled      *bool `json:"enabled"`
+		DelayMinutes *int  `json:"delay_minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Enabled == nil && req.DelayMinutes == nil {
+		http.Error(w, "provide enabled or delay_minutes", http.StatusBadRequest)
+		return
+	}
+	if req.DelayMinutes != nil && (*req.DelayMinutes < 0 || *req.DelayMinutes > 1440) {
+		http.Error(w, "delay_minutes must be between 0 and 1440", http.StatusBadRequest)
+		return
+	}
+
+	// Load current values so we can apply partial updates
+	rules, err := s.db.ListUserNotificationRules(r.Context(), userID, userSource)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	var current *store.UserNotificationRule
+	for _, ru := range rules {
+		if ru.ID == ruleID {
+			current = ru
+			break
+		}
+	}
+	if current == nil {
+		http.Error(w, "Rule not found", http.StatusNotFound)
+		return
+	}
+
+	enabled := current.Enabled
+	delay := current.DelayMinutes
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	if req.DelayMinutes != nil {
+		delay = *req.DelayMinutes
+	}
+
+	updated, err := s.db.UpdateUserNotificationRule(r.Context(), ruleID, userID, userSource, enabled, delay)
+	if err != nil {
+		log.Printf("update notification rule: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": updated})
+}
+
+func (s *Server) handleDeleteNotificationRule(w http.ResponseWriter, r *http.Request) {
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, userSource := sessionIdentity(sess)
+
+	ruleID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid rule ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.DeleteUserNotificationRule(r.Context(), ruleID, userID, userSource); err != nil {
+		http.Error(w, "Rule not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// sessionIdentity returns the identity UUID and source ("local" | "sso") for the
+// logged-in user. Local users use LocalUserID; SSO users use IdentityID.
+func sessionIdentity(sess *auth.Session) (uuid.UUID, string) {
+	if sess.LocalUserID != nil {
+		return *sess.LocalUserID, "local"
+	}
+	if sess.IdentityID != nil {
+		return *sess.IdentityID, "sso"
+	}
+	return uuid.Nil, "local"
 }

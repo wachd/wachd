@@ -468,17 +468,39 @@ func (w *Worker) checkEscalationForIncident(ctx context.Context, incident *store
 		return
 	}
 
-	// Layer 0 was already notified during initial job processing.
-	// nextIdx is the cfg.Layers index we want to notify next.
-	nextIdx := incident.EscalationStep + 1
-	if nextIdx >= len(cfg.Layers) {
-		return // all layers already notified
+	numLayers := len(cfg.Layers)
+	if numLayers == 0 {
+		return
 	}
 
-	nextLayer := cfg.Layers[nextIdx]
+	// escalation_step is 0-based and monotonically increasing across all repeats:
+	//   steps 0..N-1  = initial cycle
+	//   steps N..2N-1 = repeat 1
+	//   steps 2N..    = repeat 2, etc.
+	// Layer 0 was already notified during initial job processing (step 0).
+	nextStep := incident.EscalationStep + 1
+	nextRepeat := nextStep / numLayers
+	nextLayerIdx := nextStep % numLayers
+
+	// Stop if repeat limit reached (max_repeats=0 means repeat forever).
+	if cfg.MaxRepeats > 0 && nextRepeat > cfg.MaxRepeats {
+		return
+	}
+	// Stop if no repeat configured and the initial cycle is done.
+	if cfg.RepeatIntervalMinutes == 0 && nextRepeat > 0 {
+		return
+	}
+
+	nextLayer := cfg.Layers[nextLayerIdx]
+
+	// Compute the absolute elapsed threshold for this step from incident.FiredAt.
+	// cycleDuration = last layer's notify_after_minutes (time to complete one cycle).
+	// Threshold for repeat R, layer K = (cycleDuration + repeatInterval) * R + layers[K].notify_after_minutes
+	cycleDuration := cfg.Layers[numLayers-1].NotifyAfterMinutes
+	thresholdMinutes := (cycleDuration+cfg.RepeatIntervalMinutes)*nextRepeat + nextLayer.NotifyAfterMinutes
 	elapsed := time.Since(incident.FiredAt)
-	if elapsed < time.Duration(nextLayer.NotifyAfterMinutes)*time.Minute {
-		return // not yet time for this layer
+	if elapsed < time.Duration(thresholdMinutes)*time.Minute {
+		return // not yet time for this step
 	}
 
 	// Resolve the target user — either a fixed person (user_id) or the current
@@ -497,7 +519,7 @@ func (w *Worker) checkEscalationForIncident(ctx context.Context, incident *store
 		// don't block subsequent layers.
 		advanced, _ := w.db.IncrementEscalationStep(ctx, incident.TeamID, incident.ID, incident.EscalationStep)
 		if advanced {
-			log.Printf("escalation: incident %s step %d (%s) no coverage, skipping layer", incident.ID, nextIdx, nextLayer.LayerName)
+			log.Printf("escalation: incident %s step %d (%s) no coverage, skipping layer", incident.ID, nextStep, nextLayer.LayerName)
 		}
 		return
 	}
@@ -512,7 +534,11 @@ func (w *Worker) checkEscalationForIncident(ctx context.Context, incident *store
 		return // another worker already handled this step
 	}
 
-	log.Printf("⬆ Escalating incident %s to step %d (%s): %s", incident.ID, nextIdx, nextLayer.LayerName, user.Name)
+	repeatLabel := ""
+	if nextRepeat > 0 {
+		repeatLabel = fmt.Sprintf(" (repeat %d)", nextRepeat)
+	}
+	log.Printf("⬆ Escalating incident %s to step %d%s (%s): %s", incident.ID, nextStep, repeatLabel, nextLayer.LayerName, user.Name)
 	w.sendNotifications(ctx, incident, user, nil)
 }
 

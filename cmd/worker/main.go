@@ -271,6 +271,9 @@ func main() {
 	go worker.runEscalationLoop(ctx)
 	log.Println("✓ Escalation loop started (30s poll)")
 
+	go worker.runPendingNotificationsLoop(ctx)
+	log.Println("✓ Pending notifications loop started (30s poll)")
+
 	<-quit
 	log.Println("Shutting down worker...")
 	cancel()
@@ -382,8 +385,48 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 }
 
 // sendNotifications fans out to every configured notification channel.
-// Each channel is attempted independently — a failure in one does not block others.
+// If the user has notification rules configured, only those channels fire (with
+// optional delay). If no rules exist the function falls back to firing all
+// globally-configured channels immediately (preserving pre-rules behaviour).
 func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
+	rules, err := w.db.GetUserNotificationRules(ctx, onCallUser.ID, onCallUser.Source, "new_alert")
+	if err != nil {
+		log.Printf("warn: load notification rules for user %s: %v — falling back to all channels", onCallUser.ID, err)
+	}
+
+	if len(rules) == 0 {
+		// No rules configured — fire all available channels immediately (legacy behaviour).
+		w.fireAllChannels(ctx, incident, onCallUser, analysis)
+		return
+	}
+
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		if rule.DelayMinutes == 0 {
+			w.fireChannel(ctx, rule.Channel, incident, onCallUser, analysis)
+		} else {
+			p := &store.PendingNotification{
+				IncidentID:  incident.ID,
+				TeamID:      incident.TeamID,
+				UserID:      onCallUser.ID,
+				UserSource:  onCallUser.Source,
+				Channel:     rule.Channel,
+				ScheduledAt: time.Now().Add(time.Duration(rule.DelayMinutes) * time.Minute),
+			}
+			if qErr := w.db.QueuePendingNotification(ctx, p); qErr != nil {
+				log.Printf("warn: queue pending notification (channel=%s delay=%dm): %v", rule.Channel, rule.DelayMinutes, qErr)
+			} else {
+				log.Printf("  ⏳ %s queued (+%dm)", rule.Channel, rule.DelayMinutes)
+			}
+		}
+	}
+}
+
+// fireAllChannels sends to every globally-configured channel at once.
+// Used as fallback when the user has no notification rules set up.
+func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
 	// Prefer per-team Slack config from DB over global env-var fallback
 	slackNotifier := w.slackNotifier
 	if cfg, err := w.db.GetTeamConfig(ctx, incident.TeamID); err == nil && cfg != nil {
@@ -426,5 +469,94 @@ func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident
 		} else {
 			log.Printf("  ✓ Voice call initiated")
 		}
+	}
+}
+
+// fireChannel sends a single notification channel for a user.
+func (w *Worker) fireChannel(ctx context.Context, channel string, incident *store.Incident, user *store.TeamMember, analysis *ai.AnalysisResponse) {
+	switch channel {
+	case "slack":
+		slackNotifier := w.slackNotifier
+		if cfg, err := w.db.GetTeamConfig(ctx, incident.TeamID); err == nil && cfg != nil {
+			if cfg.SlackWebhookURL != nil && *cfg.SlackWebhookURL != "" {
+				ch := ""
+				if cfg.SlackChannel != nil {
+					ch = *cfg.SlackChannel
+				}
+				slackNotifier = notify.NewSlackNotifier(*cfg.SlackWebhookURL, ch)
+			}
+		}
+		if slackNotifier != nil {
+			if err := slackNotifier.SendIncidentAlert(ctx, incident, user, analysis); err != nil {
+				log.Printf("Slack notification failed: %v", err)
+			} else {
+				log.Printf("  ✓ Slack")
+			}
+		}
+	case "email":
+		if w.emailNotifier != nil {
+			if err := w.emailNotifier.SendIncidentAlert(ctx, incident, user, analysis); err != nil {
+				log.Printf("Email notification failed: %v", err)
+			} else {
+				log.Printf("  ✓ Email")
+			}
+		}
+	case "sms":
+		if w.smsNotifier != nil {
+			if err := w.smsNotifier.SendIncidentAlert(ctx, incident, user, analysis); err != nil {
+				log.Printf("SMS notification failed: %v", err)
+			} else {
+				log.Printf("  ✓ SMS")
+			}
+		}
+	case "voice":
+		if w.voiceNotifier != nil {
+			if err := w.voiceNotifier.SendIncidentAlert(ctx, incident, user, analysis); err != nil {
+				log.Printf("Voice call failed: %v", err)
+			} else {
+				log.Printf("  ✓ Voice call initiated")
+			}
+		}
+	default:
+		log.Printf("warn: unknown notification channel %q — skipping", channel)
+	}
+}
+
+// runPendingNotificationsLoop polls every 30s for delayed notifications that are due.
+func (w *Worker) runPendingNotificationsLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.firePendingNotifications(ctx)
+		}
+	}
+}
+
+func (w *Worker) firePendingNotifications(ctx context.Context) {
+	pending, err := w.db.GetDuePendingNotifications(ctx)
+	if err != nil {
+		log.Printf("pending notifications: query failed: %v", err)
+		return
+	}
+	for _, p := range pending {
+		// Only fire if the incident is still open and unacknowledged.
+		incident, err := w.db.GetIncident(ctx, p.TeamID, p.IncidentID)
+		if err != nil || incident == nil || incident.Status != "open" {
+			_ = w.db.MarkPendingNotificationSent(ctx, p.ID) // mark consumed so it doesn't loop
+			continue
+		}
+		user, err := w.db.GetMemberByID(ctx, p.UserID)
+		if err != nil || user == nil {
+			log.Printf("pending notification %s: user %s not found — skipping", p.ID, p.UserID)
+			_ = w.db.MarkPendingNotificationSent(ctx, p.ID)
+			continue
+		}
+		log.Printf("⏰ Firing delayed %s for incident %s (user: %s)", p.Channel, p.IncidentID, user.Name)
+		w.fireChannel(ctx, p.Channel, incident, user, nil) // no AI analysis for delayed sends
+		_ = w.db.MarkPendingNotificationSent(ctx, p.ID)
 	}
 }

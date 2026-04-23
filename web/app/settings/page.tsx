@@ -52,6 +52,7 @@ export default function SettingsPage() {
   });
   const [escalationLoaded, setEscalationLoaded] = useState(false);
   const [escalationLoading, setEscalationLoading] = useState(false);
+  const [escalationEditMode, setEscalationEditMode] = useState(false);
   const [scheduleOptions, setScheduleOptions] = useState<{ id: string; name: string }[]>([]);
 
   // Save state (shared)
@@ -605,194 +606,296 @@ export default function SettingsPage() {
       {/* ── Escalation ── */}
       {activeTab === 'escalation' && isAdmin && (
         <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-6">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Escalation Policy</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Define who gets paged and when. If the current on-call person does not acknowledge,
-              the alert escalates to the next layer. Each layer can point to a different schedule
-              — primary on-call, secondary, team lead, manager.
-            </p>
+          <div className="flex items-start justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Escalation Policy</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Define who gets paged and when. If the current on-call person does not acknowledge,
+                the alert escalates to the next layer. Each layer can point to a different schedule
+                — primary on-call, secondary, team lead, manager.
+              </p>
+            </div>
+            {!escalationLoading && escalation.layers.length > 0 && (
+              <button
+                onClick={() => setEscalationEditMode((v) => !v)}
+                className="ml-4 flex-shrink-0 px-3 py-1.5 text-sm border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                {escalationEditMode ? '← View' : 'Edit'}
+              </button>
+            )}
           </div>
 
           {escalationLoading ? (
             <div className="text-sm text-gray-500">Loading…</div>
           ) : (
             <>
-              {/* Layers */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-gray-700">Escalation layers</h3>
-                  {scheduleOptions.length === 0 && (
-                    <span className="text-xs text-amber-600">No schedules configured — create a schedule first.</span>
+              {/* ── Timeline view (OpsGenie-style) ── */}
+              {!escalationEditMode && escalation.layers.length > 0 && (() => {
+                const maxTime = Math.max(...escalation.layers.map((l) => l.notify_after_minutes), 1);
+                const MIN_BAR = 6; // % minimum so 0-min layer is still visible
+                const MAX_BAR = 70; // % max bar width
+
+                return (
+                  <div className="rounded-lg border border-gray-200 overflow-hidden">
+                    {/* Policy header row */}
+                    <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm text-gray-800">Escalation Policy</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                        <span className="text-xs text-gray-500">Active</span>
+                      </div>
+                    </div>
+
+                    {/* Layer rows */}
+                    {escalation.layers.map((layer, idx) => {
+                      const isPerson = !!layer.user_id && !layer.schedule_id;
+                      const scheduleName = scheduleOptions.find((s) => s.id === layer.schedule_id)?.name ?? 'Unknown schedule';
+                      const memberName = members.find((m) => m.id === layer.user_id)
+                        ? `${members.find((m) => m.id === layer.user_id)!.name} (${members.find((m) => m.id === layer.user_id)!.email})`
+                        : 'Unknown person';
+
+                      const barPct = layer.notify_after_minutes === 0
+                        ? MIN_BAR
+                        : MIN_BAR + ((layer.notify_after_minutes / maxTime) * (MAX_BAR - MIN_BAR));
+
+                      const description = isPerson
+                        ? `${memberName}, if not acknowledged`
+                        : `On call users in ${scheduleName}, if not acknowledged`;
+
+                      const timeLabel = layer.notify_after_minutes === 0
+                        ? '0 m'
+                        : `${layer.notify_after_minutes} m`;
+
+                      return (
+                        <div key={idx} className="flex items-center gap-4 px-4 py-2.5 border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors">
+                          {/* Clock icon */}
+                          <span className="flex-shrink-0 text-gray-400 text-base">🕐</span>
+
+                          {/* Time badge */}
+                          <span className="flex-shrink-0 w-10 text-xs font-mono text-gray-500 text-right">
+                            {timeLabel}
+                          </span>
+
+                          {/* Bar */}
+                          <div className="flex-shrink-0" style={{ width: '45%' }}>
+                            {isPerson ? (
+                              /* Green segmented bar for fixed person */
+                              <div className="flex gap-0.5" style={{ width: `${barPct}%` }}>
+                                {[...Array(Math.max(3, Math.round(barPct / 12)))].map((_, i) => (
+                                  <div key={i} className="h-3 flex-1 rounded-sm bg-green-500" />
+                                ))}
+                              </div>
+                            ) : (
+                              /* Solid orange bar for schedule */
+                              <div
+                                className="h-3 rounded-sm bg-orange-400"
+                                style={{ width: `${barPct}%` }}
+                              />
+                            )}
+                          </div>
+
+                          {/* Description */}
+                          <span className="text-sm text-gray-700 truncate">{description}</span>
+                        </div>
+                      );
+                    })}
+
+                    {/* Repeat footer */}
+                    {escalation.repeat_interval_minutes > 0 && (
+                      <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
+                        Repeats every {escalation.repeat_interval_minutes} min
+                        {escalation.max_repeats > 0 ? `, up to ${escalation.max_repeats}×` : ' (no limit)'}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* ── Edit form (existing, unchanged) ── */}
+              {(escalationEditMode || escalation.layers.length === 0) && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-gray-700">Escalation layers</h3>
+                    {scheduleOptions.length === 0 && (
+                      <span className="text-xs text-amber-600">No schedules configured — create a schedule first.</span>
+                    )}
+                  </div>
+
+                  {escalation.layers.length === 0 && (
+                    <p className="text-sm text-gray-400 italic">No layers yet. Add one below.</p>
                   )}
-                </div>
 
-                {escalation.layers.length === 0 && (
-                  <p className="text-sm text-gray-400 italic">No layers yet. Add one below.</p>
-                )}
+                  {escalation.layers.map((layer, idx) => {
+                    const isPerson = !!layer.user_id && !layer.schedule_id;
+                    return (
+                    <div key={idx} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                      {/* Step badge */}
+                      <span className="flex-shrink-0 w-7 h-7 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">
+                        {idx + 1}
+                      </span>
 
-                {escalation.layers.map((layer, idx) => {
-                  const isPerson = !!layer.user_id && !layer.schedule_id;
-                  return (
-                  <div key={idx} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    {/* Step badge */}
-                    <span className="flex-shrink-0 w-7 h-7 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">
-                      {idx + 1}
-                    </span>
-
-                    {/* Target type toggle */}
-                    <div className="flex-shrink-0">
-                      <label className="block text-xs text-gray-500 mb-0.5">Target</label>
-                      <select
-                        value={isPerson ? 'person' : 'schedule'}
-                        onChange={(e) => {
-                          const updated = [...escalation.layers];
-                          if (e.target.value === 'person') {
-                            updated[idx] = { ...updated[idx], schedule_id: '', user_id: members[0]?.id ?? '' };
-                          } else {
-                            updated[idx] = { ...updated[idx], user_id: '', schedule_id: scheduleOptions[0]?.id ?? '' };
-                          }
-                          setEscalation((prev) => ({ ...prev, layers: updated }));
-                        }}
-                        className="px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="schedule">Schedule</option>
-                        <option value="person">Person</option>
-                      </select>
-                    </div>
-
-                    {/* Schedule or Person picker */}
-                    <div className="flex-1 min-w-0">
-                      {isPerson ? (
-                        <>
-                          <label className="block text-xs text-gray-500 mb-0.5">Person</label>
-                          <select
-                            value={layer.user_id ?? ''}
-                            onChange={(e) => {
-                              const updated = [...escalation.layers];
-                              updated[idx] = { ...updated[idx], user_id: e.target.value, schedule_id: '' };
-                              setEscalation((prev) => ({ ...prev, layers: updated }));
-                            }}
-                            className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="">— pick a person —</option>
-                            {members.map((m) => (
-                              <option key={m.id} value={m.id}>{m.name} ({m.email})</option>
-                            ))}
-                          </select>
-                        </>
-                      ) : (
-                        <>
-                          <label className="block text-xs text-gray-500 mb-0.5">Schedule</label>
-                          <select
-                            value={layer.schedule_id ?? ''}
-                            onChange={(e) => {
-                              const updated = [...escalation.layers];
-                              updated[idx] = { ...updated[idx], schedule_id: e.target.value, user_id: '' };
-                              setEscalation((prev) => ({ ...prev, layers: updated }));
-                            }}
-                            className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="">— pick a schedule —</option>
-                            {scheduleOptions.map((s) => (
-                              <option key={s.id} value={s.id}>{s.name}</option>
-                            ))}
-                          </select>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Notify after */}
-                    <div className="flex-shrink-0 w-36">
-                      <label className="block text-xs text-gray-500 mb-0.5">
-                        {idx === 0 ? 'Notify immediately' : 'Escalate after (min)'}
-                      </label>
-                      {idx === 0 ? (
-                        <span className="block px-2 py-1.5 text-sm text-gray-400">—</span>
-                      ) : (
-                        <input
-                          type="number"
-                          min={1}
-                          max={120}
-                          value={layer.notify_after_minutes}
+                      {/* Target type toggle */}
+                      <div className="flex-shrink-0">
+                        <label className="block text-xs text-gray-500 mb-0.5">Target</label>
+                        <select
+                          value={isPerson ? 'person' : 'schedule'}
                           onChange={(e) => {
                             const updated = [...escalation.layers];
-                            updated[idx] = { ...updated[idx], notify_after_minutes: Number(e.target.value) };
+                            if (e.target.value === 'person') {
+                              updated[idx] = { ...updated[idx], schedule_id: '', user_id: members[0]?.id ?? '' };
+                            } else {
+                              updated[idx] = { ...updated[idx], user_id: '', schedule_id: scheduleOptions[0]?.id ?? '' };
+                            }
                             setEscalation((prev) => ({ ...prev, layers: updated }));
                           }}
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      )}
+                          className="px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="schedule">Schedule</option>
+                          <option value="person">Person</option>
+                        </select>
+                      </div>
+
+                      {/* Schedule or Person picker */}
+                      <div className="flex-1 min-w-0">
+                        {isPerson ? (
+                          <>
+                            <label className="block text-xs text-gray-500 mb-0.5">Person</label>
+                            <select
+                              value={layer.user_id ?? ''}
+                              onChange={(e) => {
+                                const updated = [...escalation.layers];
+                                updated[idx] = { ...updated[idx], user_id: e.target.value, schedule_id: '' };
+                                setEscalation((prev) => ({ ...prev, layers: updated }));
+                              }}
+                              className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">— pick a person —</option>
+                              {members.map((m) => (
+                                <option key={m.id} value={m.id}>{m.name} ({m.email})</option>
+                              ))}
+                            </select>
+                          </>
+                        ) : (
+                          <>
+                            <label className="block text-xs text-gray-500 mb-0.5">Schedule</label>
+                            <select
+                              value={layer.schedule_id ?? ''}
+                              onChange={(e) => {
+                                const updated = [...escalation.layers];
+                                updated[idx] = { ...updated[idx], schedule_id: e.target.value, user_id: '' };
+                                setEscalation((prev) => ({ ...prev, layers: updated }));
+                              }}
+                              className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">— pick a schedule —</option>
+                              {scheduleOptions.map((s) => (
+                                <option key={s.id} value={s.id}>{s.name}</option>
+                              ))}
+                            </select>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Notify after */}
+                      <div className="flex-shrink-0 w-36">
+                        <label className="block text-xs text-gray-500 mb-0.5">
+                          {idx === 0 ? 'Notify immediately' : 'Escalate after (min)'}
+                        </label>
+                        {idx === 0 ? (
+                          <span className="block px-2 py-1.5 text-sm text-gray-400">—</span>
+                        ) : (
+                          <input
+                            type="number"
+                            min={1}
+                            max={120}
+                            value={layer.notify_after_minutes}
+                            onChange={(e) => {
+                              const updated = [...escalation.layers];
+                              updated[idx] = { ...updated[idx], notify_after_minutes: Number(e.target.value) };
+                              setEscalation((prev) => ({ ...prev, layers: updated }));
+                            }}
+                            className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        )}
+                      </div>
+
+                      {/* Remove */}
+                      <button
+                        onClick={() => {
+                          const updated = escalation.layers.filter((_, i) => i !== idx);
+                          setEscalation((prev) => ({ ...prev, layers: updated }));
+                        }}
+                        className="flex-shrink-0 text-gray-400 hover:text-red-500 transition-colors text-lg leading-none"
+                        title="Remove layer"
+                      >
+                        ×
+                      </button>
                     </div>
+                    );
+                  })}
 
-                    {/* Remove */}
-                    <button
-                      onClick={() => {
-                        const updated = escalation.layers.filter((_, i) => i !== idx);
-                        setEscalation((prev) => ({ ...prev, layers: updated }));
-                      }}
-                      className="flex-shrink-0 text-gray-400 hover:text-red-500 transition-colors text-lg leading-none"
-                      title="Remove layer"
-                    >
-                      ×
-                    </button>
+                  <button
+                    onClick={() =>
+                      setEscalation((prev) => ({
+                        ...prev,
+                        layers: [
+                          ...prev.layers,
+                          { schedule_id: scheduleOptions[0]?.id ?? '', notify_after_minutes: prev.layers.length === 0 ? 0 : 10 },
+                        ],
+                      }))
+                    }
+                    disabled={scheduleOptions.length === 0}
+                    className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 disabled:text-gray-400 disabled:cursor-not-allowed"
+                  >
+                    <span className="text-lg leading-none">+</span> Add layer
+                  </button>
+                </div>
+              )}
+
+              {/* Repeat settings — always visible in edit mode */}
+              {(escalationEditMode || escalation.layers.length === 0) && (
+                <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-100">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Repeat interval <span className="text-gray-400 font-normal">(minutes)</span>
+                    </label>
+                    <input
+                      type="number" min={1} max={1440}
+                      value={escalation.repeat_interval_minutes}
+                      onChange={(e) => setEscalation((prev) => ({ ...prev, repeat_interval_minutes: Number(e.target.value) }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Restart the full chain after this long if still unacknowledged.</p>
                   </div>
-                  );
-                })}
-
-                <button
-                  onClick={() =>
-                    setEscalation((prev) => ({
-                      ...prev,
-                      layers: [
-                        ...prev.layers,
-                        { schedule_id: scheduleOptions[0]?.id ?? '', notify_after_minutes: prev.layers.length === 0 ? 0 : 10 },
-                      ],
-                    }))
-                  }
-                  disabled={scheduleOptions.length === 0}
-                  className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 disabled:text-gray-400 disabled:cursor-not-allowed"
-                >
-                  <span className="text-lg leading-none">+</span> Add layer
-                </button>
-              </div>
-
-              {/* Repeat settings */}
-              <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-100">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Repeat interval <span className="text-gray-400 font-normal">(minutes)</span>
-                  </label>
-                  <input
-                    type="number" min={1} max={1440}
-                    value={escalation.repeat_interval_minutes}
-                    onChange={(e) => setEscalation((prev) => ({ ...prev, repeat_interval_minutes: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Restart the full chain after this long if still unacknowledged.</p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Max repeats</label>
+                    <input
+                      type="number" min={0} max={10}
+                      value={escalation.max_repeats}
+                      onChange={(e) => setEscalation((prev) => ({ ...prev, max_repeats: Number(e.target.value) }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Stop after this many full chain repeats (0 = repeat forever).</p>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Max repeats</label>
-                  <input
-                    type="number" min={0} max={10}
-                    value={escalation.max_repeats}
-                    onChange={(e) => setEscalation((prev) => ({ ...prev, max_repeats: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Stop after this many full chain repeats (0 = repeat forever).</p>
-                </div>
-              </div>
+              )}
 
-              {saveError && <p className="text-sm text-red-600">{saveError}</p>}
-              {saveSuccess && <p className="text-sm text-green-600">Saved.</p>}
+              {(escalationEditMode || escalation.layers.length === 0) && (
+                <>
+                  {saveError && <p className="text-sm text-red-600">{saveError}</p>}
+                  {saveSuccess && <p className="text-sm text-green-600">Saved.</p>}
 
-              <button
-                onClick={saveEscalation}
-                disabled={saving || escalation.layers.some((l) => !l.schedule_id && !l.user_id)}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 text-sm"
-              >
-                {saving ? 'Saving…' : 'Save escalation policy'}
-              </button>
+                  <button
+                    onClick={saveEscalation}
+                    disabled={saving || escalation.layers.some((l) => !l.schedule_id && !l.user_id)}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 text-sm"
+                  >
+                    {saving ? 'Saving…' : 'Save escalation policy'}
+                  </button>
+                </>
+              )}
             </>
           )}
         </div>

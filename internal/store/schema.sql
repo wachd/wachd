@@ -306,6 +306,40 @@ ALTER TABLE team_config DROP COLUMN IF EXISTS ai_backend;
 ALTER TABLE team_config DROP COLUMN IF EXISTS ai_model;
 
 -- ============================================================
+-- User-level notification rules
+-- Each user configures their own channels and optional delay per event type.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS user_notification_rules (
+    id            UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID    NOT NULL,        -- local_users.id or sso_identities.id
+    user_source   TEXT    NOT NULL,        -- 'local' | 'sso'
+    event_type    TEXT    NOT NULL,        -- 'new_alert' | 'ack' | 'resolve'
+    channel       TEXT    NOT NULL,        -- 'email' | 'sms' | 'voice' | 'slack'
+    delay_minutes INT     NOT NULL DEFAULT 0,
+    enabled       BOOLEAN NOT NULL DEFAULT true,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(user_id, user_source, event_type, channel, delay_minutes)
+);
+CREATE INDEX IF NOT EXISTS idx_user_notif_rules_user ON user_notification_rules(user_id, user_source);
+
+-- Queued delayed channel sends (e.g. voice call after 10 min if still unacked)
+CREATE TABLE IF NOT EXISTS pending_notifications (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    incident_id  UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    team_id      UUID NOT NULL,
+    user_id      UUID NOT NULL,
+    user_source  TEXT NOT NULL,
+    channel      TEXT NOT NULL,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    sent_at      TIMESTAMPTZ,
+    cancelled_at TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pending_notif_fire ON pending_notifications(scheduled_at)
+    WHERE sent_at IS NULL AND cancelled_at IS NULL;
+
+-- ============================================================
 -- Platform-wide system configuration (superadmin only)
 -- Singleton row: always use id = 1.
 -- ============================================================
