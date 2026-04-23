@@ -547,7 +547,9 @@ func (w *Worker) checkEscalationForIncident(ctx context.Context, incident *store
 		repeatLabel = fmt.Sprintf(" (repeat %d)", nextRepeat)
 	}
 	log.Printf("⬆ Escalating incident %s to step %d%s (%s): %s", incident.ID, nextStep, repeatLabel, nextLayer.LayerName, user.Name)
-	w.sendNotifications(ctx, incident, user, nil)
+	// Escalation re-notifications fire all immediate channels directly — user
+	// delay rules apply only to the initial contact, not escalation reminders.
+	w.fireAllChannels(ctx, incident, user, nil)
 }
 
 // resolveLayerMember returns the on-call member for a specific schedule at the
