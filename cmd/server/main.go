@@ -17,23 +17,27 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/time/rate"
 	"github.com/wachd/wachd/internal/auth"
 	"github.com/wachd/wachd/internal/license"
 	"github.com/wachd/wachd/internal/notify"
@@ -44,14 +48,58 @@ import (
 )
 
 type Server struct {
-	cfg           store.ConfigStore // team config, schedules, members — swappable (YAML future)
-	db            *store.DB         // incidents, audit log, snooze — always PostgreSQL
-	queue         *queue.Queue
-	oncallManager *oncall.Manager
-	sessions      *auth.SessionStore
-	license       *license.License
-	enc           *auth.Encryptor // encrypts/decrypts per-team secrets in team_config
-	port          string
+	cfg            store.ConfigStore
+	db             *store.DB
+	queue          *queue.Queue
+	oncallManager  *oncall.Manager
+	sessions       *auth.SessionStore
+	license        *license.License
+	enc            *auth.Encryptor
+	port           string
+	webhookLimiter *webhookIPLimiter
+}
+
+// webhookIPLimiter enforces per-IP rate limits on the webhook endpoint.
+// Each IP gets a token bucket: burst of 20, refill at 1 token/second (60/min).
+// Limiters not seen for >10 minutes are pruned to prevent memory growth.
+type webhookIPLimiter struct {
+	mu      sync.Mutex
+	clients map[string]*webhookClient
+}
+
+type webhookClient struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
+func newWebhookIPLimiter() *webhookIPLimiter {
+	l := &webhookIPLimiter{clients: make(map[string]*webhookClient)}
+	go l.cleanup()
+	return l
+}
+
+func (l *webhookIPLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c, ok := l.clients[ip]
+	if !ok {
+		c = &webhookClient{limiter: rate.NewLimiter(rate.Every(time.Second), 20)}
+		l.clients[ip] = c
+	}
+	c.lastSeen = time.Now()
+	return c.limiter.Allow()
+}
+
+func (l *webhookIPLimiter) cleanup() {
+	for range time.Tick(5 * time.Minute) {
+		l.mu.Lock()
+		for ip, c := range l.clients {
+			if time.Since(c.lastSeen) > 10*time.Minute {
+				delete(l.clients, ip)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 // GrafanaWebhook represents a simplified Grafana webhook payload
@@ -155,14 +203,15 @@ func main() {
 
 	// Create server
 	server := &Server{
-		cfg:           db,
-		db:            db,
-		queue:         q,
-		oncallManager: oncallMgr,
-		sessions:      sessions,
-		license:       lic,
-		enc:           enc,
-		port:          port,
+		cfg:            db,
+		db:             db,
+		queue:          q,
+		oncallManager:  oncallMgr,
+		sessions:       sessions,
+		license:        lic,
+		enc:            enc,
+		port:           port,
+		webhookLimiter: newWebhookIPLimiter(),
 	}
 
 	// Set up HTTP router
@@ -426,6 +475,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	teamIDStr := vars["teamId"]
 	secret := vars["secret"]
 
+	// Rate-limit per source IP — 20 burst, 1/s sustained.
+	ip := r.RemoteAddr
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		ip = strings.TrimSpace(strings.SplitN(fwd, ",", 2)[0])
+	} else if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	if !s.webhookLimiter.allow(ip) {
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
+
 	// Parse team ID
 	teamID, err := uuid.Parse(teamIDStr)
 	if err != nil {
@@ -433,16 +494,15 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify webhook secret
-	team, err := s.cfg.GetTeamByWebhookSecret(r.Context(), secret)
-	if err != nil {
-		log.Printf("Invalid webhook secret for team %s: %v", teamIDStr, err)
+	// Fetch team by ID then compare secret in constant time to avoid timing oracle.
+	team, err := s.db.GetTeam(r.Context(), teamID)
+	if err != nil || team == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	if team.ID != teamID {
-		http.Error(w, "Team ID mismatch", http.StatusForbidden)
+	if subtle.ConstantTimeCompare([]byte(team.WebhookSecret), []byte(secret)) != 1 {
+		log.Printf("handleWebhook: invalid secret for team %s from %s", teamIDStr, ip)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -1344,7 +1404,8 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 		}
 		n := notify.NewSlackNotifier(*cfg.SlackWebhookURL, channel)
 		if err := n.SendTestMessage(ctx); err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			log.Printf("handleTestNotification: slack send failed: %v", err)
+			http.Error(w, "Slack notification failed — check webhook URL and channel config", http.StatusBadGateway)
 			return
 		}
 
@@ -1373,7 +1434,8 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 			os.Getenv("SMTP_PASSWORD"),
 		)
 		if err := n.SendTestMessage(ctx, to); err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			log.Printf("handleTestNotification: email send failed: %v", err)
+			http.Error(w, "Email delivery failed — check SMTP config and recipient address", http.StatusBadGateway)
 			return
 		}
 
