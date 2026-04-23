@@ -1,5 +1,33 @@
 # Wachd Helm Chart Values
-# Enterprise-Grade Configuration with Security, Scalability, and High Availability
+#
+# ── REQUIRED fields (marked with [REQUIRED]) ────────────────────────────────
+#   postgres.external.host        — your database hostname
+#   postgres.external.username    — database user
+#   redis.external.host           — your Redis hostname
+#   analysis.backend              — ollama | claude | openai | gemini
+#   auth.frontendURL              — public URL users access Wachd on
+#   ingress.hosts[0].host         — your domain (if ingress.enabled: true)
+#
+# ── Secrets (create manually before helm install) ───────────────────────────
+#   wachd-db-secret               — key: password
+#   wachd-redis-secret            — key: password  (skip if no Redis auth)
+#   wachd-encryption-key          — key: encryption-key  (openssl rand -hex 32)
+#   wachd-claude-key              — key: api-key  (if analysis.backend: claude)
+#   wachd-openai-key              — key: api-key  (if analysis.backend: openai)
+#   wachd-smtp-creds              — keys: username, password  (if email enabled)
+#   wachd-twilio-creds            — keys: account-sid, auth-token  (if SMS/voice)
+#
+# ── Quick start ─────────────────────────────────────────────────────────────
+#   helm install wachd ./helm/wachd \
+#     --namespace wachd \
+#     --set postgres.external.host=<db-host> \
+#     --set postgres.external.username=<db-user> \
+#     --set redis.external.host=<redis-host> \
+#     --set analysis.backend=claude \
+#     --set auth.frontendURL=https://wachd.example.com \
+#     --set ingress.enabled=true \
+#     --set ingress.hosts[0].host=wachd.example.com
+# ────────────────────────────────────────────────────────────────────────────
 
 # =============================================================================
 # Global Configuration

@@ -114,8 +114,45 @@ export default function IncidentsPage() {
       </div>
 
       {incidents.length === 0 ? (
-        <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
-          <p className="text-gray-500">No incidents found</p>
+        <div className="space-y-4">
+          {/* First-run onboarding card */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+            <h2 className="text-base font-semibold text-blue-900 mb-1">No incidents yet — here&apos;s how to get your first alert</h2>
+            <p className="text-sm text-blue-700 mb-4">Complete these steps to receive your first AI-analyzed alert.</p>
+            <ol className="space-y-3 text-sm text-blue-800">
+              <li className="flex items-start gap-2">
+                <span className="font-bold mt-0.5">1.</span>
+                <span>
+                  <strong>Configure notifications</strong> — go to{' '}
+                  <Link href="/settings" className="underline hover:text-blue-600">Settings</Link> and add your Slack webhook or SMTP email so alerts reach you.
+                </span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold mt-0.5">2.</span>
+                <span>
+                  <strong>Set up your on-call schedule</strong> — go to{' '}
+                  <Link href="/oncall" className="underline hover:text-blue-600">On-Call</Link> so Wachd knows who to page.
+                </span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold mt-0.5">3.</span>
+                <span>
+                  <strong>Point your monitoring tool at the webhook</strong> — find your webhook URL in{' '}
+                  <Link href="/settings" className="underline hover:text-blue-600">Settings → Integrations</Link> and add it to Grafana, Datadog, or Prometheus.
+                </span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold mt-0.5">4.</span>
+                <span>
+                  <strong>Set your personal notification rules</strong> — go to{' '}
+                  <Link href="/profile" className="underline hover:text-blue-600">your profile</Link> to choose how you want to be reached (email now, voice after 10 min, etc).
+                </span>
+              </li>
+            </ol>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-400 text-sm">
+            Incidents will appear here once alerts start firing.
+          </div>
         </div>
       ) : (
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">

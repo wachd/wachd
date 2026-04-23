@@ -104,12 +104,97 @@ func (l *webhookIPLimiter) cleanup() {
 
 // GrafanaWebhook represents a simplified Grafana webhook payload
 type GrafanaWebhook struct {
-	Title      string                 `json:"title"`
-	RuleName   string                 `json:"ruleName"`
-	State      string                 `json:"state"`
-	Message    string                 `json:"message"`
-	Tags       map[string]string      `json:"tags"`
+	Title       string                   `json:"title"`
+	RuleName    string                   `json:"ruleName"`
+	State       string                   `json:"state"`
+	Message     string                   `json:"message"`
+	Tags        map[string]string        `json:"tags"`
 	EvalMatches []map[string]interface{} `json:"evalMatches"`
+}
+
+// DatadogWebhook represents a Datadog webhook alert payload.
+// See: https://docs.datadoghq.com/integrations/webhooks/
+type DatadogWebhook struct {
+	ID               string `json:"id"`
+	Title            string `json:"title"`
+	Body             string `json:"body"`
+	AlertType        string `json:"alert_type"`        // error | warning | info | success
+	AlertTransition  string `json:"alert_transition"`  // Triggered | Recovered | Re-Triggered | Resolved
+	Priority         string `json:"priority"`          // normal | low
+	Hostname         string `json:"hostname"`
+	Tags             string `json:"tags"`
+	OrgID            int64  `json:"org_id"`
+	AlertID          int64  `json:"alert_id"`
+}
+
+// parseWebhookPayload detects the source format and extracts a normalised
+// (title, message, severity, source) tuple. Unknown payloads fall back to a
+// generic extraction using the raw JSON keys "title" and "message".
+func parseWebhookPayload(body []byte) (title, message, severity, source string) {
+	// Try to detect Datadog: it always has alert_id (int) or alert_transition field.
+	var dd DatadogWebhook
+	if err := json.Unmarshal(body, &dd); err == nil && (dd.AlertID != 0 || dd.AlertTransition != "") {
+		sev := "unknown"
+		switch dd.AlertType {
+		case "error":
+			sev = "critical"
+		case "warning":
+			sev = "high"
+		case "info":
+			sev = "low"
+		case "success":
+			sev = "info"
+		}
+		msg := dd.Body
+		if dd.Hostname != "" {
+			msg += " (host: " + dd.Hostname + ")"
+		}
+		t := dd.Title
+		if t == "" {
+			t = "Datadog alert"
+		}
+		return t, msg, sev, "datadog"
+	}
+
+	// Try Grafana
+	var gf GrafanaWebhook
+	if err := json.Unmarshal(body, &gf); err == nil && (gf.Title != "" || gf.RuleName != "") {
+		t := gf.Title
+		if t == "" {
+			t = gf.RuleName
+		}
+		sev := "unknown"
+		switch gf.State {
+		case "alerting":
+			sev = "high"
+		case "ok":
+			sev = "low"
+		}
+		return t, gf.Message, sev, "grafana"
+	}
+
+	// Generic fallback — extract title/message from any JSON payload
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err == nil {
+		t, _ := raw["title"].(string)
+		if t == "" {
+			t, _ = raw["name"].(string)
+		}
+		if t == "" {
+			t = "Alert"
+		}
+		msg, _ := raw["message"].(string)
+		if msg == "" {
+			msg, _ = raw["description"].(string)
+		}
+		sev, _ := raw["severity"].(string)
+		if sev == "" {
+			sev = "unknown"
+		}
+		return t, msg, sev, "generic"
+	}
+
+	return "Alert", "", "unknown", "generic"
 }
 
 func main() {
@@ -543,31 +628,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = r.Body.Close() }()
 
-	// Parse Grafana webhook
-	var webhook GrafanaWebhook
-	if err := json.Unmarshal(body, &webhook); err != nil {
-		log.Printf("Failed to parse webhook: %v", err)
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	// Determine severity from state
-	severity := "unknown"
-	switch webhook.State {
-	case "alerting":
-		severity = "high"
-	case "ok":
-		severity = "low"
-	}
+	// Parse webhook — auto-detects Grafana, Datadog, or generic format
+	title, message, severity, source := parseWebhookPayload(body)
 
 	// Create incident
 	incident := &store.Incident{
 		TeamID:       teamID,
-		Title:        webhook.Title,
-		Message:      &webhook.Message,
+		Title:        title,
+		Message:      &message,
 		Severity:     severity,
 		Status:       "open",
-		Source:       "grafana",
+		Source:       source,
 		AlertPayload: body,
 	}
 
