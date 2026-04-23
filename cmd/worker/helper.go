@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -431,7 +432,14 @@ func formatTimeline(timeline *correlator.Timeline) string {
 
 // runEscalationLoop polls every 30 seconds for open incidents that have exceeded
 // their next escalation threshold and notifies the appropriate layer.
+// A random startup jitter (0–10s) staggers multiple worker replicas.
 func (w *Worker) runEscalationLoop(ctx context.Context) {
+	jitter := time.Duration(rand.Int63n(int64(10 * time.Second))) //nolint:gosec
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(jitter):
+	}
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {

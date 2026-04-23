@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
@@ -523,7 +524,14 @@ func (w *Worker) fireChannel(ctx context.Context, channel string, incident *stor
 }
 
 // runPendingNotificationsLoop polls every 30s for delayed notifications that are due.
+// A random startup jitter (0–10s) staggers multiple worker replicas.
 func (w *Worker) runPendingNotificationsLoop(ctx context.Context) {
+	jitter := time.Duration(rand.Int63n(int64(10 * time.Second))) //nolint:gosec
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(jitter):
+	}
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {

@@ -144,30 +144,61 @@ func (db *DB) QueuePendingNotification(ctx context.Context, p *PendingNotificati
 }
 
 // GetDuePendingNotifications returns notifications scheduled for now or earlier that
-// have not yet been sent or cancelled. Limited to 100 per poll to avoid large batches.
+// have not yet been sent or cancelled. Uses FOR UPDATE SKIP LOCKED so concurrent
+// worker pods each claim a disjoint set of rows — no double-firing.
 func (db *DB) GetDuePendingNotifications(ctx context.Context) ([]*PendingNotification, error) {
-	rows, err := db.pool.Query(ctx, `
+	tx, err := db.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, `
 		SELECT id, incident_id, team_id, user_id, user_source, channel, scheduled_at, sent_at, cancelled_at, created_at
 		FROM pending_notifications
 		WHERE scheduled_at <= now() AND sent_at IS NULL AND cancelled_at IS NULL
 		ORDER BY scheduled_at
 		LIMIT 100
+		FOR UPDATE SKIP LOCKED
 	`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var pending []*PendingNotification
 	for rows.Next() {
 		p := &PendingNotification{}
 		if err := rows.Scan(&p.ID, &p.IncidentID, &p.TeamID, &p.UserID, &p.UserSource,
 			&p.Channel, &p.ScheduledAt, &p.SentAt, &p.CancelledAt, &p.CreatedAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		pending = append(pending, p)
 	}
-	return pending, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Mark all claimed rows as sent within the same transaction so no other
+	// worker can pick them up even if our caller hasn't processed them yet.
+	// The worker will still call MarkPendingNotificationSent but that's a no-op
+	// since sent_at is already set.
+	if len(pending) > 0 {
+		ids := make([]uuid.UUID, len(pending))
+		for i, p := range pending {
+			ids[i] = p.ID
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE pending_notifications SET sent_at = now()
+			WHERE id = ANY($1)
+		`, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return pending, tx.Commit(ctx)
 }
 
 // MarkPendingNotificationSent marks a pending notification as sent.
