@@ -95,6 +95,33 @@ func (m *mockConfigStore) DeleteOverride(_ context.Context, _, _ uuid.UUID) erro
 func (m *mockConfigStore) UpsertEscalationPolicy(_ context.Context, _ *store.EscalationPolicy) error {
 	return nil
 }
+func (m *mockConfigStore) ListUserNotificationRules(_ context.Context, _ uuid.UUID, _ string) ([]*store.UserNotificationRule, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) GetUserNotificationRules(_ context.Context, _ uuid.UUID, _ string, _ string) ([]*store.UserNotificationRule, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) UpsertUserNotificationRule(_ context.Context, _ *store.UserNotificationRule) (*store.UserNotificationRule, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) UpdateUserNotificationRule(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ string, _ bool, _ int) (*store.UserNotificationRule, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) DeleteUserNotificationRule(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (m *mockConfigStore) QueuePendingNotification(_ context.Context, _ *store.PendingNotification) error {
+	return nil
+}
+func (m *mockConfigStore) GetDuePendingNotifications(_ context.Context) ([]*store.PendingNotification, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) MarkPendingNotificationSent(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+func (m *mockConfigStore) CancelPendingNotificationsForIncident(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
 
 // ── resolveWeekly ─────────────────────────────────────────────────────────────
 
