@@ -60,7 +60,13 @@ export function Navigation() {
 
           {session && (
             <div className="flex items-center gap-3">
-              <span className="text-sm text-gray-300 hidden sm:block">{session.name}</span>
+              <Link
+                href="/profile"
+                className="text-sm text-gray-300 hover:text-white hidden sm:block transition-colors"
+                title="Notification rules"
+              >
+                {session.name}
+              </Link>
               <button
                 onClick={handleLogout}
                 className="text-sm text-gray-400 hover:text-white transition-colors px-3 py-1.5 rounded-md hover:bg-gray-800"

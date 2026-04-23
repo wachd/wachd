@@ -2,8 +2,8 @@ apiVersion: v2
 name: wachd
 description: Alert intelligence platform with root cause analysis — self-hosted OpsGenie replacement
 type: application
-version: 0.4.8
-appVersion: "0.4.8"
+version: 0.4.9
+appVersion: "0.4.9"
 keywords:
   - devops
   - monitoring
