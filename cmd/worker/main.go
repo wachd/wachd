@@ -376,10 +376,14 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 		}
 	}
 
-	// Notify on-call engineer via all configured channels
+	// Notify on-call engineer via their personal notification rules (email/SMS/voice).
+	// Slack fires separately below — once per incident, team-level, not per-user.
 	if onCallUser != nil {
 		w.sendNotifications(ctx, incident, onCallUser, aiAnalysis)
 	}
+
+	// Fire team Slack channel once — one post per incident, keeps the channel clean.
+	w.fireTeamSlack(ctx, incident, onCallUser, aiAnalysis)
 
 	log.Printf("✓ Incident %s processed", incident.ID)
 	return nil
@@ -425,10 +429,9 @@ func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident
 	}
 }
 
-// fireAllChannels sends to every globally-configured channel at once.
-// Used as fallback when the user has no notification rules set up.
-func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
-	// Prefer per-team Slack config from DB over global env-var fallback
+// fireTeamSlack posts one notification to the team Slack channel.
+// Called once when the incident is first created — not on escalation steps.
+func (w *Worker) fireTeamSlack(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
 	slackNotifier := w.slackNotifier
 	if cfg, err := w.db.GetTeamConfig(ctx, incident.TeamID); err == nil && cfg != nil {
 		if cfg.SlackWebhookURL != nil && *cfg.SlackWebhookURL != "" {
@@ -439,15 +442,20 @@ func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, 
 			slackNotifier = notify.NewSlackNotifier(*cfg.SlackWebhookURL, channel)
 		}
 	}
-
-	if slackNotifier != nil {
-		if err := slackNotifier.SendIncidentAlert(ctx, incident, onCallUser, analysis); err != nil {
-			log.Printf("Slack notification failed: %v", err)
-		} else {
-			log.Printf("  ✓ Slack")
-		}
+	if slackNotifier == nil {
+		return
 	}
+	if err := slackNotifier.SendIncidentAlert(ctx, incident, onCallUser, analysis); err != nil {
+		log.Printf("Slack notification failed: %v", err)
+	} else {
+		log.Printf("  ✓ Slack (team channel)")
+	}
+}
 
+// fireAllChannels sends email/SMS/voice for a user — used as fallback when no
+// notification rules are configured, and for escalation re-notifications.
+// Slack is intentionally excluded: it fires once at incident creation only.
+func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
 	if w.emailNotifier != nil {
 		if err := w.emailNotifier.SendIncidentAlert(ctx, incident, onCallUser, analysis); err != nil {
 			log.Printf("Email notification failed: %v", err)
@@ -474,26 +482,9 @@ func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, 
 }
 
 // fireChannel sends a single notification channel for a user.
+// Slack is not handled here — it fires once at incident creation via fireTeamSlack.
 func (w *Worker) fireChannel(ctx context.Context, channel string, incident *store.Incident, user *store.TeamMember, analysis *ai.AnalysisResponse) {
 	switch channel {
-	case "slack":
-		slackNotifier := w.slackNotifier
-		if cfg, err := w.db.GetTeamConfig(ctx, incident.TeamID); err == nil && cfg != nil {
-			if cfg.SlackWebhookURL != nil && *cfg.SlackWebhookURL != "" {
-				ch := ""
-				if cfg.SlackChannel != nil {
-					ch = *cfg.SlackChannel
-				}
-				slackNotifier = notify.NewSlackNotifier(*cfg.SlackWebhookURL, ch)
-			}
-		}
-		if slackNotifier != nil {
-			if err := slackNotifier.SendIncidentAlert(ctx, incident, user, analysis); err != nil {
-				log.Printf("Slack notification failed: %v", err)
-			} else {
-				log.Printf("  ✓ Slack")
-			}
-		}
 	case "email":
 		if w.emailNotifier != nil {
 			if err := w.emailNotifier.SendIncidentAlert(ctx, incident, user, analysis); err != nil {

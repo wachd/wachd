@@ -5,7 +5,7 @@ import { useSession } from '@/lib/session-context';
 import { api, type UserNotificationRule, type CreateNotificationRuleInput } from '@/lib/api';
 
 type EventType = 'new_alert' | 'ack' | 'resolve';
-type Channel = 'email' | 'sms' | 'voice' | 'slack';
+type Channel = 'email' | 'sms' | 'voice';
 
 const EVENT_LABELS: Record<EventType, string> = {
   new_alert: 'New Alert',
@@ -17,14 +17,12 @@ const CHANNEL_ICONS: Record<Channel, string> = {
   email: '✉',
   sms: '💬',
   voice: '☎',
-  slack: '⬡',
 };
 
 const CHANNEL_LABELS: Record<Channel, string> = {
   email: 'email',
   sms: 'sms',
   voice: 'voice',
-  slack: 'slack',
 };
 
 function delayLabel(minutes: number): string {
@@ -228,7 +226,7 @@ export default function ProfilePage() {
                   onChange={(e) => setModalChannel(e.target.value as Channel)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  {(['email', 'sms', 'voice', 'slack'] as Channel[]).map((c) => (
+                  {(['email', 'sms', 'voice'] as Channel[]).map((c) => (
                     <option key={c} value={c}>
                       {CHANNEL_ICONS[c]} {CHANNEL_LABELS[c]}
                     </option>
