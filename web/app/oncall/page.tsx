@@ -657,13 +657,55 @@ export default function OnCallPage() {
                   <td className="sticky left-0 z-10 bg-gray-50 px-3 py-2 border-b border-gray-200">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Final</span>
                   </td>
-                  {finalSegments.map((seg, si) => {
-                    const c = seg.userId ? colorFor(seg.userId) : null;
+                  {entries.map((e, ei) => {
+                    const ov = e.override;
+                    // Determine if the override covers only part of the day.
+                    const isPartial = ov && (() => {
+                      const dayStart = new Date(e.date + 'T00:00:00Z').getTime();
+                      const dayEnd   = dayStart + 86_400_000;
+                      return new Date(ov.start_at).getTime() > dayStart ||
+                             new Date(ov.end_at).getTime()   < dayEnd;
+                    })();
+
+                    if (isPartial && ov) {
+                      // Partial override — base user fills cell, override segment overlays it.
+                      const dayStart  = new Date(e.date + 'T00:00:00Z').getTime();
+                      const dayEnd    = dayStart + 86_400_000;
+                      const ovStart   = Math.max(new Date(ov.start_at).getTime(), dayStart);
+                      const ovEnd     = Math.min(new Date(ov.end_at).getTime(),   dayEnd);
+                      const leftPct   = ((ovStart - dayStart) / 86_400_000) * 100;
+                      const widthPct  = Math.max(((ovEnd - ovStart) / 86_400_000) * 100, 6);
+                      const baseUid   = e.layers[0]?.user_id  ?? '';
+                      const baseName  = e.layers[0]?.user_name ?? '';
+                      const baseC     = baseUid ? colorFor(baseUid) : null;
+                      const ovC       = colorFor(ov.user_id);
+                      return (
+                        <td key={ei} className="px-0.5 py-2 border-b border-gray-200 align-middle">
+                          <div className="relative h-7 overflow-hidden">
+                            {baseC && (
+                              <div className={`absolute inset-0 rounded px-2 flex items-center text-[11px] font-bold truncate ${baseC.bar} ${baseC.label}`}>
+                                {baseName}
+                              </div>
+                            )}
+                            <div
+                              className={`absolute top-0 bottom-0 rounded px-1 flex items-center text-[11px] font-bold truncate ${ovC.bar} ${ovC.label}`}
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              title={`Override: ${ov.user_name}${ov.reason ? ` — ${ov.reason}` : ''}`}
+                            >
+                              {ov.user_name}
+                            </div>
+                          </div>
+                        </td>
+                      );
+                    }
+
+                    // Full-day override or no override — single bar (preserve colSpan via segments).
+                    const c = e.final_user_id ? colorFor(e.final_user_id) : null;
                     return (
-                      <td key={si} colSpan={seg.span} className="px-0.5 py-2 border-b border-gray-200 align-middle">
-                        {seg.userId ? (
+                      <td key={ei} className="px-0.5 py-2 border-b border-gray-200 align-middle">
+                        {e.final_user_id ? (
                           <div className={`rounded px-2 py-1.5 text-[11px] font-bold truncate ${c!.bar} ${c!.label}`}>
-                            {seg.userName}
+                            {e.final_user_name}
                           </div>
                         ) : (
                           <div className="rounded px-2 py-1.5 text-[11px] text-gray-300 bg-gray-100 text-center">—</div>

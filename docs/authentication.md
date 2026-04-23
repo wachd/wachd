@@ -306,6 +306,29 @@ When a user clicks an SSO provider button on the login page:
 
 The redirect URI to register in Entra: `https://<your-domain>/auth/sso/<provider-id>/callback`.
 
+#### Application permissions (required for group pre-provisioning)
+
+The scopes above are **Delegated** permissions — they apply at login time when a user is present. Group pre-provisioning (creating user records before anyone logs in) runs as a background job with no user session, so it requires two additional **Application** permissions with admin consent:
+
+| Permission | Type | Purpose |
+|---|---|---|
+| `GroupMember.Read.All` | Application | List members of an Entra group |
+| `User.ReadBasic.All` | Application | Read `displayName`, `mail`, `userPrincipalName` for each member |
+
+Without these, the pre-provisioning goroutine can retrieve member object IDs but all profile fields (`displayName`, `mail`, `userPrincipalName`) return empty — users are skipped and the group shows `provisioned 0/N`.
+
+**How to grant them:**
+
+1. Azure Portal → App registrations → your Wachd app → **API permissions**
+2. **Add a permission** → Microsoft Graph → **Application permissions**
+3. Search and add `GroupMember.Read.All`
+4. Search and add `User.ReadBasic.All`
+5. Click **Grant admin consent for \<your tenant\>** — both permissions must show a green ✓
+
+> If admin consent is not granted, the permissions are listed but inactive. The server log will show `provisioned 0/N` with all members skipped.
+
+Pre-provisioning fires automatically each time a group mapping is saved. Users appear in the admin dashboard and can be added to on-call schedules immediately — before their first login.
+
 #### Email claim behaviour
 
 Microsoft Entra does not always populate the standard `email` claim even when the `email` scope is requested. Wachd resolves the user's email in this order:
