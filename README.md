@@ -408,6 +408,28 @@ The open-source tier is suitable for evaluation and small teams. Limits enforced
 
 ---
 
+## Tested Deployments
+
+The following scenarios have been validated end-to-end by the maintainers:
+
+| Scenario | Status |
+|---|---|
+| AWS EKS + RDS (PostgreSQL) + ElastiCache (Redis) | ✅ Tested |
+| Azure AKS + Azure Database for PostgreSQL + Azure Cache for Redis | ✅ Tested |
+| Grafana webhook → AI analysis → Slack notification | ✅ Tested |
+| Grafana webhook → AI analysis → Email notification | ✅ Tested |
+| On-call escalation with voice call via Twilio | ✅ Tested |
+| Per-user notification rules (email now, voice after N min) | ✅ Tested |
+| Microsoft Entra SSO + group mappings | ✅ Tested |
+| GKE | 🔲 Not yet tested |
+| Datadog webhook (parser implemented) | 🔲 Not yet tested |
+| Ollama with GPU nodes | 🔲 Not yet tested |
+| Prometheus Alertmanager webhook | 🔲 Not yet tested |
+
+If you test a scenario not listed above, please open an issue or PR to update this table.
+
+---
+
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, proposing features, and submitting pull requests.
