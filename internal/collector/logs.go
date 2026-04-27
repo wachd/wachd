@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -109,13 +110,16 @@ func (l *LogsCollector) FetchLogs(ctx context.Context, query string, since, unti
 				continue
 			}
 
-			// Parse timestamp (nanoseconds)
+			// Parse timestamp — Loki sends Unix nanoseconds as a string.
+			// Keep RFC3339Nano as a fallback for test doubles and non-standard setups.
+			// Skip the entry entirely if neither format parses — never substitute time.Now().
 			var ts time.Time
-			if nsec, err := time.Parse(time.RFC3339Nano, value[0]); err == nil {
-				ts = nsec
+			if ns, err := strconv.ParseInt(value[0], 10, 64); err == nil {
+				ts = time.Unix(0, ns).UTC()
+			} else if t, err := time.Parse(time.RFC3339Nano, value[0]); err == nil {
+				ts = t
 			} else {
-				// Fallback: parse as unix nanoseconds
-				ts = time.Now()
+				continue
 			}
 
 			logLine := LogLine{
