@@ -17,6 +17,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -155,6 +156,79 @@ func TestLogsCollector_FetchLogs_ShortValueEntry(t *testing.T) {
 	}
 	if len(logs) != 0 {
 		t.Errorf("expected 0 logs for short value entry, got %d", len(logs))
+	}
+}
+
+func TestLogsCollector_FetchLogs_NanosecondTimestamp(t *testing.T) {
+	// Real Loki format: Unix nanoseconds as a string, not RFC3339.
+	// 2025-01-15 12:00:00 UTC = 1736942400000000000 ns
+	expectedTime := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	nsStr := fmt.Sprintf("%d", expectedTime.UnixNano())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := LokiResponse{}
+		resp.Status = "success"
+		resp.Data.ResultType = "streams"
+		resp.Data.Result = []struct {
+			Stream map[string]string `json:"stream"`
+			Values [][]string        `json:"values"`
+		}{
+			{
+				Stream: map[string]string{"service": "api", "level": "ERROR"},
+				Values: [][]string{
+					{nsStr, "connection refused"},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewLogsCollector(srv.URL)
+	logs, err := c.FetchLogs(context.Background(), `{service="api"}`,
+		expectedTime.Add(-time.Minute), expectedTime.Add(time.Minute), 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log line, got %d", len(logs))
+	}
+	if !logs[0].Timestamp.Equal(expectedTime) {
+		t.Errorf("expected timestamp %v, got %v", expectedTime, logs[0].Timestamp)
+	}
+}
+
+func TestLogsCollector_FetchLogs_MalformedTimestampSkipped(t *testing.T) {
+	// Malformed timestamps must be skipped, not replaced with time.Now().
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := LokiResponse{}
+		resp.Status = "success"
+		resp.Data.ResultType = "streams"
+		resp.Data.Result = []struct {
+			Stream map[string]string `json:"stream"`
+			Values [][]string        `json:"values"`
+		}{
+			{
+				Stream: map[string]string{},
+				Values: [][]string{
+					{"not-a-timestamp", "some log line"},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewLogsCollector(srv.URL)
+	logs, err := c.FetchLogs(context.Background(), `{app="x"}`,
+		time.Now().Add(-time.Hour), time.Now(), 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Errorf("expected malformed entry to be skipped, got %d logs", len(logs))
 	}
 }
 

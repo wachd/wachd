@@ -232,6 +232,65 @@ func TestSplunkCollector_BasicAuth_SetsHeader(t *testing.T) {
 	}
 }
 
+func TestSplunkCollector_FetchLogs_CountPropagated(t *testing.T) {
+	// runSearch must forward the caller's limit as the Splunk count field.
+	var gotCount string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotCount = r.FormValue("count")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	c := NewSplunkCollector(srv.URL, "token")
+	_, _ = c.FetchLogs(context.Background(), "svc",
+		time.Now().Add(-time.Hour), time.Now(), 250)
+
+	if gotCount != "250" {
+		t.Errorf("expected count=250 sent to Splunk, got %q", gotCount)
+	}
+}
+
+func TestSplunkCollector_FetchLogs_CountDefaultsTo100(t *testing.T) {
+	// limit <= 0 must fall back to 100.
+	var gotCount string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotCount = r.FormValue("count")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	c := NewSplunkCollector(srv.URL, "token")
+	_, _ = c.FetchLogs(context.Background(), "svc",
+		time.Now().Add(-time.Hour), time.Now(), 0)
+
+	if gotCount != "100" {
+		t.Errorf("expected count=100 for limit=0, got %q", gotCount)
+	}
+}
+
+func TestSplunkCollector_FetchNotableEvents_CountPropagated(t *testing.T) {
+	// FetchNotableEvents must also forward the caller's limit as count.
+	var gotCount string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotCount = r.FormValue("count")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	c := NewSplunkCollector(srv.URL, "token")
+	_, _ = c.FetchNotableEvents(context.Background(), "svc", time.Now().Add(-time.Hour), 75)
+
+	if gotCount != "75" {
+		t.Errorf("expected count=75 sent to Splunk, got %q", gotCount)
+	}
+}
+
 func TestSplunkCollector_BearerAuth_SetsHeader(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

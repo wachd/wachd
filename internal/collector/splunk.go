@@ -82,7 +82,7 @@ func (s *SplunkCollector) FetchLogs(ctx context.Context, service string, since, 
 		limit,
 	)
 
-	events, err := s.runSearch(ctx, spl)
+	events, err := s.runSearch(ctx, spl, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -119,16 +119,19 @@ func (s *SplunkCollector) FetchNotableEvents(ctx context.Context, service string
 		limit,
 	)
 
-	return s.runSearch(ctx, spl)
+	return s.runSearch(ctx, spl, limit)
 }
 
 // runSearch submits a blocking Splunk search job and returns the results.
 // Uses the oneshot search endpoint for simplicity — suitable for short time windows.
-func (s *SplunkCollector) runSearch(ctx context.Context, spl string) ([]SplunkEvent, error) {
+func (s *SplunkCollector) runSearch(ctx context.Context, spl string, limit int) ([]SplunkEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
 	form := url.Values{}
 	form.Set("search", spl)
 	form.Set("output_mode", "json")
-	form.Set("count", "100")
+	form.Set("count", fmt.Sprintf("%d", limit))
 	form.Set("exec_mode", "oneshot") // blocking — returns results directly
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
