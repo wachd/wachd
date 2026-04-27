@@ -272,6 +272,25 @@ func TestSplunkCollector_FetchLogs_CountDefaultsTo100(t *testing.T) {
 	}
 }
 
+func TestSplunkCollector_FetchNotableEvents_CountPropagated(t *testing.T) {
+	// FetchNotableEvents must also forward the caller's limit as count.
+	var gotCount string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotCount = r.FormValue("count")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	c := NewSplunkCollector(srv.URL, "token")
+	_, _ = c.FetchNotableEvents(context.Background(), "svc", time.Now().Add(-time.Hour), 75)
+
+	if gotCount != "75" {
+		t.Errorf("expected count=75 sent to Splunk, got %q", gotCount)
+	}
+}
+
 func TestSplunkCollector_BearerAuth_SetsHeader(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
