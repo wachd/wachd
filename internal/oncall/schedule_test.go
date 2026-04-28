@@ -550,8 +550,8 @@ func TestWindowCovers_Simple(t *testing.T) {
 		t      time.Time
 		covers bool
 	}{
-		{time.Date(2025, 1, 6, 9, 0, 0, 0, time.UTC), true},   // Mon 09:00 exactly (inclusive)
-		{time.Date(2025, 1, 6, 12, 0, 0, 0, time.UTC), true},  // Mon 12:00
+		{time.Date(2025, 1, 6, 9, 0, 0, 0, time.UTC), true},    // Mon 09:00 exactly (inclusive)
+		{time.Date(2025, 1, 6, 12, 0, 0, 0, time.UTC), true},   // Mon 12:00
 		{time.Date(2025, 1, 10, 16, 59, 0, 0, time.UTC), true}, // Fri 16:59
 		{time.Date(2025, 1, 10, 17, 0, 0, 0, time.UTC), false}, // Fri 17:00 (exclusive)
 		{time.Date(2025, 1, 11, 10, 0, 0, 0, time.UTC), false}, // Sat
@@ -573,12 +573,12 @@ func TestWindowCovers_WrapAroundMidnight(t *testing.T) {
 		t      time.Time
 		covers bool
 	}{
-		{time.Date(2025, 1, 10, 22, 0, 0, 0, time.UTC), true},  // Fri 22:00
-		{time.Date(2025, 1, 11, 12, 0, 0, 0, time.UTC), true},  // Sat noon
-		{time.Date(2025, 1, 12, 3, 0, 0, 0, time.UTC), true},   // Sun 03:00
-		{time.Date(2025, 1, 6, 7, 0, 0, 0, time.UTC), true},    // Mon 07:00
-		{time.Date(2025, 1, 6, 9, 0, 0, 0, time.UTC), false},   // Mon 09:00 — outside
-		{time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC), false},  // Wed noon — outside
+		{time.Date(2025, 1, 10, 22, 0, 0, 0, time.UTC), true}, // Fri 22:00
+		{time.Date(2025, 1, 11, 12, 0, 0, 0, time.UTC), true}, // Sat noon
+		{time.Date(2025, 1, 12, 3, 0, 0, 0, time.UTC), true},  // Sun 03:00
+		{time.Date(2025, 1, 6, 7, 0, 0, 0, time.UTC), true},   // Mon 07:00
+		{time.Date(2025, 1, 6, 9, 0, 0, 0, time.UTC), false},  // Mon 09:00 — outside
+		{time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC), false}, // Wed noon — outside
 	}
 
 	for _, tt := range tests {
@@ -992,5 +992,238 @@ func TestManager_GetEscalationChain_NoPolicy(t *testing.T) {
 	}
 	if steps[0].NotifyAfterMinutes != 0 {
 		t.Errorf("expected immediate notification, got %d min", steps[0].NotifyAfterMinutes)
+	}
+}
+
+// ── Regression tests for issue #8 — LayerOrder not respected ─────────────────
+
+// TestResolveLayered_LayerOrderEnforced verifies that resolveLayered returns
+// the user from the layer with the lowest LayerOrder, regardless of JSON order.
+// Layers are intentionally stored secondary-first, primary-second to expose the bug.
+func TestResolveLayered_LayerOrderEnforced(t *testing.T) {
+	primaryUser := uuid.New()
+	secondaryUser := uuid.New()
+	anchor := time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC)
+
+	// Secondary (order=2) is first in JSON — primary (order=1) is second.
+	// The fix must sort by LayerOrder before picking the first active layer.
+	rot := LayeredRotation{
+		Type:                  "layered",
+		RotationStart:         anchor.Format(time.RFC3339),
+		RotationIntervalHours: 168,
+		Layers: []Layer{
+			{
+				ID:              "secondary",
+				Name:            "Secondary",
+				LayerOrder:      2,
+				TimeRestriction: TimeRestriction{Type: "always"},
+				Members:         []uuid.UUID{secondaryUser},
+			},
+			{
+				ID:              "primary",
+				Name:            "Primary",
+				LayerOrder:      1,
+				TimeRestriction: TimeRestriction{Type: "always"},
+				Members:         []uuid.UUID{primaryUser},
+			},
+		},
+	}
+	raw, _ := json.Marshal(rot)
+
+	uid, err := resolveLayered(raw, anchor.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if uid != primaryUser {
+		t.Errorf("expected primaryUser (LayerOrder=1), got %v — layers were not sorted by LayerOrder", uid)
+	}
+}
+
+// TestResolveAllLayersAt_LayerOrderEnforced verifies that ResolveAllLayersAt
+// returns results sorted by LayerOrder, not by JSON array position.
+func TestResolveAllLayersAt_LayerOrderEnforced(t *testing.T) {
+	primaryUser := uuid.New()
+	secondaryUser := uuid.New()
+	anchor := time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC)
+
+	// Secondary (order=2) is first in JSON — primary (order=1) is second.
+	rot := LayeredRotation{
+		Type:                  "layered",
+		RotationStart:         anchor.Format(time.RFC3339),
+		RotationIntervalHours: 168,
+		Layers: []Layer{
+			{
+				ID:              "secondary",
+				Name:            "Secondary",
+				LayerOrder:      2,
+				TimeRestriction: TimeRestriction{Type: "always"},
+				Members:         []uuid.UUID{secondaryUser},
+			},
+			{
+				ID:              "primary",
+				Name:            "Primary",
+				LayerOrder:      1,
+				TimeRestriction: TimeRestriction{Type: "always"},
+				Members:         []uuid.UUID{primaryUser},
+			},
+		},
+	}
+	raw, _ := json.Marshal(rot)
+
+	monday := anchor.Add(time.Hour)
+	results, err := ResolveAllLayersAt(raw, monday)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].UserID != primaryUser {
+		t.Errorf("results[0] should be primary (LayerOrder=1), got UserID=%v — layers not sorted", results[0].UserID)
+	}
+	if results[1].UserID != secondaryUser {
+		t.Errorf("results[1] should be secondary (LayerOrder=2), got UserID=%v", results[1].UserID)
+	}
+}
+
+// ── Regression tests for issue #7 — UserID ignored in GetEscalationChain ─────
+
+// TestManager_GetEscalationChain_FixedUserLayer verifies that an escalation layer
+// with only UserID set (no ScheduleID) resolves directly to that fixed user,
+// without requiring a schedule lookup.
+func TestManager_GetEscalationChain_FixedUserLayer(t *testing.T) {
+	fixedUserID := uuid.New()
+	teamID := uuid.New()
+
+	policyCfg, _ := json.Marshal(EscalationConfig{
+		Layers: []EscalationLayer{
+			// UserID set, ScheduleID intentionally empty — fixed person, not a rotation.
+			{UserID: fixedUserID.String(), NotifyAfterMinutes: 0, LayerName: "manager"},
+		},
+	})
+
+	mock := &mockConfigStore{
+		escalationPolicy: &store.EscalationPolicy{
+			TeamID: teamID,
+			Config: policyCfg,
+		},
+		member: &store.TeamMember{ID: fixedUserID, Name: "Alice Manager"},
+	}
+
+	m := NewManager(mock)
+	steps, err := m.GetEscalationChain(context.Background(), teamID)
+	if err != nil {
+		t.Fatalf("expected UserID-only layer to resolve successfully, got error: %v", err)
+	}
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 escalation step, got %d", len(steps))
+	}
+	if steps[0].User == nil || steps[0].User.ID != fixedUserID {
+		t.Errorf("expected fixed user %v, got %v — UserID field is ignored", fixedUserID, steps[0].User)
+	}
+	if steps[0].LayerName != "manager" {
+		t.Errorf("expected layer name 'manager', got %q", steps[0].LayerName)
+	}
+}
+
+// TestManager_GetEscalationChain_BothIDsSet_Rejected verifies that a layer
+// with both ScheduleID and UserID set is rejected — exactly one must be set.
+func TestManager_GetEscalationChain_BothIDsSet_Rejected(t *testing.T) {
+	schedID := uuid.New()
+	userID := uuid.New()
+	teamID := uuid.New()
+
+	rot := WeeklyRotation{
+		Type:     "weekly",
+		Rotation: []DayAssignment{{Day: weekdayName(time.Now().Weekday()), UserID: uuid.New()}},
+	}
+	raw, _ := json.Marshal(rot)
+
+	policyCfg, _ := json.Marshal(EscalationConfig{
+		Layers: []EscalationLayer{
+			{
+				ScheduleID:         schedID.String(),
+				UserID:             userID.String(),
+				NotifyAfterMinutes: 0,
+				LayerName:          "ambiguous",
+			},
+		},
+	})
+
+	mock := &mockConfigStore{
+		schedule: &store.Schedule{
+			ID:             schedID,
+			TeamID:         teamID,
+			RotationConfig: raw,
+		},
+		escalationPolicy: &store.EscalationPolicy{
+			TeamID: teamID,
+			Config: policyCfg,
+		},
+		member: &store.TeamMember{ID: userID, Name: "Alice"},
+	}
+
+	m := NewManager(mock)
+	_, err := m.GetEscalationChain(context.Background(), teamID)
+	if err == nil {
+		t.Error("expected error when both ScheduleID and UserID are set in the same layer — exactly one must be set")
+	}
+}
+
+// TestManager_GetEscalationChain_BothIDsEmpty_Rejected verifies that a layer
+// with neither ScheduleID nor UserID set is rejected — exactly one must be set.
+func TestManager_GetEscalationChain_BothIDsEmpty_Rejected(t *testing.T) {
+	teamID := uuid.New()
+
+	policyCfg, _ := json.Marshal(EscalationConfig{
+		Layers: []EscalationLayer{
+			{
+				NotifyAfterMinutes: 0,
+				LayerName:          "bad",
+			},
+		},
+	})
+
+	mock := &mockConfigStore{
+		escalationPolicy: &store.EscalationPolicy{
+			TeamID: teamID,
+			Config: policyCfg,
+		},
+	}
+
+	m := NewManager(mock)
+
+	_, err := m.GetEscalationChain(context.Background(), teamID)
+	if err == nil {
+		t.Fatal("expected validation error when neither schedule_id nor user_id is set")
+	}
+}
+
+// TestManager_GetEscalationChain_NeitherIDSet_Rejected verifies that a layer
+// with neither ScheduleID nor UserID returns a clear misconfiguration error.
+func TestManager_GetEscalationChain_NeitherIDSet_Rejected(t *testing.T) {
+	teamID := uuid.New()
+
+	policyCfg, _ := json.Marshal(EscalationConfig{
+		Layers: []EscalationLayer{
+			{
+				// Both fields empty — layer is misconfigured.
+				NotifyAfterMinutes: 0,
+				LayerName:          "empty",
+			},
+		},
+	})
+
+	mock := &mockConfigStore{
+		escalationPolicy: &store.EscalationPolicy{
+			TeamID: teamID,
+			Config: policyCfg,
+		},
+	}
+
+	m := NewManager(mock)
+	_, err := m.GetEscalationChain(context.Background(), teamID)
+	if err == nil {
+		t.Error("expected error when neither ScheduleID nor UserID is set — layer is misconfigured")
 	}
 }

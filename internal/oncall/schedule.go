@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,14 +39,14 @@ type WeeklyRotation struct {
 
 // DayAssignment maps a weekday name to a user.
 type DayAssignment struct {
-	Day    string    `json:"day"`     // monday…sunday
+	Day    string    `json:"day"` // monday…sunday
 	UserID uuid.UUID `json:"user_id"`
 }
 
 // LayeredRotation is the new format supporting multiple simultaneous on-call
 // layers, time-window restrictions, and index-based rotation.
 type LayeredRotation struct {
-	Type                  string  `json:"type"` // "layered"
+	Type                  string  `json:"type"`                    // "layered"
 	RotationStart         string  `json:"rotation_start"`          // RFC3339 anchor time
 	RotationIntervalHours float64 `json:"rotation_interval_hours"` // e.g. 168 = weekly
 	Layers                []Layer `json:"layers"`
@@ -63,8 +64,8 @@ type Layer struct {
 // TimeRestriction controls when a layer is active.
 type TimeRestriction struct {
 	// Type: "always" | "weekdays" | "weekends" | "custom"
-	Type    string         `json:"type"`
-	Windows []TimeWindow   `json:"windows,omitempty"` // only for type="custom"
+	Type    string       `json:"type"`
+	Windows []TimeWindow `json:"windows,omitempty"` // only for type="custom"
 }
 
 // TimeWindow is a recurring weekly time block (start inclusive, end exclusive).
@@ -131,6 +132,28 @@ func ResolveAllLayersAt(raw []byte, t time.Time) ([]LayerResult, error) {
 	}
 }
 
+// sortedLayers returns a copy of the input ordered by LayerOrder.
+// Positive LayerOrder values are sorted ascending (1 = first notified).
+// Layers with zero or negative LayerOrder are left after explicitly ordered layers.
+func sortedLayers(layers []Layer) []Layer {
+	out := append([]Layer(nil), layers...)
+	sort.SliceStable(out, func(i, j int) bool {
+		li, lj := out[i].LayerOrder, out[j].LayerOrder
+
+		switch {
+		case li <= 0 && lj <= 0:
+			return false
+		case li <= 0:
+			return false
+		case lj <= 0:
+			return true
+		default:
+			return li < lj
+		}
+	})
+	return out
+}
+
 func resolveLayeredAllLayers(raw []byte, t time.Time) ([]LayerResult, error) {
 	var rot LayeredRotation
 	if err := json.Unmarshal(raw, &rot); err != nil {
@@ -149,7 +172,8 @@ func resolveLayeredAllLayers(raw []byte, t time.Time) ([]LayerResult, error) {
 		elapsed = 0
 	}
 	var results []LayerResult
-	for _, layer := range rot.Layers {
+	// Return one result per layer in LayerOrder, regardless of the original JSON slice order.
+	for _, layer := range sortedLayers(rot.Layers) {
 		name := layer.Name
 		if name == "" {
 			name = fmt.Sprintf("Layer %d", layer.LayerOrder)
@@ -238,11 +262,47 @@ func (m *Manager) GetEscalationChain(ctx context.Context, teamID uuid.UUID) ([]E
 	now := time.Now()
 	var steps []EscalationStep
 	for i, layer := range cfg.Layers {
+		// Exactly one of ScheduleID or UserID must be set for a valid escalation layer.
+		if (layer.ScheduleID == "") == (layer.UserID == "") {
+			return nil, fmt.Errorf(
+				"invalid escalation layer %d (%s): exactly one of schedule_id or user_id must be set",
+				i, layer.LayerName,
+			)
+		}
+
+		// UserID-only layers notify a fixed user directly without schedule resolution.
+		if layer.UserID != "" {
+			userID, err := uuid.Parse(layer.UserID)
+			if err != nil {
+				log.Printf("escalation layer %d (%s): invalid user_id %q: %v", i, layer.LayerName, layer.UserID, err)
+				continue
+			}
+
+			member, err := m.cfg.GetMemberByID(ctx, userID)
+			if err != nil {
+				log.Printf("escalation layer %d (%s): member %s not found: %v", i, layer.LayerName, userID, err)
+				continue
+			}
+			if member == nil {
+				log.Printf("escalation layer %d (%s): member %s not found", i, layer.LayerName, userID)
+				continue
+			}
+
+			steps = append(steps, EscalationStep{
+				User:               member,
+				NotifyAfterMinutes: layer.NotifyAfterMinutes,
+				LayerName:          layer.LayerName,
+			})
+			continue
+		}
+
+		// ScheduleID-based layers resolve through the configured schedule and override flow.
 		schedID, err := uuid.Parse(layer.ScheduleID)
 		if err != nil {
 			log.Printf("escalation layer %d: invalid schedule_id %q: %v", i, layer.ScheduleID, err)
 			continue
 		}
+
 		schedule, err := m.cfg.GetScheduleByID(ctx, schedID, teamID)
 		if err != nil {
 			log.Printf("escalation layer %d (%s): schedule not found: %v", i, layer.LayerName, err)
@@ -252,11 +312,13 @@ func (m *Manager) GetEscalationChain(ctx context.Context, teamID uuid.UUID) ([]E
 			log.Printf("escalation layer %d (%s): schedule %s not found", i, layer.LayerName, schedID)
 			continue
 		}
+
 		override, err := m.cfg.GetActiveOverrideForSchedule(ctx, schedule.ID, teamID, now)
 		if err != nil {
 			log.Printf("escalation layer %d (%s): override check failed: %v", i, layer.LayerName, err)
 			// Fall through to rotation — don't skip the layer entirely.
 		}
+
 		var memberID uuid.UUID
 		if override != nil {
 			memberID = override.UserID
@@ -272,11 +334,17 @@ func (m *Manager) GetEscalationChain(ctx context.Context, teamID uuid.UUID) ([]E
 			}
 			memberID = uid
 		}
+
 		member, err := m.cfg.GetMemberByID(ctx, memberID)
 		if err != nil {
 			log.Printf("escalation layer %d (%s): member %s not found: %v", i, layer.LayerName, memberID, err)
 			continue
 		}
+		if member == nil {
+			log.Printf("escalation layer %d (%s): member %s not found", i, layer.LayerName, memberID)
+			continue
+		}
+
 		steps = append(steps, EscalationStep{
 			User:               member,
 			NotifyAfterMinutes: layer.NotifyAfterMinutes,
@@ -361,8 +429,8 @@ func resolveLayered(raw []byte, t time.Time) (uuid.UUID, error) {
 		anchor = startOfWeek(t)
 	}
 
-	// Sort layers by order (assume already sorted; pick first active).
-	for _, layer := range rot.Layers {
+	// Evaluate layers in LayerOrder so the first active layer is the current on-call user.
+	for _, layer := range sortedLayers(rot.Layers) {
 		if len(layer.Members) == 0 {
 			continue
 		}
