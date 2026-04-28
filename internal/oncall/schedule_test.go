@@ -550,8 +550,8 @@ func TestWindowCovers_Simple(t *testing.T) {
 		t      time.Time
 		covers bool
 	}{
-		{time.Date(2025, 1, 6, 9, 0, 0, 0, time.UTC), true},   // Mon 09:00 exactly (inclusive)
-		{time.Date(2025, 1, 6, 12, 0, 0, 0, time.UTC), true},  // Mon 12:00
+		{time.Date(2025, 1, 6, 9, 0, 0, 0, time.UTC), true},    // Mon 09:00 exactly (inclusive)
+		{time.Date(2025, 1, 6, 12, 0, 0, 0, time.UTC), true},   // Mon 12:00
 		{time.Date(2025, 1, 10, 16, 59, 0, 0, time.UTC), true}, // Fri 16:59
 		{time.Date(2025, 1, 10, 17, 0, 0, 0, time.UTC), false}, // Fri 17:00 (exclusive)
 		{time.Date(2025, 1, 11, 10, 0, 0, 0, time.UTC), false}, // Sat
@@ -573,12 +573,12 @@ func TestWindowCovers_WrapAroundMidnight(t *testing.T) {
 		t      time.Time
 		covers bool
 	}{
-		{time.Date(2025, 1, 10, 22, 0, 0, 0, time.UTC), true},  // Fri 22:00
-		{time.Date(2025, 1, 11, 12, 0, 0, 0, time.UTC), true},  // Sat noon
-		{time.Date(2025, 1, 12, 3, 0, 0, 0, time.UTC), true},   // Sun 03:00
-		{time.Date(2025, 1, 6, 7, 0, 0, 0, time.UTC), true},    // Mon 07:00
-		{time.Date(2025, 1, 6, 9, 0, 0, 0, time.UTC), false},   // Mon 09:00 — outside
-		{time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC), false},  // Wed noon — outside
+		{time.Date(2025, 1, 10, 22, 0, 0, 0, time.UTC), true}, // Fri 22:00
+		{time.Date(2025, 1, 11, 12, 0, 0, 0, time.UTC), true}, // Sat noon
+		{time.Date(2025, 1, 12, 3, 0, 0, 0, time.UTC), true},  // Sun 03:00
+		{time.Date(2025, 1, 6, 7, 0, 0, 0, time.UTC), true},   // Mon 07:00
+		{time.Date(2025, 1, 6, 9, 0, 0, 0, time.UTC), false},  // Mon 09:00 — outside
+		{time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC), false}, // Wed noon — outside
 	}
 
 	for _, tt := range tests {
@@ -1167,6 +1167,35 @@ func TestManager_GetEscalationChain_BothIDsSet_Rejected(t *testing.T) {
 	_, err := m.GetEscalationChain(context.Background(), teamID)
 	if err == nil {
 		t.Error("expected error when both ScheduleID and UserID are set in the same layer — exactly one must be set")
+	}
+}
+
+// TestManager_GetEscalationChain_BothIDsEmpty_Rejected verifies that a layer
+// with neither ScheduleID nor UserID set is rejected — exactly one must be set.
+func TestManager_GetEscalationChain_BothIDsEmpty_Rejected(t *testing.T) {
+	teamID := uuid.New()
+
+	policyCfg, _ := json.Marshal(EscalationConfig{
+		Layers: []EscalationLayer{
+			{
+				NotifyAfterMinutes: 0,
+				LayerName:          "bad",
+			},
+		},
+	})
+
+	mock := &mockConfigStore{
+		escalationPolicy: &store.EscalationPolicy{
+			TeamID: teamID,
+			Config: policyCfg,
+		},
+	}
+
+	m := NewManager(mock)
+
+	_, err := m.GetEscalationChain(context.Background(), teamID)
+	if err == nil {
+		t.Fatal("expected validation error when neither schedule_id nor user_id is set")
 	}
 }
 
