@@ -8,6 +8,8 @@ Wachd receives alerts from your monitoring tools (Grafana, Datadog, Prometheus) 
 [![Go Version](https://img.shields.io/badge/go-1.24%2B-00ADD8.svg)](go.mod)
 [![Go Report Card](https://goreportcard.com/badge/github.com/wachd/wachd)](https://goreportcard.com/report/github.com/wachd/wachd)
 
+![Wachd demo — on-call check, alert fire, AI root cause analysis](docs/demo.gif)
+
 ---
 
 ## How It Works
