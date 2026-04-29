@@ -78,7 +78,7 @@ func (db *DB) UpsertUserNotificationRule(ctx context.Context, r *UserNotificatio
 	if r.ID == uuid.Nil {
 		r.ID = uuid.New()
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	r.CreatedAt = now
 	r.UpdatedAt = now
 
@@ -134,7 +134,7 @@ func (db *DB) DeleteUserNotificationRule(ctx context.Context, id, userID uuid.UU
 // QueuePendingNotification inserts a delayed notification into the queue.
 func (db *DB) QueuePendingNotification(ctx context.Context, p *PendingNotification) error {
 	p.ID = uuid.New()
-	p.CreatedAt = time.Now()
+	p.CreatedAt = time.Now().UTC()
 	_, err := db.pool.Exec(ctx, `
 		INSERT INTO pending_notifications
 			(id, incident_id, team_id, user_id, user_source, channel, scheduled_at, created_at)

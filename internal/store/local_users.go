@@ -188,7 +188,7 @@ func (db *DB) ResetFailedAttempts(ctx context.Context, id uuid.UUID) error {
 
 // RecordLocalLogin updates the last_login_at timestamp.
 func (db *DB) RecordLocalLogin(ctx context.Context, id uuid.UUID) error {
-	now := time.Now()
+	now := time.Now().UTC()
 	_, err := db.pool.Exec(ctx, `
 		UPDATE local_users SET last_login_at = $2, updated_at = NOW() WHERE id = $1
 	`, id, now)

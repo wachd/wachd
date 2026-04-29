@@ -51,6 +51,12 @@ func NewDB(databaseURL string) (*DB, error) {
 		config.ConnConfig.Password = pw
 	}
 
+	// Force the PostgreSQL session timezone to UTC so that SQL-side NOW() and
+	// DEFAULT NOW() write UTC regardless of the host machine's local timezone.
+	// This complements time.Now().UTC() on the Go side — both must be UTC to
+	// avoid skew on developer machines in non-UTC timezones (e.g. Norway UTC+2).
+	config.ConnConfig.RuntimeParams["TimeZone"] = "UTC"
+
 	// Set connection pool settings
 	config.MaxConns = 20
 	config.MinConns = 2
