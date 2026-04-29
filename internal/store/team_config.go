@@ -91,7 +91,7 @@ func (db *DB) UpsertTeamConfig(ctx context.Context, tc *TeamConfig) error {
 			updated_at                = EXCLUDED.updated_at
 	`
 
-	now := time.Now()
+	now := time.Now().UTC()
 	_, err := db.pool.Exec(ctx, query,
 		tc.TeamID,
 		tc.SlackWebhookURL,

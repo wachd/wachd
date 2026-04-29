@@ -35,7 +35,7 @@ func (db *DB) CreateIncident(ctx context.Context, incident *Incident) error {
 		)
 	`
 
-	now := time.Now()
+	now := time.Now().UTC()
 	incident.ID = uuid.New()
 	incident.CreatedAt = now
 	incident.UpdatedAt = now
@@ -165,7 +165,7 @@ func (db *DB) UpdateIncidentStatus(ctx context.Context, teamID, incidentID uuid.
 		SET status = $1, updated_at = $2
 		WHERE id = $3 AND team_id = $4
 	`
-	now := time.Now()
+	now := time.Now().UTC()
 	_, err := db.pool.Exec(ctx, query, status, now, incidentID, teamID)
 	if err != nil {
 		return fmt.Errorf("failed to update incident status: %w", err)
@@ -184,7 +184,7 @@ func (db *DB) AcknowledgeIncident(ctx context.Context, teamID, incidentID uuid.U
 			updated_at = $1
 		WHERE id = $3 AND team_id = $4
 	`
-	now := time.Now()
+	now := time.Now().UTC()
 	_, err := db.pool.Exec(ctx, query, now, userID, incidentID, teamID)
 	if err != nil {
 		return fmt.Errorf("failed to acknowledge incident: %w", err)
@@ -262,7 +262,7 @@ func (i *Incident) ToResponse() (*IncidentResponse, error) {
 // GetOpenIncidentsForEscalation returns open incidents that fired at least minAge ago.
 // Used by the worker's escalation loop to find candidates for the next escalation step.
 func (db *DB) GetOpenIncidentsForEscalation(ctx context.Context, minAge time.Duration) ([]*Incident, error) {
-	cutoff := time.Now().Add(-minAge)
+	cutoff := time.Now().UTC().Add(-minAge)
 	query := `
 		SELECT
 			id, team_id, title, message, severity, status, source,
@@ -318,7 +318,7 @@ func (db *DB) IncrementEscalationStep(ctx context.Context, teamID, incidentID uu
 		UPDATE incidents
 		SET escalation_step = escalation_step + 1, updated_at = $1
 		WHERE id = $2 AND team_id = $3 AND escalation_step = $4 AND status = 'open'
-	`, time.Now(), incidentID, teamID, fromStep)
+	`, time.Now().UTC(), incidentID, teamID, fromStep)
 	if err != nil {
 		return false, fmt.Errorf("failed to increment escalation step: %w", err)
 	}

@@ -40,7 +40,7 @@ func (db *DB) GetSystemConfig(ctx context.Context) (*SystemConfig, error) {
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &SystemConfig{AIBackend: "ollama", UpdatedAt: time.Now()}, nil
+			return &SystemConfig{AIBackend: "ollama", UpdatedAt: time.Now().UTC()}, nil
 		}
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (db *DB) UpsertSystemConfig(ctx context.Context, backend string, model *str
 			updated_by = EXCLUDED.updated_by
 		RETURNING ai_backend, ai_model, updated_at, updated_by
 	`
-	now := time.Now()
+	now := time.Now().UTC()
 	var sc SystemConfig
 	err := db.pool.QueryRow(ctx, query, backend, model, now, updatedBy).Scan(
 		&sc.AIBackend,
@@ -82,6 +82,6 @@ func (db *DB) SeedSystemConfig(ctx context.Context, backend string, model *strin
 		VALUES (1, $1, $2, $3)
 		ON CONFLICT (id) DO NOTHING
 	`
-	_, err := db.pool.Exec(ctx, query, backend, model, time.Now())
+	_, err := db.pool.Exec(ctx, query, backend, model, time.Now().UTC())
 	return err
 }
