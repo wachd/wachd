@@ -569,11 +569,21 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	secret := vars["secret"]
 
 	// Rate-limit per source IP — 20 burst, 1/s sustained.
-	ip := r.RemoteAddr
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		ip = strings.TrimSpace(strings.SplitN(fwd, ",", 2)[0])
-	} else if host, _, err := net.SplitHostPort(ip); err == nil {
-		ip = host
+	// Only trust X-Forwarded-For when the direct connection originates from a
+	// private/loopback address (in-cluster ingress/proxy). Trusting it
+	// unconditionally lets any client spoof arbitrary IPs to bypass the limiter.
+	remoteHost, _, splitErr := net.SplitHostPort(r.RemoteAddr)
+	if splitErr != nil {
+		remoteHost = r.RemoteAddr
+	}
+	var ip string
+	if remoteIP := net.ParseIP(remoteHost); remoteIP != nil && (remoteIP.IsLoopback() || remoteIP.IsPrivate()) {
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			ip = strings.TrimSpace(strings.SplitN(fwd, ",", 2)[0])
+		}
+	}
+	if ip == "" {
+		ip = remoteHost
 	}
 	if !s.webhookLimiter.allow(ip) {
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
@@ -620,7 +630,8 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read webhook payload
+	// Read webhook payload — limit to 1 MB to prevent memory exhaustion.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
@@ -1266,12 +1277,12 @@ func (s *Server) handleSnoozeIncident(w http.ResponseWriter, r *http.Request) {
 
 // teamConfigPublic is the API-safe view of TeamConfig.
 // It never exposes encrypted token values — only whether they are set.
+// WebhookSecret is intentionally omitted; use the rotate-secret endpoint to manage it.
 type teamConfigPublic struct {
-	TeamID             string   `json:"team_id"`
-	WebhookSecret      string   `json:"webhook_secret"`
-	SlackWebhookURL    *string  `json:"slack_webhook_url,omitempty"`
-	SlackChannel       *string  `json:"slack_channel,omitempty"`
-	GitHubTokenSet     bool     `json:"github_token_set"`
+	TeamID          string  `json:"team_id"`
+	SlackWebhookURL *string `json:"slack_webhook_url,omitempty"`
+	SlackChannel    *string `json:"slack_channel,omitempty"`
+	GitHubTokenSet  bool    `json:"github_token_set"`
 	GitHubRepos        []string `json:"github_repos,omitempty"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint,omitempty"`
 	LokiEndpoint       *string  `json:"loki_endpoint,omitempty"`
@@ -1294,14 +1305,8 @@ func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid team ID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTeamAccess(r, teamID) {
+	if !s.requireTeamAdmin(r, teamID) {
 		writeForbidden(w)
-		return
-	}
-
-	team, err := s.cfg.GetTeam(r.Context(), teamID)
-	if err != nil {
-		http.Error(w, "failed to load team", http.StatusInternalServerError)
 		return
 	}
 
@@ -1312,9 +1317,6 @@ func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pub := teamConfigPublic{TeamID: teamID.String()}
-	if team != nil {
-		pub.WebhookSecret = team.WebhookSecret
-	}
 	if cfg != nil {
 		pub.SlackWebhookURL = cfg.SlackWebhookURL
 		pub.SlackChannel = cfg.SlackChannel
@@ -1337,7 +1339,7 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid team ID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTeamAccess(r, teamID) {
+	if !s.requireTeamAdmin(r, teamID) {
 		writeForbidden(w)
 		return
 	}
@@ -1677,6 +1679,23 @@ func (s *Server) requireTeamAdmin(r *http.Request, teamID uuid.UUID) bool {
 	return sess.Roles[teamID.String()] == "admin"
 }
 
+// requireTeamResponder returns true for responders and admins. Use this for
+// self-service operations that viewers must not perform (e.g. creating overrides).
+func (s *Server) requireTeamResponder(r *http.Request, teamID uuid.UUID) bool {
+	if os.Getenv("AUTH_DISABLED") == "true" {
+		return true
+	}
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		return false
+	}
+	if sess.IsSuperAdmin {
+		return true
+	}
+	role := sess.Roles[teamID.String()]
+	return role == "responder" || role == "admin"
+}
+
 // callerID extracts the current user's UUID from the session for audit fields.
 func (s *Server) callerID(r *http.Request) uuid.UUID {
 	if os.Getenv("AUTH_DISABLED") == "true" {
@@ -1748,6 +1767,24 @@ func (s *Server) handleUpdateMember(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.Source != "local" && input.Source != "sso" {
 		http.Error(w, "source must be local or sso", http.StatusBadRequest)
+		return
+	}
+	// Verify the target user belongs to this team before modifying their phone.
+	members, err := s.cfg.GetTeamMembers(r.Context(), teamID)
+	if err != nil {
+		log.Printf("handleUpdateMember: get members: %v", err)
+		http.Error(w, "failed to verify team membership", http.StatusInternalServerError)
+		return
+	}
+	isMember := false
+	for _, m := range members {
+		if m.ID == userID {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		http.Error(w, "user is not a member of this team", http.StatusUnprocessableEntity)
 		return
 	}
 	if err := s.cfg.UpdateMemberPhone(r.Context(), userID, input.Source, input.Phone); err != nil {
@@ -1864,8 +1901,8 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid team ID", http.StatusBadRequest)
 		return
 	}
-	// responders and admins can create overrides for themselves/others
-	if !s.requireTeamAccess(r, teamID) {
+	// responders and admins can create overrides; viewers cannot
+	if !s.requireTeamResponder(r, teamID) {
 		writeForbidden(w)
 		return
 	}
@@ -1882,6 +1919,25 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 	userID, err := uuid.Parse(input.UserID)
 	if err != nil {
 		http.Error(w, "invalid user_id", http.StatusBadRequest)
+		return
+	}
+	// Verify the override target is a member of this team — prevents an admin
+	// from pointing an override at a user ID that belongs to a different team.
+	members, err := s.cfg.GetTeamMembers(r.Context(), teamID)
+	if err != nil {
+		log.Printf("handleCreateOverride: get members: %v", err)
+		http.Error(w, "failed to verify team membership", http.StatusInternalServerError)
+		return
+	}
+	isMember := false
+	for _, m := range members {
+		if m.ID == userID {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		http.Error(w, "user is not a member of this team", http.StatusUnprocessableEntity)
 		return
 	}
 	startAt, err := time.Parse(time.RFC3339, input.StartAt)
