@@ -659,3 +659,25 @@ func TestE2E_WebhookSecurity(t *testing.T) {
 		})
 	}
 }
+
+// TestE2E_GetIncident_NotFoundReturns404 verifies that requesting a
+// non-existent incident ID returns HTTP 404 instead of dereferencing a nil
+// incident.
+func TestE2E_GetIncident_NotFoundReturns404(t *testing.T) {
+	env := newE2EEnv(t)
+
+	missingID := uuid.New()
+
+	req := httptest.NewRequest(
+		"GET",
+		fmt.Sprintf("/api/v1/teams/%s/incidents/%s", env.kongTeam.ID, missingID),
+		nil,
+	)
+	req.AddCookie(env.kongCookie)
+
+	resp := env.do(req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("get missing incident: got %d, want 404\nbody: %s", resp.Code, resp.Body)
+	}
+}
