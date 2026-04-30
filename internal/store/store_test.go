@@ -19,7 +19,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
-
+	"time"
+	
 	"github.com/google/uuid"
 )
 
@@ -426,11 +427,11 @@ func TestDB_Incident_CRUD(t *testing.T) {
 
 	// Create incident
 	incident := &Incident{
-		TeamID:   team.ID,
-		Title:    "Test Alert",
-		Severity: "high",
-		Status:   "open",
-		Source:   "grafana",
+		TeamID:       team.ID,
+		Title:        "Test Alert",
+		Severity:     "high",
+		Status:       "open",
+		Source:       "grafana",
 		AlertPayload: []byte(`{"alertname":"TestAlert"}`),
 	}
 	if err := db.CreateIncident(ctx, incident); err != nil {
@@ -562,5 +563,47 @@ func TestDB_PasswordPolicy_UpdateNoFields(t *testing.T) {
 	}
 	if policy == nil {
 		t.Error("expected non-nil policy on no-op update")
+	}
+}
+
+// TestDB_CreateIncident_PreservesProvidedFiredAt verifies that CreateIncident
+// keeps a caller-provided FiredAt value instead of overwriting it with the
+// insert time.
+func TestDB_CreateIncident_PreservesProvidedFiredAt(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	wantFiredAt := time.Date(2025, 1, 15, 12, 34, 56, 0, time.UTC)
+
+	incident := &Incident{
+		TeamID:       team.ID,
+		Title:        "Provided fired_at",
+		Severity:     "high",
+		Status:       "open",
+		Source:       "grafana",
+		AlertPayload: []byte(`{"alertname":"TestAlert"}`),
+		FiredAt:      wantFiredAt,
+	}
+
+	if err := db.CreateIncident(ctx, incident); err != nil {
+		t.Fatalf("CreateIncident: %v", err)
+	}
+
+	got, err := db.GetIncident(ctx, team.ID, incident.ID)
+	if err != nil {
+		t.Fatalf("GetIncident: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected incident, got nil")
+	}
+
+	if !got.FiredAt.Equal(wantFiredAt) {
+		t.Fatalf("expected FiredAt %v, got %v", wantFiredAt, got.FiredAt)
 	}
 }
