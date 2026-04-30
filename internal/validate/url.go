@@ -15,14 +15,60 @@
 package validate
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
+	"time"
 )
 
+// privateNets lists CIDR ranges that must never be the target of an outbound request.
+var privateNets = func() []*net.IPNet {
+	cidrs := []string{
+		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"127.0.0.0/8", "169.254.0.0/16",
+		"::1/128", "fc00::/7", "fe80::/10",
+		"100.64.0.0/10", // Carrier-grade NAT
+		"224.0.0.0/4",   // Multicast
+		"240.0.0.0/4",   // Reserved
+	}
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, n, err := net.ParseCIDR(cidr)
+		if err == nil {
+			nets = append(nets, n)
+		}
+	}
+	return nets
+}()
+
+// resolveHost is the DNS lookup function used by EndpointURL. Tests may
+// override this variable to avoid real network calls.
+var resolveHost = func(ctx context.Context, host string) ([]string, error) {
+	return net.DefaultResolver.LookupHost(ctx, host)
+}
+
+// isPrivateIP returns true if ip falls within any private or reserved range.
+func isPrivateIP(ip net.IP) bool {
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	if ip.Equal(net.IPv4zero) || ip.Equal(net.IPv6unspecified) {
+		return true
+	}
+	for _, n := range privateNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // EndpointURL rejects URLs that could be used for SSRF attacks.
-// Only public http/https URLs are allowed — no private IP ranges, no localhost.
+// Only public http/https URLs are allowed. For hostnames, DNS is resolved at
+// validation time and every returned address is checked against
+// private/loopback/link-local/reserved ranges.
 func EndpointURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -32,48 +78,44 @@ func EndpointURL(rawURL string) error {
 		return fmt.Errorf("only http and https schemes are allowed")
 	}
 	host := u.Hostname()
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// DNS name — block known internal hostname patterns.
-		lower := strings.ToLower(host)
-		blocked := []string{
-			"localhost",
-			"localhost.localdomain",
-			"metadata",        // GCP/AWS metadata short name in some configs
-			"metadata.google",
-		}
-		for _, b := range blocked {
-			if lower == b {
-				return fmt.Errorf("private hostnames are not allowed")
-			}
-		}
-		if strings.HasSuffix(lower, ".local") ||
-			strings.HasSuffix(lower, ".internal") ||
-			strings.HasSuffix(lower, ".localdomain") {
-			return fmt.Errorf("private hostnames are not allowed")
+
+	// Literal IP — check directly.
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateIP(ip) {
+			return fmt.Errorf("private IP addresses are not allowed")
 		}
 		return nil
 	}
-	// Block 0.0.0.0 explicitly — maps to all interfaces (loopback on Linux).
-	if ip.Equal(net.IPv4zero) || ip.Equal(net.IPv6unspecified) {
-		return fmt.Errorf("private IP addresses are not allowed")
-	}
-	// Unwrap IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1).
-	if v4 := ip.To4(); v4 != nil {
-		ip = v4
-	}
-	// Block RFC 1918, loopback, link-local, and metadata service ranges.
-	privateRanges := []string{
-		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-		"127.0.0.0/8", "169.254.0.0/16", "::1/128", "fc00::/7",
-	}
-	for _, cidr := range privateRanges {
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
+
+	// DNS name — block known internal hostname patterns first (fast path).
+	lower := strings.ToLower(host)
+	for _, b := range []string{"localhost", "localhost.localdomain", "metadata", "metadata.google"} {
+		if lower == b {
+			return fmt.Errorf("private hostnames are not allowed")
 		}
-		if network.Contains(ip) {
-			return fmt.Errorf("private IP addresses are not allowed")
+	}
+	if strings.HasSuffix(lower, ".local") ||
+		strings.HasSuffix(lower, ".internal") ||
+		strings.HasSuffix(lower, ".localdomain") {
+		return fmt.Errorf("private hostnames are not allowed")
+	}
+
+	// Resolve the hostname and verify every returned address is public.
+	// A 3-second timeout prevents hanging on slow/unresponsive DNS.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addrs, err := resolveHost(ctx, host)
+	if err != nil {
+		// Unresolvable hostname — reject; we cannot verify it is safe.
+		return fmt.Errorf("could not resolve hostname")
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			return fmt.Errorf("unexpected address from DNS resolution")
+		}
+		if isPrivateIP(ip) {
+			return fmt.Errorf("hostname resolves to a private address")
 		}
 	}
 	return nil

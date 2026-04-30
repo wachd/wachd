@@ -59,12 +59,14 @@ import (
 // ── test harness ──────────────────────────────────────────────────────────────
 
 type e2eEnv struct {
-	db          *store.DB
-	router      *mux.Router
-	kongTeam    *store.Team
-	kafkaTeam   *store.Team
-	kongCookie  *http.Cookie // admin session scoped to Kong team only
-	kafkaCookie *http.Cookie // admin session scoped to Kafka team only
+	db                  *store.DB
+	router              *mux.Router
+	kongTeam            *store.Team
+	kafkaTeam           *store.Team
+	kongCookie          *http.Cookie // admin session scoped to Kong team only
+	kafkaCookie         *http.Cookie // admin session scoped to Kafka team only
+	kongResponderCookie *http.Cookie // responder session scoped to Kong team only
+	kongViewerCookie    *http.Cookie // viewer session scoped to Kong team only
 }
 
 // newE2EEnv spins up a full Server with real Postgres + Redis, creates two
@@ -136,18 +138,22 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	})
 
 	server := &Server{
-		db:            db,
-		queue:         q,
-		oncallManager: oncallMgr,
-		sessions:      sessions,
-		license:       lic,
-		enc:           enc,
+		cfg:            db,
+		db:             db,
+		queue:          q,
+		oncallManager:  oncallMgr,
+		sessions:       sessions,
+		license:        lic,
+		enc:            enc,
+		webhookLimiter: newWebhookIPLimiter(),
 	}
 
 	// Create per-team admin sessions. Sessions are stored in Redis and carry
 	// the Roles map directly — no DB user required for the e2e harness.
 	kongCookie := e2eSession(t, sessions, kongTeam.ID, "admin")
 	kafkaCookie := e2eSession(t, sessions, kafkaTeam.ID, "admin")
+	kongResponderCookie := e2eSession(t, sessions, kongTeam.ID, "responder")
+	kongViewerCookie := e2eSession(t, sessions, kongTeam.ID, "viewer")
 
 	// Build router — mirrors the relevant portion of main.go
 	router := mux.NewRouter()
@@ -166,14 +172,18 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	api.HandleFunc("/{teamId}/members", server.handleListMembers).Methods("GET")
 	api.HandleFunc("/{teamId}/config", server.handleGetTeamConfig).Methods("GET")
 	api.HandleFunc("/{teamId}/config", server.handleUpsertTeamConfig).Methods("PUT")
+	api.HandleFunc("/{teamId}/schedule/overrides", server.handleCreateOverride).Methods("POST")
+	api.HandleFunc("/{teamId}/members/{userId}", server.handleUpdateMember).Methods("PUT")
 
 	return &e2eEnv{
-		db:          db,
-		router:      router,
-		kongTeam:    kongTeam,
-		kafkaTeam:   kafkaTeam,
-		kongCookie:  kongCookie,
-		kafkaCookie: kafkaCookie,
+		db:                  db,
+		router:              router,
+		kongTeam:            kongTeam,
+		kafkaTeam:           kafkaTeam,
+		kongCookie:          kongCookie,
+		kafkaCookie:         kafkaCookie,
+		kongResponderCookie: kongResponderCookie,
+		kongViewerCookie:    kongViewerCookie,
 	}
 }
 
@@ -451,12 +461,12 @@ func TestE2E_TwoTeams_CrossTeamAccessIsForbidden(t *testing.T) {
 func TestE2E_TwoTeams_ConfigIsolation(t *testing.T) {
 	env := newE2EEnv(t)
 
-	// Kong admin sets Kong's Slack channel
+	// Kong admin sets Kong's Slack channel — no endpoint URLs, those trigger
+	// DNS validation which does not resolve test hostnames in CI.
 	req := httptest.NewRequest("PUT",
 		fmt.Sprintf("/api/v1/teams/%s/config", env.kongTeam.ID),
 		e2eBody(t, map[string]any{
-			"slack_channel":       "#kong-alerts",
-			"prometheus_endpoint": "http://prometheus.example.com:9090",
+			"slack_channel": "#kong-alerts",
 		}))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(env.kongCookie)
@@ -478,13 +488,10 @@ func TestE2E_TwoTeams_ConfigIsolation(t *testing.T) {
 	if cfg["slack_channel"] != "#kong-alerts" {
 		t.Errorf("kong config slack_channel: got %v, want #kong-alerts", cfg["slack_channel"])
 	}
-	if cfg["prometheus_endpoint"] != "http://prometheus.example.com:9090" {
-		t.Errorf("kong config prometheus_endpoint: got %v, want http://prometheus.example.com:9090",
-			cfg["prometheus_endpoint"])
-	}
-	// webhook_secret must be present so the UI can build the full webhook URL
-	if cfg["webhook_secret"] == "" || cfg["webhook_secret"] == nil {
-		t.Error("kong config response missing webhook_secret")
+	// webhook_secret must NOT be present in the config response — it is
+	// sensitive and returned only via the dedicated rotate-secret endpoint.
+	if cfg["webhook_secret"] != nil && cfg["webhook_secret"] != "" {
+		t.Error("kong config response must not include webhook_secret")
 	}
 
 	// Kafka admin cannot modify Kong's config
@@ -513,7 +520,6 @@ func TestE2E_TwoTeams_ConfigIsolation(t *testing.T) {
 		fmt.Sprintf("/api/v1/teams/%s/config", env.kafkaTeam.ID),
 		e2eBody(t, map[string]any{
 			"slack_channel": "#kafka-alerts",
-			"loki_endpoint": "http://loki.example.com:3100",
 		}))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(env.kafkaCookie)
@@ -618,13 +624,13 @@ func TestE2E_WebhookSecurity(t *testing.T) {
 			name:     "kong team ID with kafka secret",
 			teamID:   env.kongTeam.ID.String(),
 			secret:   env.kafkaTeam.WebhookSecret,
-			wantCode: http.StatusForbidden,
+			wantCode: http.StatusUnauthorized,
 		},
 		{
 			name:     "kafka team ID with kong secret",
 			teamID:   env.kafkaTeam.ID.String(),
 			secret:   env.kongTeam.WebhookSecret,
-			wantCode: http.StatusForbidden,
+			wantCode: http.StatusUnauthorized,
 		},
 		{
 			name:     "completely invalid secret",
@@ -657,5 +663,112 @@ func TestE2E_WebhookSecurity(t *testing.T) {
 				t.Errorf("got %d, want %d\nbody: %s", resp.Code, tc.wantCode, resp.Body)
 			}
 		})
+	}
+}
+
+// TestE2E_Override_ViewerIsDenied verifies that a team viewer cannot create
+// on-call overrides — only responders and admins are permitted.
+func TestE2E_Override_ViewerIsDenied(t *testing.T) {
+	env := newE2EEnv(t)
+
+	req := httptest.NewRequest("POST",
+		fmt.Sprintf("/api/v1/teams/%s/schedule/overrides", env.kongTeam.ID),
+		e2eBody(t, map[string]any{
+			"user_id":  uuid.New().String(),
+			"start_at": "2026-05-01T00:00:00Z",
+			"end_at":   "2026-05-08T00:00:00Z",
+		}))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(env.kongViewerCookie)
+	resp := env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Errorf("viewer create override: got %d, want 403", resp.Code)
+	}
+}
+// admin role — a responder must receive 403 on both GET and PUT.
+func TestE2E_Config_RequiresAdmin(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// Responder cannot read team config
+	req := httptest.NewRequest("GET",
+		fmt.Sprintf("/api/v1/teams/%s/config", env.kongTeam.ID), nil)
+	req.AddCookie(env.kongResponderCookie)
+	resp := env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Errorf("responder GET config: got %d, want 403", resp.Code)
+	}
+
+	// Responder cannot write team config
+	req = httptest.NewRequest("PUT",
+		fmt.Sprintf("/api/v1/teams/%s/config", env.kongTeam.ID),
+		e2eBody(t, map[string]any{"slack_channel": "#hacked"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(env.kongResponderCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Errorf("responder PUT config: got %d, want 403", resp.Code)
+	}
+}
+
+// TestE2E_Webhook_BodyTooLarge verifies that a webhook payload over 1 MB is
+// rejected with 400 and does not exhaust server memory.
+func TestE2E_Webhook_BodyTooLarge(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// Build a body just over the 1 MB limit
+	oversized := bytes.Repeat([]byte("x"), 1<<20+1)
+	req := httptest.NewRequest("POST",
+		fmt.Sprintf("/api/v1/webhook/%s/%s", env.kongTeam.ID, env.kongTeam.WebhookSecret),
+		bytes.NewBuffer(oversized))
+	req.Header.Set("Content-Type", "application/json")
+	resp := env.do(req)
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("oversized body: got %d, want 400", resp.Code)
+	}
+}
+
+// TestE2E_Override_UserMustBeTeamMember verifies that creating an override for
+// a user who does not belong to the team is rejected with 422.
+func TestE2E_Override_UserMustBeTeamMember(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// Use a random UUID that is not a member of kong team
+	outsiderID := uuid.New()
+
+	req := httptest.NewRequest("POST",
+		fmt.Sprintf("/api/v1/teams/%s/schedule/overrides", env.kongTeam.ID),
+		e2eBody(t, map[string]any{
+			"user_id":  outsiderID.String(),
+			"start_at": "2026-05-01T00:00:00Z",
+			"end_at":   "2026-05-08T00:00:00Z",
+			"reason":   "test",
+		}))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(env.kongCookie)
+	resp := env.do(req)
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Errorf("override for non-member: got %d, want 422", resp.Code)
+	}
+}
+
+// TestE2E_UpdateMember_UserMustBeTeamMember verifies that updating the phone
+// number of a user outside the team is rejected with 422.
+func TestE2E_UpdateMember_UserMustBeTeamMember(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// Use a random UUID that is not a member of kong team
+	outsiderID := uuid.New()
+
+	req := httptest.NewRequest("PUT",
+		fmt.Sprintf("/api/v1/teams/%s/members/%s", env.kongTeam.ID, outsiderID),
+		e2eBody(t, map[string]any{
+			"source": "local",
+			"phone":  "+4712345678",
+		}))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(env.kongCookie)
+	resp := env.do(req)
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Errorf("phone update for non-member: got %d, want 422", resp.Code)
 	}
 }
