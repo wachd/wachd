@@ -11,7 +11,7 @@ func TestEndpointURL_Allowed(t *testing.T) {
 	// the IP-range checking and hostname-pattern blocking, not DNS itself.
 	orig := resolveHost
 	resolveHost = func(_ context.Context, _ string) ([]string, error) {
-		return []string{"203.0.113.1"}, nil // TEST-NET-3 — documentation range, public
+		return []string{"8.8.8.8"}, nil // Google Public DNS — genuinely public, not in any reserved range
 	}
 	defer func() { resolveHost = orig }()
 

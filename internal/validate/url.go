@@ -26,12 +26,24 @@ import (
 // privateNets lists CIDR ranges that must never be the target of an outbound request.
 var privateNets = func() []*net.IPNet {
 	cidrs := []string{
+		// RFC 1918 — private
 		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		// Loopback and link-local
 		"127.0.0.0/8", "169.254.0.0/16",
+		// IPv6 loopback, ULA, link-local
 		"::1/128", "fc00::/7", "fe80::/10",
-		"100.64.0.0/10", // Carrier-grade NAT
-		"224.0.0.0/4",   // Multicast
-		"240.0.0.0/4",   // Reserved
+		// Carrier-grade NAT (RFC 6598)
+		"100.64.0.0/10",
+		// Multicast and reserved
+		"224.0.0.0/4", "240.0.0.0/4",
+		// IANA special-purpose (protocol assignments, RFC 5736)
+		"192.0.0.0/24",
+		// Benchmarking (RFC 2544)
+		"198.18.0.0/15",
+		// RFC 5737 documentation ranges (TEST-NET-1/2/3)
+		"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24",
+		// IPv6 documentation (RFC 3849)
+		"2001:db8::/32",
 	}
 	nets := make([]*net.IPNet, 0, len(cidrs))
 	for _, cidr := range cidrs {
