@@ -37,7 +37,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/time/rate"
 	"github.com/wachd/wachd/internal/auth"
 	"github.com/wachd/wachd/internal/license"
 	"github.com/wachd/wachd/internal/notify"
@@ -45,6 +44,7 @@ import (
 	"github.com/wachd/wachd/internal/queue"
 	"github.com/wachd/wachd/internal/store"
 	"github.com/wachd/wachd/internal/validate"
+	"golang.org/x/time/rate"
 )
 
 type Server struct {
@@ -115,16 +115,16 @@ type GrafanaWebhook struct {
 // DatadogWebhook represents a Datadog webhook alert payload.
 // See: https://docs.datadoghq.com/integrations/webhooks/
 type DatadogWebhook struct {
-	ID               string `json:"id"`
-	Title            string `json:"title"`
-	Body             string `json:"body"`
-	AlertType        string `json:"alert_type"`        // error | warning | info | success
-	AlertTransition  string `json:"alert_transition"`  // Triggered | Recovered | Re-Triggered | Resolved
-	Priority         string `json:"priority"`          // normal | low
-	Hostname         string `json:"hostname"`
-	Tags             string `json:"tags"`
-	OrgID            int64  `json:"org_id"`
-	AlertID          int64  `json:"alert_id"`
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Body            string `json:"body"`
+	AlertType       string `json:"alert_type"`       // error | warning | info | success
+	AlertTransition string `json:"alert_transition"` // Triggered | Recovered | Re-Triggered | Resolved
+	Priority        string `json:"priority"`         // normal | low
+	Hostname        string `json:"hostname"`
+	Tags            string `json:"tags"`
+	OrgID           int64  `json:"org_id"`
+	AlertID         int64  `json:"alert_id"`
 }
 
 // parseWebhookPayload detects the source format and extracts a normalised
@@ -660,7 +660,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "accepted",
+		"status":      "accepted",
 		"incident_id": incident.ID,
 	})
 }
@@ -728,6 +728,10 @@ func (s *Server) handleGetIncident(w http.ResponseWriter, r *http.Request) {
 	incident, err := s.db.GetIncident(r.Context(), teamID, incidentID)
 	if err != nil {
 		log.Printf("Failed to get incident: %v", err)
+		http.Error(w, "Failed to get incident", http.StatusInternalServerError)
+		return
+	}
+	if incident == nil {
 		http.Error(w, "Incident not found", http.StatusNotFound)
 		return
 	}
@@ -1281,7 +1285,7 @@ type teamConfigPublic struct {
 type teamConfigInput struct {
 	SlackWebhookURL    *string  `json:"slack_webhook_url"`
 	SlackChannel       *string  `json:"slack_channel"`
-	GitHubToken        string   `json:"github_token"`  // plaintext; encrypted before storing
+	GitHubToken        string   `json:"github_token"` // plaintext; encrypted before storing
 	GitHubRepos        []string `json:"github_repos"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint"`
 	LokiEndpoint       *string  `json:"loki_endpoint"`
@@ -2016,8 +2020,8 @@ func bootstrapAdmin(ctx context.Context, db *store.DB) error {
 		"admin@wachd.local",
 		"Wachd Admin",
 		hash,
-		true,  // isSuperAdmin
-		true,  // forcePasswordChange — must change on first login
+		true, // isSuperAdmin
+		true, // forcePasswordChange — must change on first login
 	)
 	if err != nil {
 		return fmt.Errorf("create bootstrap admin: %w", err)
@@ -2026,8 +2030,8 @@ func bootstrapAdmin(ctx context.Context, db *store.DB) error {
 	log.Println("╔════════════════════════════════════════════════╗")
 	log.Println("║      WACHD — BOOTSTRAP ADMIN CREATED          ║")
 	log.Println("╠════════════════════════════════════════════════╣")
-	log.Printf( "║  Username: %-35s║", "wachd_admin")
-	log.Printf( "║  Password: %-35s║", password)
+	log.Printf("║  Username: %-35s║", "wachd_admin")
+	log.Printf("║  Password: %-35s║", password)
 	log.Println("╠════════════════════════════════════════════════╣")
 	log.Println("║  ⚠  Change this password immediately!         ║")
 	log.Println("║  POST /auth/local/login  (then /change-password)║")
@@ -2039,11 +2043,11 @@ func bootstrapAdmin(ctx context.Context, db *store.DB) error {
 // generateAdminPassword returns a random 16-character password that satisfies
 // the default policy (upper, lower, digit, special).
 func generateAdminPassword() (string, error) {
-	const upper   = "ABCDEFGHJKLMNPQRSTUVWXYZ"
-	const lower   = "abcdefghjkmnpqrstuvwxyz"
-	const digits  = "23456789"
+	const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+	const lower = "abcdefghjkmnpqrstuvwxyz"
+	const digits = "23456789"
 	const special = "!@#$%^&*"
-	const all     = upper + lower + digits + special
+	const all = upper + lower + digits + special
 
 	// Guarantee at least one of each required class
 	pick := func(charset string) (byte, error) {
@@ -2152,12 +2156,12 @@ func bootstrapFirstTeam(db *store.DB) error {
 	log.Println("╔══════════════════════════════════════════════════════╗")
 	log.Println("║              WACHD — FIRST RUN SETUP                ║")
 	log.Println("╠══════════════════════════════════════════════════════╣")
-	log.Printf( "║  Team ID:       %-36s  ║", team.ID)
-	log.Printf( "║  Webhook secret: %-35s  ║", secret)
+	log.Printf("║  Team ID:       %-36s  ║", team.ID)
+	log.Printf("║  Webhook secret: %-35s  ║", secret)
 	log.Println("╠══════════════════════════════════════════════════════╣")
 	log.Println("║  Send alerts to:                                     ║")
-	log.Printf( "║  POST /api/v1/webhook/%s/  ║", team.ID)
-	log.Printf( "║  Header or path secret: %-28s  ║", secret)
+	log.Printf("║  POST /api/v1/webhook/%s/  ║", team.ID)
+	log.Printf("║  Header or path secret: %-28s  ║", secret)
 	log.Println("╚══════════════════════════════════════════════════════╝")
 
 	return nil
