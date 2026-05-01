@@ -1,10 +1,20 @@
 package validate
 
 import (
+	"context"
 	"testing"
 )
 
 func TestEndpointURL_Allowed(t *testing.T) {
+	// Stub DNS to return a known public IP so tests are not network-dependent.
+	// The real resolver is used in production; the security logic under test is
+	// the IP-range checking and hostname-pattern blocking, not DNS itself.
+	orig := resolveHost
+	resolveHost = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"8.8.8.8"}, nil // Google Public DNS — genuinely public, not in any reserved range
+	}
+	defer func() { resolveHost = orig }()
+
 	cases := []string{
 		"https://prometheus.example.com",
 		"http://grafana.example.com:3000",
