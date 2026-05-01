@@ -36,10 +36,13 @@ func (db *DB) CreateIncident(ctx context.Context, incident *Incident) error {
 	`
 
 	now := time.Now().UTC()
+
 	incident.ID = uuid.New()
 	incident.CreatedAt = now
 	incident.UpdatedAt = now
-	incident.FiredAt = now
+	if incident.FiredAt.IsZero() {
+		incident.FiredAt = now
+	}
 
 	_, err := db.pool.Exec(ctx, query,
 		incident.ID,
