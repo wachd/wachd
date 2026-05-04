@@ -40,7 +40,7 @@ func testKeypair(t *testing.T) (pubHex string, priv ed25519.PrivateKey) {
 // signJWT builds and signs a minimal license JWT with the given claims.
 func signJWT(t *testing.T, priv ed25519.PrivateKey, claims jwtClaims) string {
 	t.Helper()
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","typ":"JWT"}`))
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","typ":"JWT","kid":"v1"}`))
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		t.Fatalf("marshal claims: %v", err)
@@ -56,6 +56,7 @@ func validClaims() jwtClaims {
 	return jwtClaims{
 		Issuer:       "wachd-license",
 		Subject:      "cust_test_001",
+		JTI:          "a1b2c3d4-0000-4000-8000-000000000001",
 		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour).Unix(),
 		Tier:         "smb",
 		MaxTeams:     10,
@@ -337,6 +338,69 @@ func TestLoad_ZeroLimits_ReturnsOSSWithError(t *testing.T) {
 	lic, err := LoadWithKey(token, pubHex)
 	if err == nil {
 		t.Error("expected error for zero MaxTeams, got nil")
+	}
+	if lic.Tier != TierOpenSource {
+		t.Errorf("expected OSS fallback, got %q", lic.Tier)
+	}
+}
+
+// ── Load: missing jti ─────────────────────────────────────────────────────────
+
+func TestLoad_MissingJTI_ReturnsOSSWithError(t *testing.T) {
+	pubHex, priv := testKeypair(t)
+	c := validClaims()
+	c.JTI = ""
+	token := signJWT(t, priv, c)
+
+	lic, err := LoadWithKey(token, pubHex)
+	if err == nil {
+		t.Error("expected error for missing jti, got nil")
+	}
+	if lic.Tier != TierOpenSource {
+		t.Errorf("expected OSS fallback, got %q", lic.Tier)
+	}
+}
+
+// ── Load: missing kid in header ───────────────────────────────────────────────
+
+func TestLoad_MissingKID_ReturnsOSSWithError(t *testing.T) {
+	pubHex, priv := testKeypair(t)
+	c := validClaims()
+
+	// Build a token with no kid in the header.
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","typ":"JWT"}`))
+	payload, _ := json.Marshal(c)
+	payloadB64 := base64.RawURLEncoding.EncodeToString(payload)
+	msg := header + "." + payloadB64
+	sig := ed25519.Sign(priv, []byte(msg))
+	token := msg + "." + base64.RawURLEncoding.EncodeToString(sig)
+
+	lic, err := LoadWithKey(token, pubHex)
+	if err == nil {
+		t.Error("expected error for missing kid, got nil")
+	}
+	if lic.Tier != TierOpenSource {
+		t.Errorf("expected OSS fallback, got %q", lic.Tier)
+	}
+}
+
+// ── Load: unknown kid ─────────────────────────────────────────────────────────
+
+func TestLoad_UnknownKID_ReturnsOSSWithError(t *testing.T) {
+	pubHex, priv := testKeypair(t)
+	c := validClaims()
+
+	// Build a token with kid "v99" which is not in the key map.
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","typ":"JWT","kid":"v99"}`))
+	payload, _ := json.Marshal(c)
+	payloadB64 := base64.RawURLEncoding.EncodeToString(payload)
+	msg := header + "." + payloadB64
+	sig := ed25519.Sign(priv, []byte(msg))
+	token := msg + "." + base64.RawURLEncoding.EncodeToString(sig)
+
+	lic, err := LoadWithKey(token, pubHex)
+	if err == nil {
+		t.Error("expected error for unknown kid, got nil")
 	}
 	if lic.Tier != TierOpenSource {
 		t.Errorf("expected OSS fallback, got %q", lic.Tier)

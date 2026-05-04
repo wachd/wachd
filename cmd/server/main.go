@@ -20,6 +20,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -277,6 +278,15 @@ func main() {
 		log.Printf("✓ License: %s tier — customer: %s", lic.Tier, lic.CustomerName)
 		if lic.IsGracePeriod {
 			log.Printf("⚠ License is in grace period — expires %s — renew at wachd.io", lic.ExpiresAt.Format("2006-01-02"))
+		}
+		// Revocation check — fails open on network errors so air-gapped deployments
+		// are never blocked. Only drops to OSS when the endpoint explicitly revokes
+		// this JTI with a valid Ed25519 signature.
+		if revErr := license.CheckRevocation(context.Background(), lic.JTI); errors.Is(revErr, license.ErrRevoked) {
+			log.Printf("⚠ License revoked — running under OSS limits: %v", revErr)
+			lic = license.OSS()
+		} else if revErr != nil {
+			log.Printf("⚠ Revocation check inconclusive (%v) — proceeding with existing license", revErr)
 		}
 	} else {
 		log.Printf("✓ License: open-source tier (maxTeams=%d maxUsers=%d maxAlerts/month=%d)",

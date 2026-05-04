@@ -58,12 +58,14 @@ const (
 // drops back to OSS limits. Gives customers time to renew without an outage.
 const gracePeriod = 7 * 24 * time.Hour
 
-// embeddedPublicKey is the hex-encoded Ed25519 public key used to verify all
-// license JWTs. Rotate by generating a new keypair in the private licensing
-// repo, updating this constant, and releasing a new binary.
+// publicKeys maps key IDs (kid) to their hex-encoded Ed25519 public keys.
+// To rotate: generate a new keypair in wachd.ee, add it here as "v2", keep
+// "v1" until all v1-signed licenses have expired, then remove "v1".
 //
-// Corresponding private key: stored in wachd/wachd-licensing (private repo).
-const embeddedPublicKey = "472c48133edeaae3b87b321a096dbaa3e0bd5713833c40331bc559f2d3594a6f"
+// Corresponding private keys: stored in wachd.ee (private repo).
+var publicKeys = map[string]string{
+	"v1": "472c48133edeaae3b87b321a096dbaa3e0bd5713833c40331bc559f2d3594a6f",
+}
 
 // License holds the decoded, verified limits for this deployment.
 // All callers should use the accessor methods rather than reading fields directly.
@@ -73,6 +75,7 @@ type License struct {
 	MaxUsers       int
 	MaxAlertsMonth int
 	CustomerName   string
+	JTI            string // unique license ID — used for revocation checks
 	ExpiresAt      time.Time
 	IsGracePeriod  bool
 }
@@ -88,28 +91,29 @@ func OSS() *License {
 	}
 }
 
-// Load parses and verifies a license key string.
+// Load parses and verifies a license key string using the embedded public keys.
 //
 //   - Empty string  → returns OSS(), nil (no key configured is valid)
+//   - Unknown kid   → returns OSS(), non-nil error
 //   - Invalid key   → returns OSS(), non-nil error (caller should log a warning)
 //   - Expired key within grace period → returns paid license, IsGracePeriod=true
 //   - Expired key beyond grace period → returns OSS(), non-nil error
 func Load(keyStr string) (*License, error) {
-	return loadWithKey(keyStr, embeddedPublicKey)
+	return loadWithKeys(keyStr, publicKeys)
 }
 
-// LoadWithKey is like Load but uses the given public key hex instead of the
-// embedded production key. Only intended for use in tests.
+// LoadWithKey is like Load but uses a single public key hex instead of the
+// embedded production keys. Only intended for use in tests.
 func LoadWithKey(keyStr, publicKeyHex string) (*License, error) {
-	return loadWithKey(keyStr, publicKeyHex)
+	return loadWithKeys(keyStr, map[string]string{"v1": publicKeyHex})
 }
 
-func loadWithKey(keyStr, publicKeyHex string) (*License, error) {
+func loadWithKeys(keyStr string, keys map[string]string) (*License, error) {
 	if strings.TrimSpace(keyStr) == "" {
 		return OSS(), nil
 	}
 
-	c, err := verifyAndDecode(keyStr, publicKeyHex)
+	c, err := verifyAndDecode(keyStr, keys)
 	if err != nil {
 		return OSS(), err
 	}
@@ -133,6 +137,9 @@ func loadWithKey(keyStr, publicKeyHex string) (*License, error) {
 	if c.MaxTeams <= 0 || c.MaxUsers <= 0 || c.MaxAlerts <= 0 {
 		return OSS(), errors.New("license payload contains zero or negative limits")
 	}
+	if c.JTI == "" {
+		return OSS(), errors.New("license payload missing jti claim")
+	}
 
 	return &License{
 		Tier:           tier,
@@ -140,6 +147,7 @@ func loadWithKey(keyStr, publicKeyHex string) (*License, error) {
 		MaxUsers:       c.MaxUsers,
 		MaxAlertsMonth: c.MaxAlerts,
 		CustomerName:   c.CustomerName,
+		JTI:            c.JTI,
 		ExpiresAt:      exp,
 		IsGracePeriod:  grace,
 	}, nil
@@ -161,6 +169,7 @@ func (l *License) IsEnterprise() bool {
 type jwtClaims struct {
 	Issuer       string `json:"iss"`
 	Subject      string `json:"sub"` // customer ID
+	JTI          string `json:"jti"` // unique license ID — revocation handle
 	ExpiresAt    int64  `json:"exp"`
 	Tier         string `json:"tier"`
 	MaxTeams     int    `json:"max_teams"`
@@ -169,15 +178,38 @@ type jwtClaims struct {
 	CustomerName string `json:"customer_name"`
 }
 
+// jwtHeader is used only to extract the kid field for key lookup.
+type jwtHeader struct {
+	KID string `json:"kid"`
+}
+
 // verifyAndDecode verifies the Ed25519 signature and decodes the JWT payload.
+// It selects the public key by reading the kid field from the JWT header.
 // It does NOT check expiry — that is the caller's responsibility.
-func verifyAndDecode(token, publicKeyHex string) (*jwtClaims, error) {
+func verifyAndDecode(token string, keys map[string]string) (*jwtClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("malformed license key: expected header.payload.signature")
 	}
 
-	pubKeyBytes, err := hex.DecodeString(publicKeyHex)
+	rawHeader, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("decode license header: %w", err)
+	}
+	var hdr jwtHeader
+	if err := json.Unmarshal(rawHeader, &hdr); err != nil {
+		return nil, fmt.Errorf("parse license header: %w", err)
+	}
+	if hdr.KID == "" {
+		return nil, errors.New("license header missing kid field")
+	}
+
+	pubKeyHex, ok := keys[hdr.KID]
+	if !ok {
+		return nil, fmt.Errorf("unknown key id %q — binary may need upgrading", hdr.KID)
+	}
+
+	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil || len(pubKeyBytes) != ed25519.PublicKeySize {
 		return nil, errors.New("binary has an invalid embedded public key — please report this")
 	}
