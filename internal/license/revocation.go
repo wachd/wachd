@@ -99,7 +99,7 @@ func checkRevocation(ctx context.Context, jti, endpoint string, keys map[string]
 		// Unreachable — air-gapped or transient network issue. Proceed.
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		// Unexpected status — don't block on endpoint issues.
