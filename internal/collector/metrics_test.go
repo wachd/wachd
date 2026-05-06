@@ -87,7 +87,7 @@ func TestFetchMetricHistory_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, err := NewMetricsCollector(srv.URL)
+	c, err := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	if err != nil {
 		t.Fatalf("NewMetricsCollector: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestFetchMetricHistory_MultipleStreams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	now := time.Now()
 	points, err := c.FetchMetricHistory(context.Background(), "q", now.Add(-time.Hour), now, time.Minute)
 	if err != nil {
@@ -153,7 +153,7 @@ func TestFetchMetricHistory_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	now := time.Now()
 	_, err := c.FetchMetricHistory(context.Background(), "q", now.Add(-time.Hour), now, time.Minute)
 	if err == nil {
@@ -170,7 +170,7 @@ func TestFetchMetricHistory_UnexpectedResultType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	now := time.Now()
 	_, err := c.FetchMetricHistory(context.Background(), "q", now.Add(-time.Hour), now, time.Minute)
 	if err == nil {
@@ -192,7 +192,7 @@ func TestFetchMetricHistory_EmptyMatrix(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	now := time.Now()
 	points, err := c.FetchMetricHistory(context.Background(), "q", now.Add(-time.Hour), now, time.Minute)
 	if err != nil {
@@ -213,7 +213,7 @@ func TestFetchCurrentValue_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	val, labels, err := c.FetchCurrentValue(context.Background(), "test_metric")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -240,7 +240,7 @@ func TestFetchCurrentValue_EmptyVector(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	_, _, err := c.FetchCurrentValue(context.Background(), "empty_metric")
 	if err == nil {
 		t.Error("expected error for empty vector result")
@@ -253,7 +253,7 @@ func TestFetchCurrentValue_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	_, _, err := c.FetchCurrentValue(context.Background(), "q")
 	if err == nil {
 		t.Error("expected error for server 500")
@@ -269,7 +269,7 @@ func TestFetchCurrentValue_UnexpectedResultType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	_, _, err := c.FetchCurrentValue(context.Background(), "q")
 	if err == nil {
 		t.Error("expected error for non-vector result type")
@@ -292,7 +292,7 @@ func TestFetchErrorRate_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	points, err := c.FetchErrorRate(context.Background(), "checkout-api", 5*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -311,7 +311,7 @@ func TestFetchErrorRate_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewMetricsCollector(srv.URL)
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
 	_, err := c.FetchErrorRate(context.Background(), "api", time.Minute)
 	if err == nil {
 		t.Error("expected error for server error")

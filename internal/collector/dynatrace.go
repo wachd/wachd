@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/wachd/wachd/internal/safehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -38,22 +39,30 @@ type DynatraceCollector struct {
 
 // DytraceProblem represents a Dynatrace problem/anomaly.
 type DytraceProblem struct {
-	ID           string    `json:"problemId"`
-	Title        string    `json:"title"`
-	Status       string    `json:"status"` // OPEN | CLOSED
-	Severity     string    `json:"severityLevel"`
-	StartTime    time.Time `json:"startTime"`
-	AffectedEntities []string `json:"affectedEntityNames"`
+	ID               string    `json:"problemId"`
+	Title            string    `json:"title"`
+	Status           string    `json:"status"` // OPEN | CLOSED
+	Severity         string    `json:"severityLevel"`
+	StartTime        time.Time `json:"startTime"`
+	AffectedEntities []string  `json:"affectedEntityNames"`
 }
 
 // NewDynatraceCollector creates a Dynatrace collector.
 // endpoint: your environment URL, e.g. https://abc12345.live.dynatrace.com
 // token: API token with problems.read, logs.read, metrics.read, entities.read
 func NewDynatraceCollector(endpoint, token string) *DynatraceCollector {
+	return newDynatraceCollectorWithClient(endpoint, token, safehttp.CollectorClient(30*time.Second))
+}
+
+func newDynatraceCollectorWithClient(endpoint, token string, client *http.Client) *DynatraceCollector {
+	if client == nil {
+		client = safehttp.CollectorClient(30 * time.Second)
+	}
+
 	return &DynatraceCollector{
 		endpoint: endpoint,
 		token:    token,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		client:   client,
 	}
 }
 
