@@ -7,6 +7,7 @@ Wachd receives alerts from your monitoring tools (Grafana, Datadog, Prometheus) 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/go-1.24%2B-00ADD8.svg)](go.mod)
 [![Go Report Card](https://goreportcard.com/badge/github.com/wachd/wachd)](https://goreportcard.com/report/github.com/wachd/wachd)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XAgXgnqxa)
 
 ![Wachd demo — on-call check, alert fire, AI root cause analysis](docs/demo.gif)
 
@@ -435,6 +436,16 @@ If you test a scenario not listed above, please open an issue or PR to update th
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, proposing features, and submitting pull requests.
+
+---
+
+## Community
+
+Questions, feedback, or just want to follow the build?
+
+- **Discord:** [discord.gg/XAgXgnqxa](https://discord.gg/XAgXgnqxa)
+- **GitHub Issues:** [github.com/wachd/wachd/issues](https://github.com/wachd/wachd/issues)
+- **X:** [@Wachd_io](https://x.com/Wachd_io)
 
 ---
 
