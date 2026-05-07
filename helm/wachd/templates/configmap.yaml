@@ -67,6 +67,14 @@ data:
   AUTH_DISABLED: "true"
   {{- end }}
 
+  # Trusted proxy CIDRs — controls which peers are allowed to set X-Forwarded-For
+  # on the webhook rate limiter. Empty means ignore XFF entirely (safe default).
+  {{- if .Values.ingress.trustedProxyCIDRs }}
+  TRUSTED_PROXY_CIDRS: {{ .Values.ingress.trustedProxyCIDRs | quote }}
+  {{- else }}
+  TRUSTED_PROXY_CIDRS: ""
+  {{- end }}
+
   # Group mappings (bootstrapped on server startup)
   {{- range $i, $m := .Values.auth.groupMappings }}
   GROUP_MAPPING_{{ $i }}_GROUP_ID: {{ $m.groupId | quote }}

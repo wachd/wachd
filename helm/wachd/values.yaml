@@ -365,6 +365,15 @@ ingress:
       hosts:
         - wachd.example.com
 
+  # Trusted proxy CIDRs for X-Forwarded-For handling on the webhook rate limiter.
+  # Set this to the CIDR(s) of your ingress controller or load balancer so the
+  # rate limiter uses the real client IP instead of the proxy IP.
+  # Leave empty to ignore X-Forwarded-For entirely (safe default).
+  # Examples:
+  #   trustedProxyCIDRs: "10.0.0.0/8"
+  #   trustedProxyCIDRs: "10.0.0.0/8,172.16.0.0/12"
+  trustedProxyCIDRs: ""
+
 # =============================================================================
 # Authentication Configuration
 # =============================================================================
