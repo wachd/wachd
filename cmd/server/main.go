@@ -27,6 +27,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -49,15 +50,114 @@ import (
 )
 
 type Server struct {
-	cfg            store.ConfigStore
-	db             *store.DB
-	queue          *queue.Queue
-	oncallManager  *oncall.Manager
-	sessions       *auth.SessionStore
-	license        *license.License
-	enc            *auth.Encryptor
-	port           string
-	webhookLimiter *webhookIPLimiter
+	cfg               store.ConfigStore
+	db                *store.DB
+	queue             *queue.Queue
+	oncallManager     *oncall.Manager
+	sessions          *auth.SessionStore
+	license           *license.License
+	enc               *auth.Encryptor
+	port              string
+	webhookLimiter    *webhookIPLimiter
+	trustedProxyCIDRs []netip.Prefix
+}
+
+func parseTrustedProxyCIDRs(raw string) ([]netip.Prefix, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(raw, ",")
+	prefixes := make([]netip.Prefix, 0, len(parts))
+
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", value, err)
+		}
+
+		prefixes = append(prefixes, prefix.Masked())
+	}
+
+	return prefixes, nil
+}
+
+func remoteAddrHost(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		return host
+	}
+
+	return remoteAddr
+}
+
+func isTrustedProxy(addr netip.Addr, trusted []netip.Prefix) bool {
+	for _, prefix := range trusted {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func parseXForwardedFor(header string) ([]netip.Addr, bool) {
+	parts := strings.Split(header, ",")
+	addrs := make([]netip.Addr, 0, len(parts))
+
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			return nil, false
+		}
+
+		addr, err := netip.ParseAddr(value)
+		if err != nil {
+			return nil, false
+		}
+
+		addrs = append(addrs, addr.Unmap())
+	}
+
+	return addrs, true
+}
+
+func webhookClientIP(r *http.Request, trustedProxies []netip.Prefix) string {
+	remoteHost := remoteAddrHost(r.RemoteAddr)
+
+	remoteAddr, err := netip.ParseAddr(remoteHost)
+	if err != nil {
+		return remoteHost
+	}
+	remoteAddr = remoteAddr.Unmap()
+
+	if !isTrustedProxy(remoteAddr, trustedProxies) {
+		return remoteAddr.String()
+	}
+
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return remoteAddr.String()
+	}
+
+	chain, ok := parseXForwardedFor(xff)
+	if !ok || len(chain) == 0 {
+		return remoteAddr.String()
+	}
+
+	for i := len(chain) - 1; i >= 0; i-- {
+		if !isTrustedProxy(chain[i], trustedProxies) {
+			return chain[i].String()
+		}
+	}
+
+	return chain[0].String()
 }
 
 // webhookIPLimiter enforces per-IP rate limits on the webhook endpoint.
@@ -217,6 +317,16 @@ func main() {
 
 	authDisabled := os.Getenv("AUTH_DISABLED") == "true"
 
+	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		log.Fatalf("Invalid TRUSTED_PROXY_CIDRS: %v", err)
+	}
+	if len(trustedProxyCIDRs) == 0 {
+		log.Println("✓ Trusted proxy CIDRs: none; ignoring X-Forwarded-For")
+	} else {
+		log.Printf("✓ Trusted proxy CIDRs configured: %v", trustedProxyCIDRs)
+	}
+
 	// Require encryption key unless running in dev mode (AUTH_DISABLED)
 	encryptionKey := os.Getenv("WACHD_ENCRYPTION_KEY")
 	if encryptionKey == "" && !authDisabled {
@@ -298,15 +408,16 @@ func main() {
 
 	// Create server
 	server := &Server{
-		cfg:            db,
-		db:             db,
-		queue:          q,
-		oncallManager:  oncallMgr,
-		sessions:       sessions,
-		license:        lic,
-		enc:            enc,
-		port:           port,
-		webhookLimiter: newWebhookIPLimiter(),
+		cfg:               db,
+		db:                db,
+		queue:             q,
+		oncallManager:     oncallMgr,
+		sessions:          sessions,
+		license:           lic,
+		enc:               enc,
+		port:              port,
+		webhookLimiter:    newWebhookIPLimiter(),
+		trustedProxyCIDRs: trustedProxyCIDRs,
 	}
 
 	// Set up HTTP router
@@ -579,22 +690,11 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	secret := vars["secret"]
 
 	// Rate-limit per source IP — 20 burst, 1/s sustained.
-	// Only trust X-Forwarded-For when the direct connection originates from a
-	// private/loopback address (in-cluster ingress/proxy). Trusting it
-	// unconditionally lets any client spoof arbitrary IPs to bypass the limiter.
-	remoteHost, _, splitErr := net.SplitHostPort(r.RemoteAddr)
-	if splitErr != nil {
-		remoteHost = r.RemoteAddr
-	}
-	var ip string
-	if remoteIP := net.ParseIP(remoteHost); remoteIP != nil && (remoteIP.IsLoopback() || remoteIP.IsPrivate()) {
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			ip = strings.TrimSpace(strings.SplitN(fwd, ",", 2)[0])
-		}
-	}
-	if ip == "" {
-		ip = remoteHost
-	}
+	//
+	// X-Forwarded-For is trusted only when the immediate peer is in
+	// TRUSTED_PROXY_CIDRS. The default is trust nothing, so deployments must opt in
+	// to proxy trust explicitly.
+	ip := webhookClientIP(r, s.trustedProxyCIDRs)
 	if !s.webhookLimiter.allow(ip) {
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
@@ -1293,10 +1393,10 @@ func (s *Server) handleSnoozeIncident(w http.ResponseWriter, r *http.Request) {
 // It never exposes encrypted token values — only whether they are set.
 // WebhookSecret is intentionally omitted; use the rotate-secret endpoint to manage it.
 type teamConfigPublic struct {
-	TeamID          string  `json:"team_id"`
-	SlackWebhookURL *string `json:"slack_webhook_url,omitempty"`
-	SlackChannel    *string `json:"slack_channel,omitempty"`
-	GitHubTokenSet  bool    `json:"github_token_set"`
+	TeamID             string   `json:"team_id"`
+	SlackWebhookURL    *string  `json:"slack_webhook_url,omitempty"`
+	SlackChannel       *string  `json:"slack_channel,omitempty"`
+	GitHubTokenSet     bool     `json:"github_token_set"`
 	GitHubRepos        []string `json:"github_repos,omitempty"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint,omitempty"`
 	LokiEndpoint       *string  `json:"loki_endpoint,omitempty"`
