@@ -107,6 +107,10 @@ Key settings in `.env`:
 DATABASE_URL=postgres://wachd:wachd@localhost:5432/wachd
 REDIS_URL=redis://localhost:6379
 
+# Trusted ingress/proxy CIDRs for webhook client IP extraction.
+# Empty means X-Forwarded-For is ignored and rate limiting uses RemoteAddr.
+TRUSTED_PROXY_CIDRS=
+
 # Analysis backend (Ollama for local, air-gapped deployments)
 AI_BACKEND=ollama
 OLLAMA_ENDPOINT=http://localhost:11434
@@ -127,6 +131,7 @@ make dev
 ```
 
 Opens:
+
 - API server on `http://localhost:8080`
 - Web dashboard on `http://localhost:3000`
 
@@ -302,6 +307,38 @@ The server **automatically creates all database tables on first startup** — no
 
 Paste that webhook URL into Grafana / Datadog alert routing and you are live.
 
+### Trusted proxy CIDRs
+
+Wachd rate-limits webhook requests by client IP.
+
+By default, `TRUSTED_PROXY_CIDRS` is empty. This is the safe default: Wachd ignores `X-Forwarded-For` and rate-limits by the direct `RemoteAddr`.
+
+If Wachd is deployed behind an ingress controller or load balancer and you want webhook rate limiting to use the original client IP, configure trusted proxy CIDRs.
+
+For local or direct environment configuration:
+
+```bash
+TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12
+```
+
+For Helm deployments:
+
+```yaml
+ingress:
+  trustedProxyCIDRs: "10.0.0.0/8,172.16.0.0/12"
+```
+
+Only set this to CIDRs for proxies or load balancers you actually control. Wachd only trusts `X-Forwarded-For` when the immediate peer is in this list.
+
+Your ingress should also overwrite or normalize `X-Forwarded-For` rather than append attacker-controlled values. For nginx-ingress, check settings such as:
+
+```yaml
+use-forwarded-headers: "false"
+compute-full-forwarded-for: "false"
+```
+
+**Behavior change:** after the trusted-proxy hardening, existing deployments behind an ingress with the default empty value will rate-limit per ingress/proxy IP rather than per original client IP until `TRUSTED_PROXY_CIDRS` or `ingress.trustedProxyCIDRs` is configured.
+
 > **Note — TLS certificate on first install:** cert-manager issues the internal mTLS certificate after the chart is deployed. Pods will be `Running` within about 30 seconds, but if you see `CrashLoopBackOff` or failed readiness probes in the first 1–2 minutes, wait for the certificate to be issued:
 > ```bash
 > kubectl get certificate -n wachd   # STATUS should reach True
@@ -372,6 +409,7 @@ A team admin can complete their full configuration in under 5 minutes without in
 See [`helm/wachd/values.yaml`](helm/wachd/values.yaml) for all available options.
 
 The chart includes:
+
 - Horizontal Pod Autoscaler (server: 2–10 replicas, worker: 1–5 replicas)
 - PodDisruptionBudget for zero-downtime upgrades
 - Pod anti-affinity across nodes and zones

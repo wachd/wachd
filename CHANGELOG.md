@@ -66,6 +66,7 @@ Wachd uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Webhook client IP extraction now trusts `X-Forwarded-For` only from configured `TRUSTED_PROXY_CIDRS`. Existing ingress deployments with the default empty value will rate-limit by ingress/proxy IP until trusted proxy CIDRs are configured.
 - `sessions.RequireAuth` (cookie-only) replaced by `auth.BearerOrCookie` on all protected routes — existing browser sessions are unaffected.
 - `GET /auth/me` response extended with `auth_type`, `is_superadmin`, and `force_password_change` fields.
 - Admin panel navigation adds **Teams**, **API Tokens**, and conditionally shows the **Admin** link in the top navigation bar for superadmin accounts.
