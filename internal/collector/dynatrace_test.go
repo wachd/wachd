@@ -30,6 +30,19 @@ func TestNewDynatraceCollector(t *testing.T) {
 	}
 }
 
+func TestNewDynatraceCollectorUsesSafeHTTPClient(t *testing.T) {
+	c := NewDynatraceCollector("https://abc.live.dynatrace.com", "dt-token")
+	if c.client == nil {
+		t.Fatal("expected client to be configured")
+	}
+	if c.client.Transport == nil {
+		t.Fatal("expected safe transport to be configured")
+	}
+	if c.client.CheckRedirect == nil {
+		t.Fatal("expected redirect validation to be configured")
+	}
+}
+
 func TestDynatraceCollector_FetchProblems_MissingConfig(t *testing.T) {
 	tests := []struct {
 		endpoint string
@@ -74,7 +87,7 @@ func TestDynatraceCollector_FetchProblems_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewDynatraceCollector(srv.URL, "dt-token")
+	c := newDynatraceCollectorWithClient(srv.URL, "dt-token", srv.Client())
 	problems, err := c.FetchProblems(context.Background(), "checkout-api", start, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -99,7 +112,7 @@ func TestDynatraceCollector_FetchProblems_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewDynatraceCollector(srv.URL, "dt-token")
+	c := newDynatraceCollectorWithClient(srv.URL, "dt-token", srv.Client())
 	_, err := c.FetchProblems(context.Background(), "svc", time.Now().Add(-time.Hour), 10)
 	if err == nil {
 		t.Error("expected error for 500 response")
@@ -132,7 +145,7 @@ func TestDynatraceCollector_FetchLogs_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewDynatraceCollector(srv.URL, "dt-token")
+	c := newDynatraceCollectorWithClient(srv.URL, "dt-token", srv.Client())
 	logs, err := c.FetchLogs(context.Background(), "checkout-api", ts.Add(-time.Minute), ts.Add(time.Minute), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -167,7 +180,7 @@ func TestDynatraceCollector_FetchLogs_NilAttributes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewDynatraceCollector(srv.URL, "dt-token")
+	c := newDynatraceCollectorWithClient(srv.URL, "dt-token", srv.Client())
 	logs, err := c.FetchLogs(context.Background(), "svc", time.Now().Add(-time.Hour), time.Now(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -212,7 +225,7 @@ func TestDynatraceCollector_FetchMetrics_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewDynatraceCollector(srv.URL, "dt-token")
+	c := newDynatraceCollectorWithClient(srv.URL, "dt-token", srv.Client())
 	points, err := c.FetchMetrics(context.Background(), "checkout-api",
 		"builtin:service.errors.total.rate", ts.Add(-time.Minute), ts.Add(2*time.Minute))
 	if err != nil {
@@ -249,7 +262,7 @@ func TestDynatraceCollector_FetchMetrics_MismatchedTimestampsValues(t *testing.T
 	}))
 	defer srv.Close()
 
-	c := NewDynatraceCollector(srv.URL, "dt-token")
+	c := newDynatraceCollectorWithClient(srv.URL, "dt-token", srv.Client())
 	points, err := c.FetchMetrics(context.Background(), "svc", "builtin:error.rate",
 		time.Now().Add(-time.Hour), time.Now())
 	if err != nil {

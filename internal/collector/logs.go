@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/wachd/wachd/internal/safehttp"
 	"io"
 	"net/http"
 	"net/url"
@@ -51,13 +52,19 @@ type LokiResponse struct {
 	} `json:"data"`
 }
 
-// NewLogsCollector creates a new Loki logs collector
+// NewLogsCollector creates a new Loki logs collector.
 func NewLogsCollector(endpoint string) *LogsCollector {
+	return newLogsCollectorWithClient(endpoint, safehttp.CollectorClient(30*time.Second))
+}
+
+func newLogsCollectorWithClient(endpoint string, client *http.Client) *LogsCollector {
+	if client == nil {
+		client = safehttp.CollectorClient(30 * time.Second)
+	}
+
 	return &LogsCollector{
 		endpoint: endpoint,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client:   client,
 	}
 }
 

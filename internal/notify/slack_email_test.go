@@ -16,15 +16,15 @@ package notify
 
 import (
 	"context"
+	"github.com/google/uuid"
+	"github.com/wachd/wachd/internal/ai"
+	"github.com/wachd/wachd/internal/safehttp"
+	"github.com/wachd/wachd/internal/store"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/wachd/wachd/internal/ai"
-	"github.com/wachd/wachd/internal/store"
 )
 
 func makeTestIncident() *store.Incident {
@@ -82,7 +82,7 @@ func TestSlackNotifier_SendIncidentAlert_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewSlackNotifier(srv.URL, "#alerts")
+	n := newSlackNotifierWithClient(srv.URL, "#alerts", srv.Client())
 	err := n.SendIncidentAlert(context.Background(), makeTestIncident(), makeTestMember(), makeTestAnalysis())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -95,7 +95,7 @@ func TestSlackNotifier_SendIncidentAlert_NoAnalysis(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewSlackNotifier(srv.URL, "#alerts")
+	n := newSlackNotifierWithClient(srv.URL, "#alerts", srv.Client())
 	err := n.SendIncidentAlert(context.Background(), makeTestIncident(), makeTestMember(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error with nil analysis: %v", err)
@@ -111,7 +111,7 @@ func TestSlackNotifier_SendIncidentAlert_NoMessage(t *testing.T) {
 	incident := makeTestIncident()
 	incident.Message = nil
 
-	n := NewSlackNotifier(srv.URL, "#alerts")
+	n := newSlackNotifierWithClient(srv.URL, "#alerts", srv.Client())
 	err := n.SendIncidentAlert(context.Background(), incident, makeTestMember(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error with nil message: %v", err)
@@ -128,7 +128,7 @@ func TestSlackNotifier_SendIncidentAlert_EmptyMessage(t *testing.T) {
 	empty := ""
 	incident.Message = &empty
 
-	n := NewSlackNotifier(srv.URL, "#alerts")
+	n := newSlackNotifierWithClient(srv.URL, "#alerts", srv.Client())
 	err := n.SendIncidentAlert(context.Background(), incident, makeTestMember(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error with empty message: %v", err)
@@ -149,10 +149,52 @@ func TestSlackNotifier_SendMessage_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewSlackNotifier(srv.URL, "#alerts")
+	n := newSlackNotifierWithClient(srv.URL, "#alerts", srv.Client())
 	err := n.SendIncidentAlert(context.Background(), makeTestIncident(), makeTestMember(), nil)
 	if err == nil {
 		t.Error("expected error for non-200 response")
+	}
+}
+
+func TestNewSlackNotifierUsesWebhookClient(t *testing.T) {
+	n := NewSlackNotifier("https://hooks.slack.com/services/test", "#alerts")
+	if n.client == nil {
+		t.Fatal("expected client to be configured")
+	}
+	if n.client.Transport == nil {
+		t.Fatal("expected safe transport to be configured")
+	}
+	if n.client.CheckRedirect == nil {
+		t.Fatal("expected redirect policy to be configured")
+	}
+}
+
+func TestSlackNotifierDoesNotFollowRedirects(t *testing.T) {
+	targetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: safehttp.DenyRedirect,
+	}
+
+	n := newSlackNotifierWithClient(redirector.URL, "#alerts", client)
+	err := n.SendTestMessage(context.Background())
+	if err == nil {
+		t.Fatal("expected redirect response to be treated as a Slack error")
+	}
+
+	if targetCalled {
+		t.Fatal("Slack webhook client should not follow redirects")
 	}
 }
 

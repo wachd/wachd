@@ -19,23 +19,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/wachd/wachd/internal/ai"
+	"github.com/wachd/wachd/internal/safehttp"
+	"github.com/wachd/wachd/internal/store"
 	"net/http"
 	"time"
-
-	"github.com/wachd/wachd/internal/ai"
-	"github.com/wachd/wachd/internal/store"
 )
 
 // SlackNotifier sends notifications to Slack
 type SlackNotifier struct {
 	webhookURL string
 	channel    string
+	client     *http.Client
 }
 
 // SlackMessage represents a Slack webhook message
 type SlackMessage struct {
-	Channel string `json:"channel,omitempty"`
-	Text    string `json:"text"`
+	Channel string  `json:"channel,omitempty"`
+	Text    string  `json:"text"`
 	Blocks  []Block `json:"blocks,omitempty"`
 }
 
@@ -51,11 +52,20 @@ type Text struct {
 	Text string `json:"text"`
 }
 
-// NewSlackNotifier creates a new Slack notifier
+// NewSlackNotifier creates a new Slack notifier.
 func NewSlackNotifier(webhookURL, channel string) *SlackNotifier {
+	return newSlackNotifierWithClient(webhookURL, channel, safehttp.WebhookClient(10*time.Second))
+}
+
+func newSlackNotifierWithClient(webhookURL, channel string, client *http.Client) *SlackNotifier {
+	if client == nil {
+		client = safehttp.WebhookClient(10 * time.Second)
+	}
+
 	return &SlackNotifier{
 		webhookURL: webhookURL,
 		channel:    channel,
+		client:     client,
 	}
 }
 
@@ -160,11 +170,7 @@ func (s *SlackNotifier) sendMessage(ctx context.Context, message SlackMessage) e
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	resp, err := client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send Slack message: %w", err)
 	}

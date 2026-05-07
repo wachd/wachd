@@ -31,6 +31,19 @@ func TestNewLogsCollector(t *testing.T) {
 	}
 }
 
+func TestNewLogsCollectorUsesSafeHTTPClient(t *testing.T) {
+	c := NewLogsCollector("https://loki.example.com")
+	if c.client == nil {
+		t.Fatal("expected client to be configured")
+	}
+	if c.client.Transport == nil {
+		t.Fatal("expected safe transport to be configured")
+	}
+	if c.client.CheckRedirect == nil {
+		t.Fatal("expected redirect validation to be configured")
+	}
+}
+
 func TestLogsCollector_FetchLogs_NoEndpoint(t *testing.T) {
 	c := NewLogsCollector("")
 	_, err := c.FetchLogs(context.Background(), `{app="api"}`, time.Now().Add(-time.Hour), time.Now(), 100)
@@ -67,7 +80,7 @@ func TestLogsCollector_FetchLogs_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLogsCollector(srv.URL)
+	c := newLogsCollectorWithClient(srv.URL, srv.Client())
 	logs, err := c.FetchLogs(context.Background(), `{service="api"}`, ts.Add(-time.Minute), ts.Add(time.Minute), 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -89,7 +102,7 @@ func TestLogsCollector_FetchLogs_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLogsCollector(srv.URL)
+	c := newLogsCollectorWithClient(srv.URL, srv.Client())
 	_, err := c.FetchLogs(context.Background(), `{app="x"}`, time.Now().Add(-time.Hour), time.Now(), 10)
 	if err == nil {
 		t.Error("expected error for 500 response")
@@ -103,7 +116,7 @@ func TestLogsCollector_FetchLogs_InvalidJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLogsCollector(srv.URL)
+	c := newLogsCollectorWithClient(srv.URL, srv.Client())
 	_, err := c.FetchLogs(context.Background(), `{app="x"}`, time.Now().Add(-time.Hour), time.Now(), 10)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
@@ -120,7 +133,7 @@ func TestLogsCollector_FetchLogs_EmptyResult(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLogsCollector(srv.URL)
+	c := newLogsCollectorWithClient(srv.URL, srv.Client())
 	logs, err := c.FetchLogs(context.Background(), `{app="x"}`, time.Now().Add(-time.Hour), time.Now(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -149,7 +162,7 @@ func TestLogsCollector_FetchLogs_ShortValueEntry(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLogsCollector(srv.URL)
+	c := newLogsCollectorWithClient(srv.URL, srv.Client())
 	logs, err := c.FetchLogs(context.Background(), `{app="x"}`, time.Now().Add(-time.Hour), time.Now(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -185,7 +198,7 @@ func TestLogsCollector_FetchLogs_NanosecondTimestamp(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLogsCollector(srv.URL)
+	c := newLogsCollectorWithClient(srv.URL, srv.Client())
 	logs, err := c.FetchLogs(context.Background(), `{service="api"}`,
 		expectedTime.Add(-time.Minute), expectedTime.Add(time.Minute), 100)
 	if err != nil {
@@ -221,7 +234,7 @@ func TestLogsCollector_FetchLogs_MalformedTimestampSkipped(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLogsCollector(srv.URL)
+	c := newLogsCollectorWithClient(srv.URL, srv.Client())
 	logs, err := c.FetchLogs(context.Background(), `{app="x"}`,
 		time.Now().Add(-time.Hour), time.Now(), 10)
 	if err != nil {
@@ -247,7 +260,7 @@ func TestLogsCollector_FetchErrorLogs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLogsCollector(srv.URL)
+	c := newLogsCollectorWithClient(srv.URL, srv.Client())
 	_, err := c.FetchErrorLogs(context.Background(), "checkout-api", time.Now().Add(-time.Hour), time.Now(), 50)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -17,11 +17,13 @@ package collector
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
+	"github.com/wachd/wachd/internal/safehttp"
 )
 
 // MetricsCollector fetches metrics from Prometheus
@@ -36,15 +38,24 @@ type MetricPoint struct {
 	Labels    map[string]string `json:"labels"`
 }
 
-// NewMetricsCollector creates a new Prometheus metrics collector
+// NewMetricsCollector creates a new Prometheus metrics collector.
 func NewMetricsCollector(endpoint string) (*MetricsCollector, error) {
+	return newMetricsCollectorWithRoundTripper(endpoint, safehttp.NewRoundTripper())
+}
+
+func newMetricsCollectorWithRoundTripper(endpoint string, roundTripper http.RoundTripper) (*MetricsCollector, error) {
 	if endpoint == "" {
 		return nil, fmt.Errorf("prometheus endpoint not configured")
 	}
 
-	client, err := api.NewClient(api.Config{
+	config := api.Config{
 		Address: endpoint,
-	})
+	}
+	if roundTripper != nil {
+		config.RoundTripper = roundTripper
+	}
+
+	client, err := api.NewClient(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Prometheus client: %w", err)
 	}
