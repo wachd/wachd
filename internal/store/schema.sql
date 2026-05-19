@@ -351,3 +351,43 @@ CREATE TABLE IF NOT EXISTS system_config (
     updated_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_by  UUID         REFERENCES local_users(id) ON DELETE SET NULL
 );
+
+-- ============================================================
+-- Incident Knowledge Graph
+-- Nodes: incidents, deployments, services, alert rules.
+-- Edges: directed relationships between nodes.
+-- All rows are team-scoped — no cross-team access is possible.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id     UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    type        VARCHAR(50)  NOT NULL,   -- incident | deployment | service | alert
+    label       TEXT         NOT NULL,
+    external_id TEXT,                    -- incidents.id, commit hash, service name, etc.
+    properties  JSONB,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_team     ON graph_nodes(team_id);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_type     ON graph_nodes(team_id, type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_nodes_external
+    ON graph_nodes(team_id, type, external_id)
+    WHERE external_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id     UUID         NOT NULL REFERENCES teams(id)       ON DELETE CASCADE,
+    from_id     UUID         NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    to_id       UUID         NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    type        VARCHAR(50)  NOT NULL,   -- caused_by | affects | similar_to | triggered
+    weight      FLOAT        NOT NULL DEFAULT 1.0,
+    properties  JSONB,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    UNIQUE(from_id, to_id, type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_team ON graph_edges(team_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_to   ON graph_edges(to_id);
