@@ -366,12 +366,18 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     label       TEXT         NOT NULL,
     external_id TEXT,                    -- incidents.id, commit hash, service name, etc.
     properties  JSONB,
+    -- pending nodes are excluded from similarity searches and graph traversals.
+    -- PromoteNode flips this to 'permanent' when the incident is resolved.
+    -- Never omit this filter — pending nodes leaking into neighbor lookups is
+    -- the contamination failure mode for two-phase write-back.
+    status      VARCHAR(20)  NOT NULL DEFAULT 'pending',  -- pending | permanent
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_team     ON graph_nodes(team_id);
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_type     ON graph_nodes(team_id, type);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_status   ON graph_nodes(team_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_nodes_external
     ON graph_nodes(team_id, type, external_id)
     WHERE external_id IS NOT NULL;

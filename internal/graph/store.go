@@ -21,6 +21,22 @@ import (
 	"github.com/google/uuid"
 )
 
+// NodeStatus controls whether a node participates in similarity searches
+// and graph traversals. Nodes start as pending and are promoted to permanent
+// when the incident is resolved. Pending nodes must never appear in
+// FindSimilar or GetSubgraph results — that exclusion is the guarantee that
+// makes two-phase write-back safe.
+type NodeStatus string
+
+const (
+	// NodeStatusPending marks a node written during an active incident.
+	// Excluded from all similarity searches and neighbour lookups.
+	NodeStatusPending NodeStatus = "pending"
+	// NodeStatusPermanent marks a node promoted on incident resolution.
+	// Included in similarity searches and neighbour lookups.
+	NodeStatusPermanent NodeStatus = "permanent"
+)
+
 // NodeType defines what kind of entity a graph node represents.
 type NodeType string
 
@@ -47,14 +63,15 @@ const (
 
 // Node is a vertex in the incident knowledge graph.
 type Node struct {
-	ID         uuid.UUID `json:"id"`
-	TeamID     uuid.UUID `json:"team_id"`
-	Type       NodeType  `json:"type"`
-	Label      string    `json:"label"`
-	ExternalID *string   `json:"external_id,omitempty"` // incidents.id, commit hash, service name, etc.
-	Properties []byte    `json:"properties,omitempty"`  // JSONB — type-specific metadata
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         uuid.UUID  `json:"id"`
+	TeamID     uuid.UUID  `json:"team_id"`
+	Type       NodeType   `json:"type"`
+	Status     NodeStatus `json:"status"`
+	Label      string     `json:"label"`
+	ExternalID *string    `json:"external_id,omitempty"` // incidents.id, commit hash, service name, etc.
+	Properties []byte     `json:"properties,omitempty"`  // JSONB — type-specific metadata
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // Edge is a directed relationship between two nodes.
@@ -95,6 +112,12 @@ type Store interface {
 	// similar to the label of the given node. Used to surface past incidents
 	// with matching context before the AI analysis runs.
 	FindSimilar(ctx context.Context, teamID uuid.UUID, nodeID uuid.UUID, limit int) ([]*Node, error)
+
+	// PromoteNode flips a node from pending to permanent, making it visible
+	// to FindSimilar and GetSubgraph. Call this when the incident is resolved.
+	// Implementations must use WHERE status = 'permanent' in every similarity
+	// search and graph traversal — pending nodes must never leak into results.
+	PromoteNode(ctx context.Context, teamID uuid.UUID, nodeID uuid.UUID) error
 
 	// DeleteNode removes a node and all edges connected to it.
 	DeleteNode(ctx context.Context, teamID uuid.UUID, nodeID uuid.UUID) error
