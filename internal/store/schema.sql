@@ -351,3 +351,69 @@ CREATE TABLE IF NOT EXISTS system_config (
     updated_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_by  UUID         REFERENCES local_users(id) ON DELETE SET NULL
 );
+
+-- ============================================================
+-- Incident Knowledge Graph
+-- Nodes: incidents, deployments, services, alert rules.
+-- Edges: directed relationships between nodes.
+-- All rows are team-scoped — no cross-team access is possible.
+--
+-- Two-phase write-back: nodes (and edges) start as 'pending' when written at
+-- alert-fire time. PromoteNode() flips them to 'permanent' on incident resolve.
+-- Every FindSimilar and GetSubgraph neighbour query must filter
+-- WHERE status = 'permanent' — that predicate is the contamination guarantee.
+-- The root node of GetSubgraph is returned regardless of status so that
+-- responders can view an active incident's own graph while it is still open.
+--
+-- Adding new node or edge types: add the value to the CHECK constraint below
+-- AND add a constant to the NodeType / EdgeType Go types in internal/graph/store.go.
+-- Never store new types as free-form strings in the properties column.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id     UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    type        VARCHAR(50)  NOT NULL
+                             CHECK (type IN ('incident', 'deployment', 'service', 'alert')),
+    label       TEXT         NOT NULL,
+    external_id TEXT,                    -- incidents.id, commit hash, service name, etc.
+    properties  JSONB,
+    status      VARCHAR(20)  NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending', 'permanent')),
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    -- Required for composite FK from graph_edges — enforces team isolation at
+    -- the DB level so an edge in team A cannot reference a node in team B.
+    UNIQUE(team_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_team     ON graph_nodes(team_id);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_type     ON graph_nodes(team_id, type);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_status   ON graph_nodes(team_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_nodes_external
+    ON graph_nodes(team_id, type, external_id)
+    WHERE external_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id     UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    from_id     UUID         NOT NULL,
+    to_id       UUID         NOT NULL,
+    type        VARCHAR(50)  NOT NULL
+                             CHECK (type IN ('caused_by', 'affects', 'similar_to', 'triggered')),
+    status      VARCHAR(20)  NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending', 'permanent')),
+    weight      FLOAT        NOT NULL DEFAULT 1.0,
+    properties  JSONB,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    -- Composite FKs enforce that both endpoints belong to the same team as the
+    -- edge. A plain FK on from_id / to_id alone would allow cross-team edges.
+    FOREIGN KEY (team_id, from_id) REFERENCES graph_nodes(team_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id, to_id)   REFERENCES graph_nodes(team_id, id) ON DELETE CASCADE,
+    UNIQUE(team_id, from_id, to_id, type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_team ON graph_edges(team_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_to   ON graph_edges(to_id);
