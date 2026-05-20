@@ -1,0 +1,5 @@
+# Artifact Hub repository metadata
+# https://artifacthub.io/docs/topics/repositories/helm-charts/
+owners:
+  - name: NTC Dev
+    email: info@ntcdev.com
