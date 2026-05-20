@@ -357,22 +357,34 @@ CREATE TABLE IF NOT EXISTS system_config (
 -- Nodes: incidents, deployments, services, alert rules.
 -- Edges: directed relationships between nodes.
 -- All rows are team-scoped — no cross-team access is possible.
+--
+-- Two-phase write-back: nodes (and edges) start as 'pending' when written at
+-- alert-fire time. PromoteNode() flips them to 'permanent' on incident resolve.
+-- Every FindSimilar and GetSubgraph neighbour query must filter
+-- WHERE status = 'permanent' — that predicate is the contamination guarantee.
+-- The root node of GetSubgraph is returned regardless of status so that
+-- responders can view an active incident's own graph while it is still open.
+--
+-- Adding new node or edge types: add the value to the CHECK constraint below
+-- AND add a constant to the NodeType / EdgeType Go types in internal/graph/store.go.
+-- Never store new types as free-form strings in the properties column.
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS graph_nodes (
     id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id     UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-    type        VARCHAR(50)  NOT NULL,   -- incident | deployment | service | alert
+    type        VARCHAR(50)  NOT NULL
+                             CHECK (type IN ('incident', 'deployment', 'service', 'alert')),
     label       TEXT         NOT NULL,
     external_id TEXT,                    -- incidents.id, commit hash, service name, etc.
     properties  JSONB,
-    -- pending nodes are excluded from similarity searches and graph traversals.
-    -- PromoteNode flips this to 'permanent' when the incident is resolved.
-    -- Never omit this filter — pending nodes leaking into neighbor lookups is
-    -- the contamination failure mode for two-phase write-back.
-    status      VARCHAR(20)  NOT NULL DEFAULT 'pending',  -- pending | permanent
+    status      VARCHAR(20)  NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending', 'permanent')),
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    -- Required for composite FK from graph_edges — enforces team isolation at
+    -- the DB level so an edge in team A cannot reference a node in team B.
+    UNIQUE(team_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_team     ON graph_nodes(team_id);
@@ -384,14 +396,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_nodes_external
 
 CREATE TABLE IF NOT EXISTS graph_edges (
     id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    team_id     UUID         NOT NULL REFERENCES teams(id)       ON DELETE CASCADE,
-    from_id     UUID         NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
-    to_id       UUID         NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
-    type        VARCHAR(50)  NOT NULL,   -- caused_by | affects | similar_to | triggered
+    team_id     UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    from_id     UUID         NOT NULL,
+    to_id       UUID         NOT NULL,
+    type        VARCHAR(50)  NOT NULL
+                             CHECK (type IN ('caused_by', 'affects', 'similar_to', 'triggered')),
+    status      VARCHAR(20)  NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending', 'permanent')),
     weight      FLOAT        NOT NULL DEFAULT 1.0,
     properties  JSONB,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    UNIQUE(from_id, to_id, type)
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    -- Composite FKs enforce that both endpoints belong to the same team as the
+    -- edge. A plain FK on from_id / to_id alone would allow cross-team edges.
+    FOREIGN KEY (team_id, from_id) REFERENCES graph_nodes(team_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id, to_id)   REFERENCES graph_nodes(team_id, id) ON DELETE CASCADE,
+    UNIQUE(team_id, from_id, to_id, type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_graph_edges_team ON graph_edges(team_id);
