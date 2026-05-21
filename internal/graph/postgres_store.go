@@ -213,74 +213,93 @@ func (s *PostgresStore) GetSubgraph(ctx context.Context, teamID uuid.UUID, rootN
 
 	nodesByID := map[uuid.UUID]*Node{root.ID: root}
 	edgesByID := map[uuid.UUID]*Edge{}
-	frontier := []uuid.UUID{root.ID}
 
-	for currentDepth := 0; currentDepth < depth && len(frontier) > 0; currentDepth++ {
-		nextFrontier := make([]uuid.UUID, 0)
+	if depth > 0 {
+		rows, err := s.pool.Query(ctx, `
+			WITH RECURSIVE walk(node_id, depth, path, edge_id) AS (
+				SELECT $2::uuid, 0, ARRAY[$2::uuid], NULL::uuid
 
-		for _, nodeID := range frontier {
-			rows, err := s.pool.Query(ctx, `
+				UNION ALL
+
 				SELECT
-					e.id,
-					e.team_id,
-					e.from_id,
-					e.to_id,
-					e.type,
-					e.status,
-					e.weight,
-					e.properties,
-					e.created_at,
-					e.updated_at,
-					n.id,
-					n.team_id,
-					n.type,
-					n.status,
-					n.label,
-					n.external_id,
-					n.properties,
-					n.created_at,
-					n.updated_at
-				FROM graph_edges e
-				JOIN graph_nodes n
-				  ON n.team_id = e.team_id
-				 AND (
-						(e.from_id = $2 AND n.id = e.to_id)
-					 OR (e.to_id = $2 AND n.id = e.from_id)
-				 )
-				WHERE e.team_id = $1
-				  AND e.status = 'permanent'
-				  AND n.status = 'permanent'
-			`, teamID, nodeID)
+					neighbor.id,
+					walk.depth + 1,
+					walk.path || neighbor.id,
+					e.id
+				FROM walk
+				JOIN graph_edges e
+				  ON e.team_id = $1
+				 AND e.status = 'permanent'
+				 AND (e.from_id = walk.node_id OR e.to_id = walk.node_id)
+				JOIN graph_nodes neighbor
+				  ON neighbor.team_id = e.team_id
+				 AND neighbor.id = CASE
+						WHEN e.from_id = walk.node_id THEN e.to_id
+						ELSE e.from_id
+					 END
+				 AND neighbor.status = 'permanent'
+				WHERE walk.depth < $3
+				  AND neighbor.id <> ALL(walk.path)
+			),
+			traversed_edges AS (
+				SELECT DISTINCT edge_id
+				FROM walk
+				WHERE edge_id IS NOT NULL
+			)
+			SELECT
+				e.id,
+				e.team_id,
+				e.from_id,
+				e.to_id,
+				e.type,
+				e.status,
+				e.weight,
+				e.properties,
+				e.created_at,
+				e.updated_at,
+				n.id,
+				n.team_id,
+				n.type,
+				n.status,
+				n.label,
+				n.external_id,
+				n.properties,
+				n.created_at,
+				n.updated_at
+			FROM traversed_edges te
+			JOIN graph_edges e
+			  ON e.id = te.edge_id
+			 AND e.team_id = $1
+			JOIN graph_nodes n
+			  ON n.team_id = e.team_id
+			 AND (n.id = e.from_id OR n.id = e.to_id)
+			WHERE n.id = $2
+			   OR n.status = 'permanent'
+			ORDER BY e.created_at, n.created_at
+		`, teamID, rootNodeID, depth)
+		if err != nil {
+			return nil, fmt.Errorf("get subgraph: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			edge, node, err := scanEdgeAndNode(rows)
 			if err != nil {
-				return nil, fmt.Errorf("get subgraph neighbours: %w", err)
+				return nil, fmt.Errorf("scan subgraph row: %w", err)
 			}
 
-			for rows.Next() {
-				edge, node, err := scanEdgeAndNode(rows)
-				if err != nil {
-					rows.Close()
-					return nil, fmt.Errorf("scan subgraph row: %w", err)
-				}
-
-				if _, exists := edgesByID[edge.ID]; !exists {
-					edgesByID[edge.ID] = edge
-				}
-
-				if _, exists := nodesByID[node.ID]; !exists {
-					nodesByID[node.ID] = node
-					nextFrontier = append(nextFrontier, node.ID)
-				}
+			if _, exists := edgesByID[edge.ID]; !exists {
+				edgesByID[edge.ID] = edge
 			}
 
-			if err := rows.Err(); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("read subgraph rows: %w", err)
+			if _, exists := nodesByID[node.ID]; !exists {
+				nodesByID[node.ID] = node
 			}
-
-			rows.Close()
 		}
 
-		frontier = nextFrontier
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("read subgraph rows: %w", err)
+		}
 	}
 
 	nodes := make([]*Node, 0, len(nodesByID))

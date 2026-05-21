@@ -144,6 +144,187 @@ func TestPostgresStoreFindSimilar(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreGetSubgraphUsesRecursiveTraversal(t *testing.T) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for integration tests")
+	}
+
+	ctx := context.Background()
+
+	db, err := store.NewDB(databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+
+	team, err := db.CreateTeam(ctx, "graph-subgraph-test-"+uuid.NewString(), "secret-"+uuid.NewString())
+	if err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+	defer func() {
+		_, _ = db.Pool().Exec(context.Background(), "DELETE FROM teams WHERE id = $1", team.ID)
+	}()
+
+	graphStore := NewPostgresStore(db.Pool())
+
+	rootExternalID := "root-" + uuid.NewString()
+	root, err := graphStore.UpsertNode(ctx, team.ID, &Node{
+		Type:       NodeTypeIncident,
+		Status:     NodeStatusPending,
+		Label:      "Active checkout incident",
+		ExternalID: &rootExternalID,
+		Properties: rawJSON(t, map[string]any{
+			"service": "checkout-api",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("upsert root: %v", err)
+	}
+
+	serviceExternalID := "service-" + uuid.NewString()
+	service, err := graphStore.UpsertNode(ctx, team.ID, &Node{
+		Type:       NodeTypeService,
+		Status:     NodeStatusPermanent,
+		Label:      "checkout-api",
+		ExternalID: &serviceExternalID,
+	})
+	if err != nil {
+		t.Fatalf("upsert service: %v", err)
+	}
+
+	deploymentExternalID := "deployment-" + uuid.NewString()
+	deployment, err := graphStore.UpsertNode(ctx, team.ID, &Node{
+		Type:       NodeTypeDeployment,
+		Status:     NodeStatusPermanent,
+		Label:      "checkout deployment",
+		ExternalID: &deploymentExternalID,
+	})
+	if err != nil {
+		t.Fatalf("upsert deployment: %v", err)
+	}
+
+	pendingExternalID := "pending-" + uuid.NewString()
+	pendingNeighbour, err := graphStore.UpsertNode(ctx, team.ID, &Node{
+		Type:       NodeTypeService,
+		Status:     NodeStatusPending,
+		Label:      "draft service",
+		ExternalID: &pendingExternalID,
+	})
+	if err != nil {
+		t.Fatalf("upsert pending neighbour: %v", err)
+	}
+
+	rootToService, err := graphStore.UpsertEdge(ctx, team.ID, &Edge{
+		FromNodeID: root.ID,
+		ToNodeID:   service.ID,
+		Type:       EdgeTypeAffects,
+		Status:     EdgeStatusPermanent,
+		Weight:     1,
+	})
+	if err != nil {
+		t.Fatalf("upsert root-to-service edge: %v", err)
+	}
+
+	serviceToDeployment, err := graphStore.UpsertEdge(ctx, team.ID, &Edge{
+		FromNodeID: service.ID,
+		ToNodeID:   deployment.ID,
+		Type:       EdgeTypeCausedBy,
+		Status:     EdgeStatusPermanent,
+		Weight:     1,
+	})
+	if err != nil {
+		t.Fatalf("upsert service-to-deployment edge: %v", err)
+	}
+
+	rootToPending, err := graphStore.UpsertEdge(ctx, team.ID, &Edge{
+		FromNodeID: root.ID,
+		ToNodeID:   pendingNeighbour.ID,
+		Type:       EdgeTypeAffects,
+		Status:     EdgeStatusPermanent,
+		Weight:     1,
+	})
+	if err != nil {
+		t.Fatalf("upsert root-to-pending edge: %v", err)
+	}
+
+	depthOne, err := graphStore.GetSubgraph(ctx, team.ID, root.ID, 1)
+	if err != nil {
+		t.Fatalf("get depth-one subgraph: %v", err)
+	}
+
+	requireGraphHasNode(t, depthOne, root.ID)
+	requireGraphHasNode(t, depthOne, service.ID)
+	requireGraphDoesNotHaveNode(t, depthOne, deployment.ID)
+	requireGraphDoesNotHaveNode(t, depthOne, pendingNeighbour.ID)
+
+	requireGraphHasEdge(t, depthOne, rootToService.ID)
+	requireGraphDoesNotHaveEdge(t, depthOne, serviceToDeployment.ID)
+	requireGraphDoesNotHaveEdge(t, depthOne, rootToPending.ID)
+
+	depthTwo, err := graphStore.GetSubgraph(ctx, team.ID, root.ID, 2)
+	if err != nil {
+		t.Fatalf("get depth-two subgraph: %v", err)
+	}
+
+	requireGraphHasNode(t, depthTwo, root.ID)
+	requireGraphHasNode(t, depthTwo, service.ID)
+	requireGraphHasNode(t, depthTwo, deployment.ID)
+	requireGraphDoesNotHaveNode(t, depthTwo, pendingNeighbour.ID)
+
+	requireGraphHasEdge(t, depthTwo, rootToService.ID)
+	requireGraphHasEdge(t, depthTwo, serviceToDeployment.ID)
+	requireGraphDoesNotHaveEdge(t, depthTwo, rootToPending.ID)
+}
+
+func requireGraphHasNode(t *testing.T, graph *Graph, nodeID uuid.UUID) {
+	t.Helper()
+
+	for _, node := range graph.Nodes {
+		if node.ID == nodeID {
+			return
+		}
+	}
+
+	t.Fatalf("expected graph to contain node %s", nodeID)
+}
+
+func requireGraphDoesNotHaveNode(t *testing.T, graph *Graph, nodeID uuid.UUID) {
+	t.Helper()
+
+	for _, node := range graph.Nodes {
+		if node.ID == nodeID {
+			t.Fatalf("expected graph not to contain node %s", nodeID)
+		}
+	}
+}
+
+func requireGraphHasEdge(t *testing.T, graph *Graph, edgeID uuid.UUID) {
+	t.Helper()
+
+	for _, edge := range graph.Edges {
+		if edge.ID == edgeID {
+			return
+		}
+	}
+
+	t.Fatalf("expected graph to contain edge %s", edgeID)
+}
+
+func requireGraphDoesNotHaveEdge(t *testing.T, graph *Graph, edgeID uuid.UUID) {
+	t.Helper()
+
+	for _, edge := range graph.Edges {
+		if edge.ID == edgeID {
+			t.Fatalf("expected graph not to contain edge %s", edgeID)
+		}
+	}
+}
+
 func rawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 
