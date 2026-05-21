@@ -11,6 +11,10 @@ keywords:
   - incident-management
   - sre
   - on-call
+  - observability
+  - opsgenie
+  - pagerduty
+  - ai
 home: https://github.com/wachd/wachd
 sources:
   - https://github.com/wachd/wachd
