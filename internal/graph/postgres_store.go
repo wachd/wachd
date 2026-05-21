@@ -26,10 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	defaultSimilarityCandidateLimit = 200
-	defaultMinimumSimilarityScore   = 0.12
-)
+const defaultMinimumSimilarityScore = 0.12
 
 // ErrNodeNotFound is returned when a graph operation cannot find the requested
 // node inside the requested team boundary.
@@ -40,8 +37,8 @@ var ErrNodeNotFound = errors.New("graph node not found")
 // It stores graph nodes and edges in the adjacency tables created by
 // internal/store/schema.sql. All operations are scoped by team_id.
 type PostgresStore struct {
-	pool               *pgxpool.Pool
-	candidateLimit     int
+	pool *pgxpool.Pool
+
 	minSimilarityScore float64
 }
 
@@ -51,7 +48,6 @@ var _ Store = (*PostgresStore)(nil)
 func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{
 		pool:               pool,
-		candidateLimit:     defaultSimilarityCandidateLimit,
 		minSimilarityScore: defaultMinimumSimilarityScore,
 	}
 }
@@ -349,11 +345,10 @@ func (s *PostgresStore) FindSimilar(ctx context.Context, teamID uuid.UUID, nodeI
 		return nil, err
 	}
 
-	candidateLimit := s.candidateLimit
-	if expandedLimit := limit * 10; expandedLimit > candidateLimit {
-		candidateLimit = expandedLimit
-	}
-
+	// Score every permanent same-team candidate instead of applying a recency
+	// cutoff. This keeps older but highly similar incidents discoverable. A
+	// future embeddings/pgvector implementation can replace this with indexed
+	// nearest-neighbour retrieval without changing the FindSimilar API.
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, team_id, type, status, label, external_id, properties, created_at, updated_at
 		FROM graph_nodes
@@ -361,9 +356,7 @@ func (s *PostgresStore) FindSimilar(ctx context.Context, teamID uuid.UUID, nodeI
 		  AND type = $2
 		  AND status = 'permanent'
 		  AND id <> $3
-		ORDER BY updated_at DESC
-		LIMIT $4
-	`, teamID, source.Type, source.ID, candidateLimit)
+	`, teamID, source.Type, source.ID)
 	if err != nil {
 		return nil, fmt.Errorf("query similar candidates: %w", err)
 	}
