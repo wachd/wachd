@@ -45,7 +45,7 @@ fullnameOverride: ""
 image:
   registry: ghcr.io
   repository: wachd/wachd
-  tag: "0.4.17"
+  tag: "0.4.18"
   pullPolicy: IfNotPresent
 
 # =============================================================================
