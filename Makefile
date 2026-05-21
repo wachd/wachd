@@ -1,13 +1,15 @@
-.PHONY: help dev deps build clean test lint hooks docker-up docker-down server worker web logs review
+.PHONY: help dev deps build clean test lint hooks docker-up docker-down compose-up compose-down server worker web logs review
 
 # Default target
 help:
 	@echo "Wachd Development Commands"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make deps        - Install Go + npm dependencies"
-	@echo "  make docker-up   - Start Postgres + Redis + Ollama"
-	@echo "  make docker-down - Stop all Docker services"
+	@echo "  make deps         - Install Go + npm dependencies"
+	@echo "  make docker-up    - Start Postgres + Redis + Ollama (local dev)"
+	@echo "  make docker-down  - Stop infrastructure services"
+	@echo "  make compose-up   - Start full Wachd stack (self-hosted deployment)"
+	@echo "  make compose-down - Stop full Wachd stack"
 	@echo ""
 	@echo "Development:"
 	@echo "  make dev         - Start server + worker + web in parallel"
@@ -39,9 +41,10 @@ deps:
 	@echo "📦 Installing npm dependencies..."
 	cd web && npm install
 
-# Start Docker services
+# Start Docker services (infrastructure only — Postgres + Redis + Ollama)
+# For local development with 'make dev'. Does not start the app containers.
 docker-up:
-	@echo "🐳 Starting Postgres + Redis..."
+	@echo "🐳 Starting Postgres + Redis + Ollama..."
 	docker-compose up -d
 	@echo "⏳ Waiting for services to be ready..."
 	@sleep 5
@@ -51,6 +54,25 @@ docker-up:
 docker-down:
 	@echo "🛑 Stopping services..."
 	docker-compose down
+
+# Start the full Wachd stack — all services including app containers
+# Use this for self-hosted deployment on a VPS or single server.
+# Requires: docker compose --profile app up -d
+compose-up:
+	@echo "🚀 Starting full Wachd stack..."
+	docker-compose --profile app up -d
+	@echo ""
+	@echo "✓ Wachd is running:"
+	@echo "  Dashboard: http://localhost:3000"
+	@echo "  API:       http://localhost:8080"
+	@echo ""
+	@echo "Pull an Ollama model if you haven't already:"
+	@echo "  docker exec wachd-ollama ollama pull llama3.2"
+
+# Stop the full Wachd stack
+compose-down:
+	@echo "🛑 Stopping full Wachd stack..."
+	docker-compose --profile app down
 
 # Build binaries
 build:

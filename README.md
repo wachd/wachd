@@ -146,6 +146,50 @@ make test-webhook
 
 ---
 
+## Deploy with Docker Compose
+
+The fastest way to self-host Wachd on a single server or VPS. No Kubernetes required.
+
+```bash
+git clone https://github.com/wachd/wachd
+cd wachd
+make compose-up
+```
+
+> **If you have a local `.env` from development:** `DATABASE_URL` and `REDIS_URL` use `localhost` hostnames, which won't resolve inside Docker. Either remove the `.env` file (the compose defaults use Docker service names) or update those two values to `postgres:5432` and `redis:6379`.
+
+Open **http://localhost:3000** — the dashboard is running.
+
+> **Before going to production:** generate a unique encryption key and set it in `.env`:
+> ```bash
+> cp .env.example .env
+> echo "WACHD_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
+> ```
+> The default key in `docker-compose.yml` is public — anyone using it can decrypt credentials stored in your database. Fine for local evaluation, not for production.
+
+By default Wachd uses Ollama for AI analysis (no external API calls). Pull a model after the stack starts:
+
+```bash
+docker exec wachd-ollama ollama pull llama3.2
+```
+
+**To use OpenAI instead**, copy `.env.example` to `.env` and set:
+
+```bash
+AI_BACKEND=openai
+OPENAI_API_KEY=sk-...
+```
+
+Then `make compose-up` again.
+
+**To stop:**
+
+```bash
+make compose-down
+```
+
+---
+
 ## Project Structure
 
 ```

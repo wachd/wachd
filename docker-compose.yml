@@ -30,22 +30,114 @@ services:
       timeout: 5s
       retries: 5
 
-  # Ollama for local analysis (optional — only needed if you don't have Ollama installed locally)
-  # If you have the Ollama app running on your machine, set OLLAMA_ENDPOINT=http://localhost:11434 in .env.
-  # Uncomment below only if you want Ollama running inside Docker:
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: wachd-ollama
-  #   ports:
-  #     - "11434:11434"
-  #   volumes:
-  #     - ollama_data:/root/.ollama
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #   # After starting, pull a model: docker exec wachd-ollama ollama pull llama3.2
+  ollama:
+    image: ollama/ollama:latest
+    container_name: wachd-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # After starting, pull a model: docker exec wachd-ollama ollama pull llama3.2
+
+  # ── Application services ──────────────────────────────────────────────────────
+  # Started with: docker compose --profile app up -d
+  # For local development (make dev), use the services above only.
+
+  wachd-server:
+    image: ghcr.io/wachd/wachd:latest
+    # To build locally instead: comment out image and uncomment build:
+    # build: .
+    profiles: [app]
+    container_name: wachd-server
+    command: ["/server"]
+    environment:
+      PORT: "8080"
+      # WARNING: change WACHD_ENCRYPTION_KEY before any production use
+      WACHD_ENCRYPTION_KEY: ${WACHD_ENCRYPTION_KEY:-7dc58d1180fb5e01f54027bfae009f6b467799cabadde9eb99b2103ba98077e2}
+      DATABASE_URL: ${DATABASE_URL:-postgres://wachd:wachd_dev_password@postgres:5432/wachd?sslmode=disable}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      AI_BACKEND: ${AI_BACKEND:-ollama}
+      OLLAMA_ENDPOINT: ${OLLAMA_ENDPOINT:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      LICENSE_KEY: ${LICENSE_KEY:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:-alerts}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPOS: ${GITHUB_REPOS:-}
+      PROMETHEUS_ENDPOINT: ${PROMETHEUS_ENDPOINT:-}
+      LOKI_ENDPOINT: ${LOKI_ENDPOINT:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  wachd-worker:
+    image: ghcr.io/wachd/wachd:latest
+    # build: .
+    profiles: [app]
+    container_name: wachd-worker
+    command: ["/worker"]
+    environment:
+      # WARNING: change WACHD_ENCRYPTION_KEY before any production use
+      WACHD_ENCRYPTION_KEY: ${WACHD_ENCRYPTION_KEY:-7dc58d1180fb5e01f54027bfae009f6b467799cabadde9eb99b2103ba98077e2}
+      DATABASE_URL: ${DATABASE_URL:-postgres://wachd:wachd_dev_password@postgres:5432/wachd?sslmode=disable}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      AI_BACKEND: ${AI_BACKEND:-ollama}
+      OLLAMA_ENDPOINT: ${OLLAMA_ENDPOINT:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPOS: ${GITHUB_REPOS:-}
+      PROMETHEUS_ENDPOINT: ${PROMETHEUS_ENDPOINT:-}
+      LOKI_ENDPOINT: ${LOKI_ENDPOINT:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      wachd-server:
+        condition: service_started
+    restart: unless-stopped
+
+  wachd-web:
+    image: ghcr.io/wachd/wachd:latest
+    # build: .
+    profiles: [app]
+    container_name: wachd-web
+    command: ["node", "server.js"]
+    working_dir: /web
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      BACKEND_URL: ${BACKEND_URL:-http://wachd-server:8080}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - wachd-server
+    restart: unless-stopped
 
 volumes:
   postgres_data:
