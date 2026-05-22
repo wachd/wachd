@@ -6,6 +6,52 @@ entries:
       category: Monitoring
       licenses: Apache-2.0
     apiVersion: v2
+    appVersion: 0.4.20
+    created: "2026-05-22T08:30:44.794175431Z"
+    dependencies:
+    - condition: postgres.enabled
+      name: postgresql
+      repository: https://charts.bitnami.com/bitnami
+      tags:
+      - database
+      version: 12.x.x
+    - condition: redis.enabled
+      name: redis
+      repository: https://charts.bitnami.com/bitnami
+      tags:
+      - cache
+      version: 18.x.x
+    description: Alert intelligence platform with root cause analysis — self-hosted
+      OpsGenie replacement
+    digest: b853d9b2551b6fcba55e255c05682053472e8d9404b7a201793350c831c2b6da
+    home: https://github.com/wachd/wachd
+    icon: https://wachd.io/favicon.svg
+    keywords:
+    - devops
+    - monitoring
+    - alerting
+    - incident-management
+    - sre
+    - on-call
+    - observability
+    - opsgenie
+    - pagerduty
+    - ai
+    maintainers:
+    - email: info@ntcdev.com
+      name: NTC Dev
+    name: wachd
+    sources:
+    - https://github.com/wachd/wachd
+    type: application
+    urls:
+    - https://github.com/wachd/wachd/releases/download/wachd-0.4.22/wachd-0.4.22.tgz
+    version: 0.4.22
+  - annotations:
+      artifacthub.io/prerelease: "false"
+      category: Monitoring
+      licenses: Apache-2.0
+    apiVersion: v2
     appVersion: 0.4.19
     created: "2026-05-21T14:28:22.301637784Z"
     dependencies:
@@ -463,4 +509,4 @@ entries:
     urls:
     - https://github.com/wachd/wachd/releases/download/wachd-0.4.9/wachd-0.4.9.tgz
     version: 0.4.9
-generated: "2026-05-21T14:28:22.301676322Z"
+generated: "2026-05-22T08:30:44.794228409Z"
