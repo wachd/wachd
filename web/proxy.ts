@@ -1,12 +1,24 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
+// Read at server startup from the runtime environment — works correctly in Docker
+// because process.env is populated before the Next.js server module is loaded.
+const BACKEND_URL = process.env.BACKEND_URL ?? 'http://localhost:8080'
+
 const PUBLIC_PATHS = ['/login', '/auth/login', '/auth/local/login', '/auth/callback']
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Allow public paths through unconditionally
+  // Proxy all /auth/* and /api/* requests to the Go backend.
+  // Evaluated at runtime so BACKEND_URL is always the container-resolved value.
+  if (pathname.startsWith('/auth/') || pathname.startsWith('/api/')) {
+    const target = new URL(pathname, BACKEND_URL)
+    target.search = request.nextUrl.search
+    return NextResponse.rewrite(target)
+  }
+
+  // Allow public page paths through unconditionally
   if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'))) {
     return NextResponse.next()
   }
@@ -33,6 +45,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Run on all page routes but skip API routes and static files
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/).*)'],
+  // Run on all routes except static files; /auth/* and /api/* are handled above
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 }
