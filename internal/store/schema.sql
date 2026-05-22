@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS teams (
     id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     name           VARCHAR(255) NOT NULL,
     webhook_secret VARCHAR(255) NOT NULL UNIQUE,
-    created_at     TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_teams_webhook_secret ON teams(webhook_secret);
@@ -19,8 +19,8 @@ CREATE TABLE IF NOT EXISTS users (
     email      VARCHAR(255) NOT NULL,
     phone      VARCHAR(50),
     role       VARCHAR(50)  NOT NULL DEFAULT 'responder',
-    created_at TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_team_id ON users(team_id);
@@ -37,13 +37,13 @@ CREATE TABLE IF NOT EXISTS incidents (
     alert_payload JSONB        NOT NULL,
     context       JSONB,
     analysis      JSONB,
-    fired_at         TIMESTAMP NOT NULL DEFAULT NOW(),
-    acknowledged_at  TIMESTAMP,
-    resolved_at      TIMESTAMP,
-    snoozed_until    TIMESTAMP,
+    fired_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    acknowledged_at  TIMESTAMPTZ,
+    resolved_at      TIMESTAMPTZ,
+    snoozed_until    TIMESTAMPTZ,
     escalation_step  INT NOT NULL DEFAULT 0,
-    created_at       TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at       TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     assigned_to   UUID REFERENCES users(id)
 );
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS escalation_step INT NOT NULL DEFAULT 0;
@@ -59,8 +59,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     name            VARCHAR(255) NOT NULL,
     rotation_config JSONB        NOT NULL,
     enabled         BOOLEAN      NOT NULL DEFAULT true,
-    created_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_schedules_team_id ON schedules(team_id);
@@ -74,8 +74,8 @@ CREATE TABLE IF NOT EXISTS sso_identities (
     email       VARCHAR(255) NOT NULL,
     name        VARCHAR(255) NOT NULL,
     avatar_url  VARCHAR(500),
-    created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     UNIQUE(provider, provider_id)
 );
 
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS group_mappings (
     group_name  VARCHAR(255),                    -- human-readable label
     team_id     UUID         NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     role        VARCHAR(50)  NOT NULL DEFAULT 'viewer',
-    created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     UNIQUE(provider, group_id, team_id)
 );
 
@@ -108,9 +108,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     id          UUID     PRIMARY KEY DEFAULT gen_random_uuid(),
     identity_id UUID     NOT NULL REFERENCES sso_identities(id) ON DELETE CASCADE,
     token_hash  CHAR(64) NOT NULL UNIQUE,        -- SHA-256 hex of session token
-    expires_at  TIMESTAMP NOT NULL,
+    expires_at  TIMESTAMPTZ NOT NULL,
     ip_address  VARCHAR(45),
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS password_policy (
     require_special          BOOLEAN     NOT NULL DEFAULT true,
     max_failed_attempts      INT         NOT NULL DEFAULT 5,
     lockout_duration_minutes INT         NOT NULL DEFAULT 30,
-    updated_at               TIMESTAMP   NOT NULL DEFAULT NOW()
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 INSERT INTO password_policy (id) VALUES (1) ON CONFLICT DO NOTHING;
 
@@ -144,10 +144,10 @@ CREATE TABLE IF NOT EXISTS local_users (
     is_active             BOOLEAN      NOT NULL DEFAULT true,
     force_password_change BOOLEAN      NOT NULL DEFAULT false,
     failed_login_attempts INT          NOT NULL DEFAULT 0,
-    locked_until          TIMESTAMP,
-    last_login_at         TIMESTAMP,
-    created_at            TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at            TIMESTAMP    NOT NULL DEFAULT NOW()
+    locked_until          TIMESTAMPTZ,
+    last_login_at         TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_local_users_username ON local_users(username);
 CREATE INDEX IF NOT EXISTS idx_local_users_email    ON local_users(email);
@@ -157,15 +157,15 @@ CREATE TABLE IF NOT EXISTS local_groups (
     id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
-    created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 -- Local group membership (user → group many-to-many)
 CREATE TABLE IF NOT EXISTS local_group_members (
     group_id   UUID      NOT NULL REFERENCES local_groups(id) ON DELETE CASCADE,
     user_id    UUID      NOT NULL REFERENCES local_users(id)  ON DELETE CASCADE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (group_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_local_group_members_user ON local_group_members(user_id);
@@ -190,8 +190,8 @@ CREATE TABLE IF NOT EXISTS sso_providers (
     scopes            TEXT[]       NOT NULL DEFAULT ARRAY['openid','profile','email'],
     enabled           BOOLEAN      NOT NULL DEFAULT true,
     auto_provision    BOOLEAN      NOT NULL DEFAULT true,
-    created_at        TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at        TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_sso_providers_enabled ON sso_providers(enabled);
 
@@ -218,9 +218,9 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     user_id      UUID         NOT NULL REFERENCES local_users(id) ON DELETE CASCADE,
     name         VARCHAR(255) NOT NULL,
     token_hash   CHAR(64)     NOT NULL UNIQUE,  -- SHA-256 hex of the raw token
-    last_used_at TIMESTAMP,
-    expires_at   TIMESTAMP,                      -- NULL = never expires
-    created_at   TIMESTAMP    NOT NULL DEFAULT NOW()
+    last_used_at TIMESTAMPTZ,
+    expires_at   TIMESTAMPTZ,                    -- NULL = never expires
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
@@ -236,12 +236,12 @@ CREATE TABLE IF NOT EXISTS schedule_overrides (
     id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     schedule_id UUID         NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
     team_id     UUID         NOT NULL,  -- denormalized for fast team-scoped queries
-    start_at    TIMESTAMP    NOT NULL,
-    end_at      TIMESTAMP    NOT NULL,
+    start_at    TIMESTAMPTZ  NOT NULL,
+    end_at      TIMESTAMPTZ  NOT NULL,
     user_id     UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     reason      TEXT,
     created_by  UUID         NOT NULL,  -- local_users.id or users.id of the creator
-    created_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_schedule_overrides_schedule ON schedule_overrides(schedule_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_overrides_team     ON schedule_overrides(team_id);
@@ -252,7 +252,7 @@ CREATE TABLE IF NOT EXISTS escalation_policies (
     id         UUID      PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id    UUID      NOT NULL UNIQUE REFERENCES teams(id) ON DELETE CASCADE,
     config     JSONB     NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_escalation_policies_team ON escalation_policies(team_id);
 
@@ -289,8 +289,8 @@ CREATE TABLE IF NOT EXISTS team_config (
     dynatrace_token_encrypted   TEXT,
     splunk_endpoint             VARCHAR(500),
     splunk_token_encrypted      TEXT,
-    created_at             TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at             TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 -- Idempotent migration: add Dynatrace and Splunk columns if they don't exist yet.
@@ -348,9 +348,77 @@ CREATE TABLE IF NOT EXISTS system_config (
     id          INT          PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     ai_backend  VARCHAR(50)  NOT NULL DEFAULT 'ollama',
     ai_model    VARCHAR(100),
-    updated_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_by  UUID         REFERENCES local_users(id) ON DELETE SET NULL
 );
+
+-- Idempotent migration: convert legacy timestamp-without-time-zone columns to
+-- TIMESTAMPTZ. Existing values are reinterpreted as UTC, matching the app's
+-- UTC write behavior introduced in PR #11.
+DO $$
+DECLARE
+    col RECORD;
+BEGIN
+    FOR col IN
+        SELECT *
+        FROM (VALUES
+            ('teams', 'created_at'),
+            ('teams', 'updated_at'),
+            ('users', 'created_at'),
+            ('users', 'updated_at'),
+            ('incidents', 'fired_at'),
+            ('incidents', 'acknowledged_at'),
+            ('incidents', 'resolved_at'),
+            ('incidents', 'snoozed_until'),
+            ('incidents', 'created_at'),
+            ('incidents', 'updated_at'),
+            ('schedules', 'created_at'),
+            ('schedules', 'updated_at'),
+            ('sso_identities', 'created_at'),
+            ('sso_identities', 'updated_at'),
+            ('group_mappings', 'created_at'),
+            ('sessions', 'expires_at'),
+            ('sessions', 'created_at'),
+            ('password_policy', 'updated_at'),
+            ('local_users', 'locked_until'),
+            ('local_users', 'last_login_at'),
+            ('local_users', 'created_at'),
+            ('local_users', 'updated_at'),
+            ('local_groups', 'created_at'),
+            ('local_groups', 'updated_at'),
+            ('local_group_members', 'created_at'),
+            ('sso_providers', 'created_at'),
+            ('sso_providers', 'updated_at'),
+            ('api_tokens', 'last_used_at'),
+            ('api_tokens', 'expires_at'),
+            ('api_tokens', 'created_at'),
+            ('schedule_overrides', 'start_at'),
+            ('schedule_overrides', 'end_at'),
+            ('schedule_overrides', 'created_at'),
+            ('escalation_policies', 'updated_at'),
+            ('team_config', 'created_at'),
+            ('team_config', 'updated_at'),
+            ('system_config', 'updated_at')
+        ) AS cols(table_name, column_name)
+    LOOP
+        IF to_regclass(format('public.%I', col.table_name)) IS NOT NULL
+            AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = col.table_name
+                  AND column_name = col.column_name
+                  AND data_type = 'timestamp without time zone'
+            ) THEN
+            EXECUTE format(
+                'ALTER TABLE %I ALTER COLUMN %I TYPE TIMESTAMPTZ USING %I AT TIME ZONE ''UTC''',
+                col.table_name,
+                col.column_name,
+                col.column_name
+            );
+        END IF;
+    END LOOP;
+END $$;
 
 -- ============================================================
 -- Incident Knowledge Graph
