@@ -20,7 +20,7 @@ import (
 	"os"
 	"testing"
 	"time"
-	
+
 	"github.com/google/uuid"
 )
 
@@ -605,5 +605,78 @@ func TestDB_CreateIncident_PreservesProvidedFiredAt(t *testing.T) {
 
 	if !got.FiredAt.Equal(wantFiredAt) {
 		t.Fatalf("expected FiredAt %v, got %v", wantFiredAt, got.FiredAt)
+	}
+}
+
+func TestDB_Migrate_ConvertsLegacyTimestampColumnsToTimestamptz(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	legacyTime := time.Date(2025, 2, 3, 4, 5, 6, 0, time.UTC)
+
+	if _, err := db.pool.Exec(ctx, `DROP TABLE IF EXISTS password_policy`); err != nil {
+		t.Fatalf("drop legacy table: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := db.pool.Exec(ctx, `DROP TABLE IF EXISTS password_policy`); err != nil {
+			t.Fatalf("cleanup drop password_policy: %v", err)
+		}
+		if err := db.Migrate(ctx); err != nil {
+			t.Fatalf("cleanup migrate password_policy: %v", err)
+		}
+	})
+
+	if _, err := db.pool.Exec(ctx, `
+		CREATE TABLE password_policy (
+			id                       INT       PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			min_length               INT       NOT NULL DEFAULT 12,
+			require_uppercase        BOOLEAN   NOT NULL DEFAULT true,
+			require_lowercase        BOOLEAN   NOT NULL DEFAULT true,
+			require_number           BOOLEAN   NOT NULL DEFAULT true,
+			require_special          BOOLEAN   NOT NULL DEFAULT true,
+			max_failed_attempts      INT       NOT NULL DEFAULT 5,
+			lockout_duration_minutes INT       NOT NULL DEFAULT 30,
+			updated_at               TIMESTAMP NOT NULL DEFAULT NOW()
+		)
+	`); err != nil {
+		t.Fatalf("create legacy password_policy: %v", err)
+	}
+
+	if _, err := db.pool.Exec(ctx, `
+		INSERT INTO password_policy (
+			id, min_length, require_uppercase, require_lowercase,
+			require_number, require_special, max_failed_attempts,
+			lockout_duration_minutes, updated_at
+		) VALUES (1, 12, true, true, true, true, 5, 30, $1)
+	`, legacyTime); err != nil {
+		t.Fatalf("insert legacy password_policy row: %v", err)
+	}
+
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate legacy password_policy: %v", err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate legacy password_policy second run: %v", err)
+	}
+
+	var dataType string
+	err := db.pool.QueryRow(ctx, `
+		SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'password_policy' AND column_name = 'updated_at'
+	`).Scan(&dataType)
+	if err != nil {
+		t.Fatalf("query updated_at data type: %v", err)
+	}
+	if dataType != "timestamp with time zone" {
+		t.Fatalf("expected timestamptz column, got %q", dataType)
+	}
+
+	var got time.Time
+	if err := db.pool.QueryRow(ctx, `SELECT updated_at FROM password_policy WHERE id = 1`).Scan(&got); err != nil {
+		t.Fatalf("query migrated timestamp: %v", err)
+	}
+	if !got.Equal(legacyTime) {
+		t.Fatalf("expected migrated time %v, got %v", legacyTime, got)
 	}
 }
