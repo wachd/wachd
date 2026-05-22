@@ -161,7 +161,22 @@ make compose-up
 
 > **If you have a local `.env` from development:** `DATABASE_URL` and `REDIS_URL` use `localhost` hostnames, which won't resolve inside Docker. Either remove the `.env` file (the compose defaults use Docker service names) or update those two values to `postgres:5432` and `redis:6379`.
 
-Open **http://localhost:3000** — the dashboard is running.
+**First run — get your admin credentials:**
+
+On the very first startup, Wachd creates a superadmin account and prints the credentials once to the server log. Retrieve them with:
+
+```bash
+docker compose logs wachd-server | grep -A 6 "BOOTSTRAP ADMIN"
+```
+
+You will see:
+
+```
+║  Username: wachd_admin                        ║
+║  Password: <generated-password>               ║
+```
+
+Log in at **http://localhost:3000** and change the password immediately when prompted.
 
 > **Before going to production:** generate a unique encryption key and set it in `.env`:
 > ```bash
@@ -190,6 +205,8 @@ Then `make compose-up` again.
 ```bash
 make compose-down
 ```
+
+> **Why not `docker compose down` directly?** The app services (`wachd-server`, `wachd-worker`, `wachd-web`) use the `app` profile. Running `docker compose down` without `--profile app` skips them, leaving the network in use. Always use `make compose-down` — or `docker compose --profile app down` if you prefer the raw command.
 
 ---
 
