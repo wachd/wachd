@@ -144,6 +144,8 @@ type TeamConfig struct {
 	SlackBotToken         *string    `json:"slack_bot_token,omitempty"`
 	GitHubTokenEncrypted  *string    `json:"github_token_encrypted,omitempty"`
 	GitHubRepos           []byte     `json:"github_repos,omitempty"` // JSONB
+	GrafanaMCPURL         *string    `json:"grafana_mcp_url,omitempty"`
+	GrafanaMCPTokenEncrypted *string `json:"grafana_mcp_token_encrypted,omitempty"`
 	PrometheusEndpoint          *string    `json:"prometheus_endpoint,omitempty"`
 	LokiEndpoint                *string    `json:"loki_endpoint,omitempty"`
 	DynatraceEndpoint           *string    `json:"dynatrace_endpoint,omitempty"`
