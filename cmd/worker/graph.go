@@ -28,6 +28,11 @@ import (
 	"github.com/wachd/wachd/internal/store"
 )
 
+const (
+	maxGraphLogLines = 3
+	maxGraphCommits  = 2
+)
+
 type teamGraphConfigReader interface {
 	GetTeamGraphConfig(ctx context.Context, teamID uuid.UUID) (*store.TeamGraphConfig, error)
 }
@@ -54,6 +59,8 @@ func persistResolvedIncidentNode(ctx context.Context, cfgStore teamGraphConfigRe
 		log.Printf("warn: load team graph config for %s: %v", teamID, err)
 		return nil
 	}
+	// min_similarity_score is intentionally unused on the write path; it applies
+	// when FindSimilar reads back permanent nodes.
 	if cfg != nil && !cfg.Enabled {
 		return nil
 	}
@@ -134,11 +141,6 @@ func (w *Worker) loadIncidentAnalysis(incident *store.Incident) *ai.AnalysisResp
 		log.Printf("warn: parse incident analysis for %s: %v", incident.ID, err)
 		return nil
 	}
-	analysis.RootCause = w.sanitiseGraphValue("", analysis.RootCause)
-	analysis.SuggestedAction = w.sanitiseGraphValue("", analysis.SuggestedAction)
-	for i, finding := range analysis.KeyFindings {
-		analysis.KeyFindings[i] = w.sanitiseGraphValue("", finding)
-	}
 	return &analysis
 }
 
@@ -169,7 +171,7 @@ func summarizeLogPattern(logs []collector.LogLine) string {
 		return ""
 	}
 	seen := make(map[string]struct{}, len(logs))
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, maxGraphLogLines)
 	for _, entry := range logs {
 		msg := strings.TrimSpace(entry.Message)
 		if msg == "" {
@@ -180,7 +182,7 @@ func summarizeLogPattern(logs []collector.LogLine) string {
 		}
 		seen[msg] = struct{}{}
 		parts = append(parts, msg)
-		if len(parts) == 3 {
+		if len(parts) == maxGraphLogLines {
 			break
 		}
 	}
@@ -198,7 +200,7 @@ func summarizeDeployment(commits []collector.Commit) string {
 	if len(commits) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, maxGraphCommits)
 	for _, commit := range commits {
 		msg := strings.TrimSpace(commit.Message)
 		if msg == "" {
@@ -213,7 +215,7 @@ func summarizeDeployment(commits []collector.Commit) string {
 		} else {
 			parts = append(parts, msg)
 		}
-		if len(parts) == 2 {
+		if len(parts) == maxGraphCommits {
 			break
 		}
 	}
