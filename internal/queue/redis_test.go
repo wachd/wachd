@@ -95,7 +95,7 @@ func TestEnqueueAndDequeue(t *testing.T) {
 	}
 
 	// Verify job fields
-	if job.Type != "alert" {
+	if job.Type != jobTypeAlert {
 		t.Errorf("expected type 'alert', got %q", job.Type)
 	}
 	if job.IncidentID != incidentID {
@@ -112,6 +112,32 @@ func TestEnqueueAndDequeue(t *testing.T) {
 	}
 	if job.CreatedAt.IsZero() {
 		t.Error("expected non-zero CreatedAt")
+	}
+}
+
+func TestEnqueueResolvedIncidentJob(t *testing.T) {
+	q := requireQueue(t)
+	ctx := context.Background()
+
+	incidentID := uuid.New()
+	teamID := uuid.New()
+
+	if err := q.EnqueueIncidentResolved(ctx, incidentID, teamID); err != nil {
+		t.Fatalf("EnqueueIncidentResolved: %v", err)
+	}
+
+	job, err := q.DequeueAlert(ctx, time.Second)
+	if err != nil {
+		t.Fatalf("DequeueAlert: %v", err)
+	}
+	if job == nil {
+		t.Fatal("expected a job, got nil")
+	}
+	if job.Type != jobTypeIncidentResolved {
+		t.Fatalf("expected type %q, got %q", jobTypeIncidentResolved, job.Type)
+	}
+	if len(job.Payload) != 0 {
+		t.Fatalf("expected empty payload for resolved job, got %q", job.Payload)
 	}
 }
 

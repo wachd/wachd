@@ -61,6 +61,10 @@ type ConfigStore interface {
 	GetEscalationPolicy(ctx context.Context, teamID uuid.UUID) (*EscalationPolicy, error)
 	UpsertEscalationPolicy(ctx context.Context, p *EscalationPolicy) error
 
+	// Team graph config
+	GetTeamGraphConfig(ctx context.Context, teamID uuid.UUID) (*TeamGraphConfig, error)
+	UpsertTeamGraphConfig(ctx context.Context, cfg *TeamGraphConfig) error
+
 	// User notification rules
 	ListUserNotificationRules(ctx context.Context, userID uuid.UUID, userSource string) ([]*UserNotificationRule, error)
 	GetUserNotificationRules(ctx context.Context, userID uuid.UUID, userSource, eventType string) ([]*UserNotificationRule, error)

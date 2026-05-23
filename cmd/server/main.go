@@ -1255,6 +1255,9 @@ func (s *Server) handleResolveIncident(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to resolve incident", http.StatusInternalServerError)
 		return
 	}
+	if err := s.queue.EnqueueIncidentResolved(r.Context(), incidentID, teamID); err != nil {
+		log.Printf("Failed to enqueue resolved incident job: %v", err)
+	}
 
 	log.Printf("✓ Incident %s resolved", incident.Title)
 
