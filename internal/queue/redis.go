@@ -40,7 +40,9 @@ type Job struct {
 }
 
 const (
-	alertQueueKey = "wachd:queue:alerts"
+	alertQueueKey           = "wachd:queue:alerts"
+	jobTypeAlert            = "alert"
+	jobTypeIncidentResolved = "incident_resolved"
 )
 
 // NewQueue creates a new queue client
@@ -70,9 +72,18 @@ func (q *Queue) Close() error {
 
 // EnqueueAlert enqueues an alert processing job
 func (q *Queue) EnqueueAlert(ctx context.Context, incidentID, teamID uuid.UUID, payload []byte) error {
+	return q.enqueueJob(ctx, jobTypeAlert, incidentID, teamID, payload)
+}
+
+// EnqueueIncidentResolved enqueues a resolved-incident graph processing job.
+func (q *Queue) EnqueueIncidentResolved(ctx context.Context, incidentID, teamID uuid.UUID) error {
+	return q.enqueueJob(ctx, jobTypeIncidentResolved, incidentID, teamID, nil)
+}
+
+func (q *Queue) enqueueJob(ctx context.Context, jobType string, incidentID, teamID uuid.UUID, payload []byte) error {
 	job := Job{
 		ID:         uuid.New().String(),
-		Type:       "alert",
+		Type:       jobType,
 		IncidentID: incidentID,
 		TeamID:     teamID,
 		Payload:    payload,

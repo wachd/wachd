@@ -901,6 +901,51 @@ func TestDB_TeamConfig_GetAndUpsert(t *testing.T) {
 	}
 }
 
+func TestDB_TeamGraphConfig_GetAndUpsert(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("graph-team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	defaults, err := db.GetTeamGraphConfig(ctx, team.ID)
+	if err != nil {
+		t.Fatalf("GetTeamGraphConfig defaults: %v", err)
+	}
+	if defaults == nil {
+		t.Fatal("expected default graph config")
+	}
+	if !defaults.Enabled {
+		t.Fatal("expected default graph config to be enabled")
+	}
+	if defaults.MinSimilarityScore != defaultTeamGraphMinSimilarityScore {
+		t.Fatalf("expected default similarity score %.2f, got %.2f", defaultTeamGraphMinSimilarityScore, defaults.MinSimilarityScore)
+	}
+
+	cfg := &TeamGraphConfig{
+		TeamID:             team.ID,
+		Enabled:            false,
+		MinSimilarityScore: 0.42,
+	}
+	if err := db.UpsertTeamGraphConfig(ctx, cfg); err != nil {
+		t.Fatalf("UpsertTeamGraphConfig insert: %v", err)
+	}
+
+	got, err := db.GetTeamGraphConfig(ctx, team.ID)
+	if err != nil {
+		t.Fatalf("GetTeamGraphConfig: %v", err)
+	}
+	if got.Enabled {
+		t.Fatal("expected graph config to be disabled after update")
+	}
+	if got.MinSimilarityScore != cfg.MinSimilarityScore {
+		t.Fatalf("expected similarity score %.2f, got %.2f", cfg.MinSimilarityScore, got.MinSimilarityScore)
+	}
+}
+
 // ── Team Members ──────────────────────────────────────────────────────────────
 
 func TestDB_GetTeamMembers_ViaGroupAccess(t *testing.T) {

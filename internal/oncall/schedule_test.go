@@ -55,6 +55,12 @@ func (m *mockConfigStore) GetMemberByID(_ context.Context, _ uuid.UUID) (*store.
 func (m *mockConfigStore) GetEscalationPolicy(_ context.Context, _ uuid.UUID) (*store.EscalationPolicy, error) {
 	return m.escalationPolicy, nil
 }
+func (m *mockConfigStore) GetTeamGraphConfig(_ context.Context, _ uuid.UUID) (*store.TeamGraphConfig, error) {
+	return &store.TeamGraphConfig{Enabled: true, MinSimilarityScore: 0.12}, nil
+}
+func (m *mockConfigStore) UpsertTeamGraphConfig(_ context.Context, _ *store.TeamGraphConfig) error {
+	return nil
+}
 
 // Unused interface methods — return zero values.
 func (m *mockConfigStore) GetTeam(_ context.Context, _ uuid.UUID) (*store.Team, error) {

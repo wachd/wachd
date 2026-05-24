@@ -96,6 +96,14 @@ type EscalationPolicy struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// TeamGraphConfig controls incident graph write/search behavior per team.
+type TeamGraphConfig struct {
+	TeamID             uuid.UUID `json:"team_id"`
+	Enabled            bool      `json:"enabled"`
+	MinSimilarityScore float64   `json:"min_similarity_score"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
 // SSOIdentity is a provider-level identity (one per person, not per team)
 type SSOIdentity struct {
 	ID         uuid.UUID  `json:"id"`

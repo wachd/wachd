@@ -27,6 +27,7 @@ import (
 	"github.com/wachd/wachd/internal/ai"
 	"github.com/wachd/wachd/internal/auth"
 	"github.com/wachd/wachd/internal/correlator"
+	"github.com/wachd/wachd/internal/graph"
 	"github.com/wachd/wachd/internal/notify"
 	"github.com/wachd/wachd/internal/oncall"
 	"github.com/wachd/wachd/internal/queue"
@@ -48,6 +49,7 @@ type Worker struct {
 	voiceNotifier *notify.VoiceNotifier
 	sanitiser     *sanitiser.Sanitiser
 	correlator    *correlator.Correlator
+	graphStore    graph.Store
 	aiBackend     ai.Backend
 }
 
@@ -245,6 +247,7 @@ func main() {
 		voiceNotifier: voiceNotifier,
 		sanitiser:     san,
 		correlator:    cor,
+		graphStore:    graph.NewPostgresStore(db.Pool()),
 		aiBackend:     aiEngine,
 	}
 
@@ -292,6 +295,18 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 	}
 
 	log.Printf("📥 Processing job %s (type: %s, incident: %s)", job.ID, job.Type, job.IncidentID)
+	switch job.Type {
+	case "alert":
+		return w.processAlertJob(ctx, job)
+	case "incident_resolved":
+		return w.processResolvedIncidentJob(ctx, job)
+	default:
+		log.Printf("warn: unknown job type %q for incident %s", job.Type, job.IncidentID)
+		return nil
+	}
+}
+
+func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 
 	incident, err := w.db.GetIncident(ctx, job.TeamID, job.IncidentID)
 	if err != nil {
@@ -386,6 +401,23 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 	w.fireTeamSlack(ctx, incident, onCallUser, aiAnalysis)
 
 	log.Printf("✓ Incident %s processed", incident.ID)
+	return nil
+}
+
+func (w *Worker) processResolvedIncidentJob(ctx context.Context, job *queue.Job) error {
+	incident, err := w.db.GetIncident(ctx, job.TeamID, job.IncidentID)
+	if err != nil {
+		log.Printf("warn: resolved graph write skipped, incident lookup failed for %s: %v", job.IncidentID, err)
+		return nil
+	}
+	if incident.Status != "resolved" {
+		log.Printf("warn: resolved graph write skipped for incident %s with status %q", incident.ID, incident.Status)
+		return nil
+	}
+
+	if err := w.writeResolvedIncidentToGraph(ctx, incident); err != nil {
+		log.Printf("warn: graph write failed for resolved incident %s: %v", incident.ID, err)
+	}
 	return nil
 }
 

@@ -340,6 +340,18 @@ CREATE INDEX IF NOT EXISTS idx_pending_notif_fire ON pending_notifications(sched
     WHERE sent_at IS NULL AND cancelled_at IS NULL;
 
 -- ============================================================
+-- Team graph configuration
+-- Controls whether resolved incidents are written to the knowledge graph and
+-- what minimum similarity score should be used for retrieval.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS team_graph_config (
+    team_id              UUID PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
+    enabled              BOOLEAN     NOT NULL DEFAULT true,
+    min_similarity_score FLOAT       NOT NULL DEFAULT 0.12,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
 -- Platform-wide system configuration (superadmin only)
 -- Singleton row: always use id = 1.
 -- ============================================================
