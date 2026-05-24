@@ -596,6 +596,9 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/config/test-notification", server.handleTestNotification).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleGetEscalationPolicy).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleUpsertEscalationPolicy).Methods("PUT")
+	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleListServiceDependencies).Methods("GET")
+	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleCreateServiceDependency).Methods("POST")
+	apiRouter.HandleFunc("/{teamId}/dependencies/{depId}", server.handleDeleteServiceDependency).Methods("DELETE")
 
 	// Wrap router with CORS middleware
 	handler := corsMiddleware(router)
@@ -2550,4 +2553,89 @@ func sessionIdentity(sess *auth.Session) (uuid.UUID, string) {
 		return *sess.IdentityID, "sso"
 	}
 	return uuid.Nil, "local"
+}
+
+// ── Service Dependencies ──────────────────────────────────────────────────────
+
+func (s *Server) handleListServiceDependencies(w http.ResponseWriter, r *http.Request) {
+	teamID, err := uuid.Parse(mux.Vars(r)["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAccess(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	deps, err := s.cfg.ListServiceDependencies(r.Context(), teamID, "")
+	if err != nil {
+		log.Printf("handleListServiceDependencies: %v", err)
+		http.Error(w, "failed to list service dependencies", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(deps)
+}
+
+func (s *Server) handleCreateServiceDependency(w http.ResponseWriter, r *http.Request) {
+	teamID, err := uuid.Parse(mux.Vars(r)["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	var input struct {
+		Service   string  `json:"service"`
+		DependsOn string  `json:"depends_on"`
+		Label     *string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if input.Service == "" || input.DependsOn == "" {
+		http.Error(w, "service and depends_on are required", http.StatusBadRequest)
+		return
+	}
+	created, err := s.cfg.CreateServiceDependency(r.Context(), &store.ServiceDependency{
+		TeamID:    teamID,
+		Service:   input.Service,
+		DependsOn: input.DependsOn,
+		Label:     input.Label,
+	})
+	if err != nil {
+		log.Printf("handleCreateServiceDependency: %v", err)
+		http.Error(w, "failed to create service dependency", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(created)
+}
+
+func (s *Server) handleDeleteServiceDependency(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID, err := uuid.Parse(vars["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	depID, err := uuid.Parse(vars["depId"])
+	if err != nil {
+		http.Error(w, "invalid dependency ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	if err := s.cfg.DeleteServiceDependency(r.Context(), teamID, depID); err != nil {
+		log.Printf("handleDeleteServiceDependency: %v", err)
+		http.Error(w, "service dependency not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

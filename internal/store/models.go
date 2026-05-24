@@ -104,6 +104,18 @@ type TeamGraphConfig struct {
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
+// ServiceDependency declares that a service depends on another service.
+// When an alert fires for Service, the collector also pulls context for DependsOn
+// using the team's existing configured connectors.
+type ServiceDependency struct {
+	ID        uuid.UUID `json:"id"`
+	TeamID    uuid.UUID `json:"team_id"`
+	Service   string    `json:"service"`    // alerting service name (matches service tag on alerts)
+	DependsOn string    `json:"depends_on"` // dependency service name
+	Label     *string   `json:"label,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // SSOIdentity is a provider-level identity (one per person, not per team)
 type SSOIdentity struct {
 	ID         uuid.UUID  `json:"id"`
