@@ -26,6 +26,7 @@ import (
 
 func TestGrafanaMCPCollector_FetchErrorLogsAndMetrics(t *testing.T) {
 	var sawAuth bool
+	var listDatasourceCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "Bearer secret-token" {
 			sawAuth = true
@@ -47,6 +48,7 @@ func TestGrafanaMCPCollector_FetchErrorLogsAndMetrics(t *testing.T) {
 			params := req.Params.(map[string]interface{})
 			switch params["name"] {
 			case toolListDatasources:
+				listDatasourceCalls++
 				_ = json.NewEncoder(w).Encode(mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: mustRawJSON(t, map[string]any{"structuredContent": []map[string]string{{"uid": "loki-uid", "type": "loki", "name": "Loki"}, {"uid": "prom-uid", "type": "prometheus", "name": "Prometheus"}}})})
 			case toolQueryLokiLogs:
 				_ = json.NewEncoder(w).Encode(mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: mustRawJSON(t, map[string]any{"structuredContent": map[string]any{"logs": []map[string]any{{"timestamp": "2026-01-01T10:00:00Z", "message": "fatal timeout", "level": "ERROR", "labels": map[string]string{"service": "api"}}}}})})
@@ -81,6 +83,9 @@ func TestGrafanaMCPCollector_FetchErrorLogsAndMetrics(t *testing.T) {
 	}
 	if c.sessionID != "session-123" {
 		t.Fatalf("expected session id to be captured, got %q", c.sessionID)
+	}
+	if listDatasourceCalls != 1 {
+		t.Fatalf("expected list_datasources to be called once, got %d", listDatasourceCalls)
 	}
 }
 

@@ -41,11 +41,12 @@ const (
 )
 
 type GrafanaMCPCollector struct {
-	endpoint  string
-	token     string
-	client    *http.Client
-	sessionID string
-	nextID    int64
+	endpoint       string
+	token          string
+	client         *http.Client
+	sessionID      string
+	nextID         int64
+	datasourceUIDs map[string]string
 }
 
 type mcpRequest struct {
@@ -113,9 +114,13 @@ func (g *GrafanaMCPCollector) FetchErrorLogs(ctx context.Context, service string
 	if limit <= 0 {
 		limit = defaultGrafanaMCPLogLimit
 	}
-	uid, err := g.lookupDatasourceUID(ctx, datasourceTypeLoki)
+	datasourceUIDs, err := g.lookupDatasourceUIDs(ctx)
 	if err != nil {
 		return nil, err
+	}
+	uid, ok := datasourceUIDs[datasourceTypeLoki]
+	if !ok || uid == "" {
+		return nil, fmt.Errorf("grafana mcp datasource %q not found", datasourceTypeLoki)
 	}
 	result, err := g.callTool(ctx, toolQueryLokiLogs, map[string]interface{}{
 		"datasourceUid": uid,
@@ -140,15 +145,19 @@ func (g *GrafanaMCPCollector) FetchErrorRate(ctx context.Context, service string
 	if err := g.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
-	uid, err := g.lookupDatasourceUID(ctx, datasourceTypePrometheus)
+	datasourceUIDs, err := g.lookupDatasourceUIDs(ctx)
 	if err != nil {
 		return nil, err
+	}
+	uid, ok := datasourceUIDs[datasourceTypePrometheus]
+	if !ok || uid == "" {
+		return nil, fmt.Errorf("grafana mcp datasource %q not found", datasourceTypePrometheus)
 	}
 	until := time.Now().UTC()
 	since := until.Add(-duration)
 	result, err := g.callTool(ctx, toolQueryPrometheus, map[string]interface{}{
 		"datasourceUid": uid,
-		"expr":          fmt.Sprintf(`rate(http_errors_total{service=%q}[%s])`, service, duration),
+		"expr":          fmt.Sprintf(`rate(http_errors_total{service=%q}[%ds])`, service, int(duration.Seconds())),
 		"queryType":     "range",
 		"startTime":     since.Format(time.RFC3339),
 		"endTime":       until.Format(time.RFC3339),
@@ -198,18 +207,22 @@ func (g *GrafanaMCPCollector) notifyInitialized(ctx context.Context) error {
 	}, nil)
 }
 
-func (g *GrafanaMCPCollector) lookupDatasourceUID(ctx context.Context, wantedType string) (string, error) {
+func (g *GrafanaMCPCollector) lookupDatasourceUIDs(ctx context.Context) (map[string]string, error) {
+	if len(g.datasourceUIDs) > 0 {
+		return g.datasourceUIDs, nil
+	}
 	result, err := g.callTool(ctx, toolListDatasources, map[string]interface{}{})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	datasources := extractDatasources(result)
+	g.datasourceUIDs = make(map[string]string, len(datasources))
 	for _, ds := range datasources {
-		if strings.EqualFold(ds.Type, wantedType) && ds.UID != "" {
-			return ds.UID, nil
+		if ds.UID != "" {
+			g.datasourceUIDs[strings.ToLower(ds.Type)] = ds.UID
 		}
 	}
-	return "", fmt.Errorf("grafana mcp datasource %q not found", wantedType)
+	return g.datasourceUIDs, nil
 }
 
 func (g *GrafanaMCPCollector) callTool(ctx context.Context, name string, arguments map[string]interface{}) (interface{}, error) {

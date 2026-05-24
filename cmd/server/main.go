@@ -1495,7 +1495,7 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "loki_endpoint too long", http.StatusBadRequest)
 		return
 	}
-	if input.GrafanaMCPURL != nil && len(*input.GrafanaMCPURL) > 2000 {
+	if input.GrafanaMCPURL != nil && len(*input.GrafanaMCPURL) > 500 {
 		http.Error(w, "grafana_mcp_url too long", http.StatusBadRequest)
 		return
 	}
