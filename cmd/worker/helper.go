@@ -32,6 +32,15 @@ import (
 	"github.com/wachd/wachd/internal/validate"
 )
 
+type grafanaMCPCollector interface {
+	FetchErrorLogs(ctx context.Context, service string, since, until time.Time, limit int) ([]collector.LogLine, error)
+	FetchErrorRate(ctx context.Context, service string, duration time.Duration) ([]collector.MetricPoint, error)
+}
+
+var newGrafanaMCPCollector = func(endpoint, token string) grafanaMCPCollector {
+	return collector.NewGrafanaMCPCollector(endpoint, token)
+}
+
 // collectContext gathers context from the team's configured data sources.
 // Config is loaded from the database per team — not from global env vars.
 func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *correlator.Context {
@@ -89,8 +98,10 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 		}
 	}
 
+	logsFromMCP, metricsFromMCP := w.collectGrafanaMCPContext(ctx, cfg, serviceName, since, incident.FiredAt, result)
+
 	// Loki logs
-	if cfg.LokiEndpoint != nil && *cfg.LokiEndpoint != "" {
+	if !logsFromMCP && cfg.LokiEndpoint != nil && *cfg.LokiEndpoint != "" {
 		if err := validate.EndpointURL(*cfg.LokiEndpoint); err != nil {
 			log.Printf("  ⚠ Loki endpoint blocked (SSRF): %v", err)
 		} else {
@@ -106,7 +117,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 	}
 
 	// Prometheus metrics
-	if cfg.PrometheusEndpoint != nil && *cfg.PrometheusEndpoint != "" {
+	if !metricsFromMCP && cfg.PrometheusEndpoint != nil && *cfg.PrometheusEndpoint != "" {
 		if err := validate.EndpointURL(*cfg.PrometheusEndpoint); err != nil {
 			log.Printf("  ⚠ Prometheus endpoint blocked (SSRF): %v", err)
 		} else {
@@ -213,6 +224,52 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 	}
 
 	return result
+}
+
+func (w *Worker) collectGrafanaMCPContext(ctx context.Context, cfg *store.TeamConfig, serviceName string, since, until time.Time, result *correlator.Context) (bool, bool) {
+	if cfg == nil || cfg.GrafanaMCPURL == nil || *cfg.GrafanaMCPURL == "" || cfg.GrafanaMCPTokenEncrypted == nil || *cfg.GrafanaMCPTokenEncrypted == "" || w.enc == nil {
+		return false, false
+	}
+	if err := validate.EndpointURL(*cfg.GrafanaMCPURL); err != nil {
+		log.Printf("  ⚠ Grafana MCP endpoint blocked (SSRF): %v", err)
+		return false, false
+	}
+	token, err := w.enc.Decrypt(*cfg.GrafanaMCPTokenEncrypted)
+	if err != nil {
+		log.Printf("  ⚠ Failed to decrypt Grafana MCP token: %v", err)
+		return false, false
+	}
+	if token == "" {
+		return false, false
+	}
+
+	gc := newGrafanaMCPCollector(*cfg.GrafanaMCPURL, token)
+	logsSuccess := false
+	metricsSuccess := false
+
+	logs, err := gc.FetchErrorLogs(ctx, serviceName, since, until, 50)
+	if err != nil {
+		log.Printf("  ⚠ Grafana MCP logs: %v", err)
+	} else {
+		logsSuccess = true
+		if len(logs) > 0 {
+			result.Logs = logs
+			log.Printf("  ✓ %d error logs from Grafana MCP", len(logs))
+		}
+	}
+
+	metrics, err := gc.FetchErrorRate(ctx, serviceName, 30*time.Minute)
+	if err != nil {
+		log.Printf("  ⚠ Grafana MCP metrics: %v", err)
+	} else {
+		metricsSuccess = true
+		if len(metrics) > 0 {
+			result.Metrics = metrics
+			log.Printf("  ✓ %d metric points from Grafana MCP", len(metrics))
+		}
+	}
+
+	return logsSuccess, metricsSuccess
 }
 
 // sanitizeContext strips PII from all collected context before it touches the AI engine.

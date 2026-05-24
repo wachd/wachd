@@ -867,9 +867,13 @@ func TestDB_TeamConfig_GetAndUpsert(t *testing.T) {
 	}
 
 	channel := "#alerts"
+	grafanaURL := "https://grafana.example.com/mcp"
+	grafanaToken := "encrypted-token"
 	tc := &TeamConfig{
-		TeamID:       team.ID,
-		SlackChannel: &channel,
+		TeamID:                   team.ID,
+		SlackChannel:             &channel,
+		GrafanaMCPURL:            &grafanaURL,
+		GrafanaMCPTokenEncrypted: &grafanaToken,
 	}
 
 	// UpsertTeamConfig (insert)
@@ -887,6 +891,12 @@ func TestDB_TeamConfig_GetAndUpsert(t *testing.T) {
 	}
 	if got.SlackChannel == nil || *got.SlackChannel != channel {
 		t.Errorf("expected SlackChannel=%q, got %v", channel, got.SlackChannel)
+	}
+	if got.GrafanaMCPURL == nil || *got.GrafanaMCPURL != grafanaURL {
+		t.Errorf("expected GrafanaMCPURL=%q, got %v", grafanaURL, got.GrafanaMCPURL)
+	}
+	if got.GrafanaMCPTokenEncrypted == nil || *got.GrafanaMCPTokenEncrypted != grafanaToken {
+		t.Errorf("expected GrafanaMCPTokenEncrypted to round-trip, got %v", got.GrafanaMCPTokenEncrypted)
 	}
 
 	// Upsert (update)

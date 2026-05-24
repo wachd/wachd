@@ -1401,6 +1401,8 @@ type teamConfigPublic struct {
 	SlackChannel       *string  `json:"slack_channel,omitempty"`
 	GitHubTokenSet     bool     `json:"github_token_set"`
 	GitHubRepos        []string `json:"github_repos,omitempty"`
+	GrafanaMCPURL      *string  `json:"grafana_mcp_url,omitempty"`
+	GrafanaMCPTokenSet bool     `json:"grafana_mcp_token_set"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint,omitempty"`
 	LokiEndpoint       *string  `json:"loki_endpoint,omitempty"`
 }
@@ -1411,6 +1413,8 @@ type teamConfigInput struct {
 	SlackChannel       *string  `json:"slack_channel"`
 	GitHubToken        string   `json:"github_token"` // plaintext; encrypted before storing
 	GitHubRepos        []string `json:"github_repos"`
+	GrafanaMCPURL      *string  `json:"grafana_mcp_url"`
+	GrafanaMCPToken    string   `json:"grafana_mcp_token"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint"`
 	LokiEndpoint       *string  `json:"loki_endpoint"`
 }
@@ -1438,6 +1442,8 @@ func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 		pub.SlackWebhookURL = cfg.SlackWebhookURL
 		pub.SlackChannel = cfg.SlackChannel
 		pub.GitHubTokenSet = cfg.GitHubTokenEncrypted != nil && *cfg.GitHubTokenEncrypted != ""
+		pub.GrafanaMCPURL = cfg.GrafanaMCPURL
+		pub.GrafanaMCPTokenSet = cfg.GrafanaMCPTokenEncrypted != nil && *cfg.GrafanaMCPTokenEncrypted != ""
 		pub.PrometheusEndpoint = cfg.PrometheusEndpoint
 		pub.LokiEndpoint = cfg.LokiEndpoint
 		if cfg.GitHubRepos != nil {
@@ -1468,7 +1474,7 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Validate URLs to prevent SSRF — only public http/https endpoints allowed.
-	for _, u := range []*string{input.PrometheusEndpoint, input.LokiEndpoint, input.SlackWebhookURL} {
+	for _, u := range []*string{input.PrometheusEndpoint, input.LokiEndpoint, input.GrafanaMCPURL, input.SlackWebhookURL} {
 		if u != nil && *u != "" {
 			if err := validate.EndpointURL(*u); err != nil {
 				http.Error(w, "invalid endpoint URL: "+err.Error(), http.StatusBadRequest)
@@ -1487,6 +1493,10 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 	}
 	if input.LokiEndpoint != nil && len(*input.LokiEndpoint) > 2000 {
 		http.Error(w, "loki_endpoint too long", http.StatusBadRequest)
+		return
+	}
+	if input.GrafanaMCPURL != nil && len(*input.GrafanaMCPURL) > 500 {
+		http.Error(w, "grafana_mcp_url too long", http.StatusBadRequest)
 		return
 	}
 	if len(input.GitHubRepos) > 50 {
@@ -1519,6 +1529,9 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 	if input.LokiEndpoint != nil {
 		tc.LokiEndpoint = input.LokiEndpoint
 	}
+	if input.GrafanaMCPURL != nil {
+		tc.GrafanaMCPURL = input.GrafanaMCPURL
+	}
 
 	// Encrypt GitHub token if provided
 	if input.GitHubToken != "" {
@@ -1532,6 +1545,18 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		tc.GitHubTokenEncrypted = &encrypted
+	}
+	if input.GrafanaMCPToken != "" {
+		if s.enc == nil {
+			http.Error(w, "encryption not configured — WACHD_ENCRYPTION_KEY required to store tokens", http.StatusServiceUnavailable)
+			return
+		}
+		encrypted, err := s.enc.Encrypt(input.GrafanaMCPToken)
+		if err != nil {
+			http.Error(w, "failed to encrypt Grafana MCP token", http.StatusInternalServerError)
+			return
+		}
+		tc.GrafanaMCPTokenEncrypted = &encrypted
 	}
 
 	// Encode repos list
@@ -1555,6 +1580,8 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		SlackWebhookURL:    tc.SlackWebhookURL,
 		SlackChannel:       tc.SlackChannel,
 		GitHubTokenSet:     tc.GitHubTokenEncrypted != nil && *tc.GitHubTokenEncrypted != "",
+		GrafanaMCPURL:      tc.GrafanaMCPURL,
+		GrafanaMCPTokenSet: tc.GrafanaMCPTokenEncrypted != nil && *tc.GrafanaMCPTokenEncrypted != "",
 		PrometheusEndpoint: tc.PrometheusEndpoint,
 		LokiEndpoint:       tc.LokiEndpoint,
 	}

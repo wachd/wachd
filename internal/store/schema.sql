@@ -283,6 +283,8 @@ CREATE TABLE IF NOT EXISTS team_config (
     slack_bot_token        VARCHAR(255),
     github_token_encrypted TEXT,
     github_repos           JSONB,
+    grafana_mcp_url             VARCHAR(500),
+    grafana_mcp_token_encrypted TEXT,
     prometheus_endpoint         VARCHAR(500),
     loki_endpoint               VARCHAR(500),
     dynatrace_endpoint          VARCHAR(500),
@@ -299,6 +301,8 @@ ALTER TABLE team_config ADD COLUMN IF NOT EXISTS dynatrace_endpoint        VARCH
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS dynatrace_token_encrypted TEXT;
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS splunk_endpoint            VARCHAR(500);
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS splunk_token_encrypted    TEXT;
+ALTER TABLE team_config ADD COLUMN IF NOT EXISTS grafana_mcp_url            VARCHAR(500);
+ALTER TABLE team_config ADD COLUMN IF NOT EXISTS grafana_mcp_token_encrypted TEXT;
 
 -- Idempotent migration: move AI backend config out of team_config (per-team) into
 -- system_config (platform-wide). Drop the columns so the schema stays clean.
