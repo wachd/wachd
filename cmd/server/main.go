@@ -40,6 +40,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/redis/go-redis/v9"
 	"github.com/wachd/wachd/internal/auth"
+	"github.com/wachd/wachd/internal/graph"
 	"github.com/wachd/wachd/internal/license"
 	"github.com/wachd/wachd/internal/notify"
 	"github.com/wachd/wachd/internal/oncall"
@@ -57,6 +58,7 @@ type Server struct {
 	sessions          *auth.SessionStore
 	license           *license.License
 	enc               *auth.Encryptor
+	graphStore        graph.Store
 	port              string
 	webhookLimiter    *webhookIPLimiter
 	trustedProxyCIDRs []netip.Prefix
@@ -415,6 +417,7 @@ func main() {
 		sessions:          sessions,
 		license:           lic,
 		enc:               enc,
+		graphStore:        graph.NewPostgresStore(db.Pool()),
 		port:              port,
 		webhookLimiter:    newWebhookIPLimiter(),
 		trustedProxyCIDRs: trustedProxyCIDRs,
@@ -593,9 +596,15 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/members/{userId}", server.handleUpdateMember).Methods("PUT")
 	apiRouter.HandleFunc("/{teamId}/config", server.handleGetTeamConfig).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/config", server.handleUpsertTeamConfig).Methods("PUT")
+	apiRouter.HandleFunc("/{teamId}/graph/config", server.handleGetGraphConfig).Methods("GET")
+	apiRouter.HandleFunc("/{teamId}/graph/config", server.handleUpsertGraphConfig).Methods("PUT")
+	apiRouter.HandleFunc("/{teamId}/graph/nodes/{nodeId}", server.handleDeleteGraphNode).Methods("DELETE")
 	apiRouter.HandleFunc("/{teamId}/config/test-notification", server.handleTestNotification).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleGetEscalationPolicy).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleUpsertEscalationPolicy).Methods("PUT")
+	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/similar", server.handleGetSimilarIncidents).Methods("GET")
+	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/graph", server.handleGetIncidentGraph).Methods("GET")
+	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/promote", server.handlePromoteIncidentGraphNode).Methods("POST")
 
 	// Wrap router with CORS middleware
 	handler := corsMiddleware(router)
@@ -1806,6 +1815,339 @@ func (s *Server) handleUpsertEscalationPolicy(w http.ResponseWriter, r *http.Req
 		Config:    input.Config,
 		UpdatedAt: policy.UpdatedAt,
 	})
+}
+
+type graphEnvelope struct {
+	Data  interface{} `json:"data"`
+	Error interface{} `json:"error"`
+}
+
+type similarIncidentResponse struct {
+	IncidentID string     `json:"incident_id"`
+	Title      string     `json:"title"`
+	Score      float64    `json:"score"`
+	Reason     string     `json:"reason"`
+	OccurredAt *time.Time `json:"occurred_at,omitempty"`
+	Resolution string     `json:"resolution,omitempty"`
+}
+
+type graphConfigPayload struct {
+	Enabled            bool    `json:"enabled"`
+	MinSimilarityScore float64 `json:"min_similarity_score"`
+}
+
+func writeDataEnvelope(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(graphEnvelope{Data: data, Error: nil})
+}
+
+func (s *Server) graphStoreForTeam(ctx context.Context, teamID uuid.UUID) graph.Store {
+	cfg, err := s.cfg.GetTeamGraphConfig(ctx, teamID)
+	if err == nil && cfg != nil {
+		if s.db != nil {
+			return graph.NewPostgresStore(s.db.Pool()).WithMinimumSimilarityScore(cfg.MinSimilarityScore)
+		}
+	}
+	if s.graphStore != nil {
+		return s.graphStore
+	}
+	if s.db != nil {
+		return graph.NewPostgresStore(s.db.Pool())
+	}
+	return nil
+}
+
+func (s *Server) handleGetSimilarIncidents(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID, err := uuid.Parse(vars["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	incidentID, err := uuid.Parse(vars["incidentId"])
+	if err != nil {
+		http.Error(w, "invalid incident ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAccess(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	incident, err := s.db.GetIncident(r.Context(), teamID, incidentID)
+	if err != nil {
+		http.Error(w, "failed to load incident", http.StatusInternalServerError)
+		return
+	}
+	if incident == nil {
+		http.Error(w, "incident not found", http.StatusNotFound)
+		return
+	}
+	node, err := s.lookupIncidentGraphNode(r.Context(), teamID, incident.ID)
+	if err != nil {
+		http.Error(w, "failed to lookup graph node", http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		writeDataEnvelope(w, http.StatusOK, []similarIncidentResponse{})
+		return
+	}
+	gs := s.graphStoreForTeam(r.Context(), teamID)
+	if gs == nil {
+		http.Error(w, "graph store unavailable", http.StatusInternalServerError)
+		return
+	}
+	matches, err := gs.FindSimilar(r.Context(), teamID, node.ID, 10)
+	if err != nil {
+		http.Error(w, "failed to find similar incidents", http.StatusInternalServerError)
+		return
+	}
+	resp := make([]similarIncidentResponse, 0, len(matches))
+	for _, match := range matches {
+		if match == nil || match.Node == nil || match.Node.ExternalID == nil {
+			continue
+		}
+		candidateID, err := uuid.Parse(*match.Node.ExternalID)
+		if err != nil {
+			continue
+		}
+		candidate, err := s.db.GetIncident(r.Context(), teamID, candidateID)
+		if err != nil || candidate == nil {
+			continue
+		}
+		occurredAt := candidate.FiredAt
+		resp = append(resp, similarIncidentResponse{
+			IncidentID: candidate.ID.String(),
+			Title:      candidate.Title,
+			Score:      match.Score,
+			Reason:     match.Reason,
+			OccurredAt: &occurredAt,
+			Resolution: incidentResolution(candidate.Analysis),
+		})
+	}
+	writeDataEnvelope(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleGetIncidentGraph(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID, err := uuid.Parse(vars["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	incidentID, err := uuid.Parse(vars["incidentId"])
+	if err != nil {
+		http.Error(w, "invalid incident ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAccess(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	incident, err := s.db.GetIncident(r.Context(), teamID, incidentID)
+	if err != nil {
+		http.Error(w, "failed to load incident", http.StatusInternalServerError)
+		return
+	}
+	if incident == nil {
+		http.Error(w, "incident not found", http.StatusNotFound)
+		return
+	}
+	node, err := s.lookupIncidentGraphNode(r.Context(), teamID, incident.ID)
+	if err != nil {
+		http.Error(w, "failed to lookup graph node", http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		writeDataEnvelope(w, http.StatusOK, &graph.Graph{Nodes: []*graph.Node{}, Edges: []*graph.Edge{}})
+		return
+	}
+	gs := s.graphStoreForTeam(r.Context(), teamID)
+	if gs == nil {
+		http.Error(w, "graph store unavailable", http.StatusInternalServerError)
+		return
+	}
+	subgraph, err := gs.GetSubgraph(r.Context(), teamID, node.ID, 2)
+	if err != nil {
+		http.Error(w, "failed to load graph", http.StatusInternalServerError)
+		return
+	}
+	writeDataEnvelope(w, http.StatusOK, subgraph)
+}
+
+func (s *Server) handlePromoteIncidentGraphNode(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID, err := uuid.Parse(vars["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	incidentID, err := uuid.Parse(vars["incidentId"])
+	if err != nil {
+		http.Error(w, "invalid incident ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	incident, err := s.db.GetIncident(r.Context(), teamID, incidentID)
+	if err != nil {
+		http.Error(w, "failed to load incident", http.StatusInternalServerError)
+		return
+	}
+	if incident == nil {
+		http.Error(w, "incident not found", http.StatusNotFound)
+		return
+	}
+	node, err := s.lookupIncidentGraphNode(r.Context(), teamID, incident.ID)
+	if err != nil {
+		http.Error(w, "failed to lookup graph node", http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.Error(w, "graph node not found", http.StatusNotFound)
+		return
+	}
+	gs := s.graphStoreForTeam(r.Context(), teamID)
+	if gs == nil {
+		http.Error(w, "graph store unavailable", http.StatusInternalServerError)
+		return
+	}
+	if err := gs.PromoteNode(r.Context(), teamID, node.ID); err != nil {
+		if errors.Is(err, graph.ErrNodeNotFound) {
+			http.Error(w, "graph node not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to promote graph node", http.StatusInternalServerError)
+		return
+	}
+	writeDataEnvelope(w, http.StatusOK, map[string]string{"status": "promoted", "node_id": node.ID.String()})
+}
+
+func (s *Server) handleDeleteGraphNode(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID, err := uuid.Parse(vars["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	nodeID, err := uuid.Parse(vars["nodeId"])
+	if err != nil {
+		http.Error(w, "invalid node ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	gs := s.graphStoreForTeam(r.Context(), teamID)
+	if gs == nil {
+		http.Error(w, "graph store unavailable", http.StatusInternalServerError)
+		return
+	}
+	if err := gs.DeleteNode(r.Context(), teamID, nodeID); err != nil {
+		if errors.Is(err, graph.ErrNodeNotFound) {
+			http.Error(w, "graph node not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to delete graph node", http.StatusInternalServerError)
+		return
+	}
+	writeDataEnvelope(w, http.StatusOK, map[string]string{"deleted": nodeID.String()})
+}
+
+func (s *Server) handleGetGraphConfig(w http.ResponseWriter, r *http.Request) {
+	teamID, err := uuid.Parse(mux.Vars(r)["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	cfg, err := s.cfg.GetTeamGraphConfig(r.Context(), teamID)
+	if err != nil {
+		http.Error(w, "failed to load graph config", http.StatusInternalServerError)
+		return
+	}
+	writeDataEnvelope(w, http.StatusOK, graphConfigPayload{Enabled: cfg.Enabled, MinSimilarityScore: cfg.MinSimilarityScore})
+}
+
+func (s *Server) handleUpsertGraphConfig(w http.ResponseWriter, r *http.Request) {
+	teamID, err := uuid.Parse(mux.Vars(r)["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	var input graphConfigPayload
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if input.MinSimilarityScore < 0 || input.MinSimilarityScore > 1 {
+		http.Error(w, "min_similarity_score must be between 0.0 and 1.0", http.StatusBadRequest)
+		return
+	}
+	cfg := &store.TeamGraphConfig{TeamID: teamID, Enabled: input.Enabled, MinSimilarityScore: input.MinSimilarityScore}
+	if err := s.cfg.UpsertTeamGraphConfig(r.Context(), cfg); err != nil {
+		http.Error(w, "failed to save graph config", http.StatusInternalServerError)
+		return
+	}
+	writeDataEnvelope(w, http.StatusOK, graphConfigPayload{Enabled: cfg.Enabled, MinSimilarityScore: cfg.MinSimilarityScore})
+}
+
+func (s *Server) lookupIncidentGraphNode(ctx context.Context, teamID, incidentID uuid.UUID) (*graph.Node, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+	var node graph.Node
+	var externalID *string
+	err := s.db.Pool().QueryRow(ctx, `
+		SELECT id, team_id, type, status, label, external_id, properties, created_at, updated_at
+		FROM graph_nodes
+		WHERE team_id = $1 AND type = 'incident' AND external_id = $2
+	`, teamID, incidentID.String()).Scan(
+		&node.ID,
+		&node.TeamID,
+		&node.Type,
+		&node.Status,
+		&node.Label,
+		&externalID,
+		&node.Properties,
+		&node.CreatedAt,
+		&node.UpdatedAt,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	node.ExternalID = externalID
+	return &node, nil
+}
+
+func incidentResolution(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var parsed struct {
+		SuggestedAction string `json:"suggested_action"`
+		Resolution      string `json:"resolution"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return ""
+	}
+	if parsed.Resolution != "" {
+		return parsed.Resolution
+	}
+	return parsed.SuggestedAction
 }
 
 // requireTeamAdmin returns true when the caller holds admin or superadmin on teamID.

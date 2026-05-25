@@ -52,6 +52,15 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	}
 }
 
+// WithMinimumSimilarityScore overrides the default similarity threshold used
+// by FindSimilar for this store instance.
+func (s *PostgresStore) WithMinimumSimilarityScore(score float64) *PostgresStore {
+	if score >= 0 && score <= 1 {
+		s.minSimilarityScore = score
+	}
+	return s
+}
+
 // UpsertNode creates or updates a graph node.
 //
 // If ExternalID is set, the tuple (team_id, type, external_id) is treated as the
