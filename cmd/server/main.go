@@ -1842,20 +1842,18 @@ func writeDataEnvelope(w http.ResponseWriter, status int, data interface{}) {
 	_ = json.NewEncoder(w).Encode(graphEnvelope{Data: data, Error: nil})
 }
 
-func (s *Server) graphStoreForTeam(ctx context.Context, teamID uuid.UUID) graph.Store {
+func (s *Server) graphStoreForTeam(ctx context.Context, teamID uuid.UUID) (graph.Store, error) {
 	cfg, err := s.cfg.GetTeamGraphConfig(ctx, teamID)
-	if err == nil && cfg != nil {
-		if s.db != nil {
-			return graph.NewPostgresStore(s.db.Pool()).WithMinimumSimilarityScore(cfg.MinSimilarityScore)
-		}
-	}
-	if s.graphStore != nil {
-		return s.graphStore
+	if err != nil {
+		return nil, err
 	}
 	if s.db != nil {
-		return graph.NewPostgresStore(s.db.Pool())
+		return graph.NewPostgresStore(s.db.Pool()).WithMinimumSimilarityScore(cfg.MinSimilarityScore), nil
 	}
-	return nil
+	if s.graphStore != nil {
+		return s.graphStore, nil
+	}
+	return nil, errors.New("graph store unavailable")
 }
 
 func (s *Server) handleGetSimilarIncidents(w http.ResponseWriter, r *http.Request) {
@@ -1883,18 +1881,18 @@ func (s *Server) handleGetSimilarIncidents(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "incident not found", http.StatusNotFound)
 		return
 	}
-	node, err := s.lookupIncidentGraphNode(r.Context(), teamID, incident.ID)
+	gs, err := s.graphStoreForTeam(r.Context(), teamID)
 	if err != nil {
+		http.Error(w, "failed to load graph config", http.StatusInternalServerError)
+		return
+	}
+	node, err := gs.FindNodeByExternalID(r.Context(), teamID, graph.NodeTypeIncident, incident.ID.String())
+	if err != nil {
+		if errors.Is(err, graph.ErrNodeNotFound) {
+			writeDataEnvelope(w, http.StatusOK, []similarIncidentResponse{})
+			return
+		}
 		http.Error(w, "failed to lookup graph node", http.StatusInternalServerError)
-		return
-	}
-	if node == nil {
-		writeDataEnvelope(w, http.StatusOK, []similarIncidentResponse{})
-		return
-	}
-	gs := s.graphStoreForTeam(r.Context(), teamID)
-	if gs == nil {
-		http.Error(w, "graph store unavailable", http.StatusInternalServerError)
 		return
 	}
 	matches, err := gs.FindSimilar(r.Context(), teamID, node.ID, 10)
@@ -1902,7 +1900,8 @@ func (s *Server) handleGetSimilarIncidents(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "failed to find similar incidents", http.StatusInternalServerError)
 		return
 	}
-	resp := make([]similarIncidentResponse, 0, len(matches))
+	incidentIDs := make([]uuid.UUID, 0, len(matches))
+	matchByIncidentID := make(map[uuid.UUID]*graph.SimilarNode, len(matches))
 	for _, match := range matches {
 		if match == nil || match.Node == nil || match.Node.ExternalID == nil {
 			continue
@@ -1911,8 +1910,19 @@ func (s *Server) handleGetSimilarIncidents(w http.ResponseWriter, r *http.Reques
 		if err != nil {
 			continue
 		}
-		candidate, err := s.db.GetIncident(r.Context(), teamID, candidateID)
-		if err != nil || candidate == nil {
+		incidentIDs = append(incidentIDs, candidateID)
+		matchByIncidentID[candidateID] = match
+	}
+	incidentsByID, err := s.getIncidentsByIDs(r.Context(), teamID, incidentIDs)
+	if err != nil {
+		http.Error(w, "failed to load similar incidents", http.StatusInternalServerError)
+		return
+	}
+	resp := make([]similarIncidentResponse, 0, len(matchByIncidentID))
+	for _, incidentID := range incidentIDs {
+		candidate := incidentsByID[incidentID]
+		match := matchByIncidentID[incidentID]
+		if candidate == nil || match == nil {
 			continue
 		}
 		occurredAt := candidate.FiredAt
@@ -1953,18 +1963,18 @@ func (s *Server) handleGetIncidentGraph(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "incident not found", http.StatusNotFound)
 		return
 	}
-	node, err := s.lookupIncidentGraphNode(r.Context(), teamID, incident.ID)
+	gs, err := s.graphStoreForTeam(r.Context(), teamID)
 	if err != nil {
+		http.Error(w, "failed to load graph config", http.StatusInternalServerError)
+		return
+	}
+	node, err := gs.FindNodeByExternalID(r.Context(), teamID, graph.NodeTypeIncident, incident.ID.String())
+	if err != nil {
+		if errors.Is(err, graph.ErrNodeNotFound) {
+			writeDataEnvelope(w, http.StatusOK, &graph.Graph{Nodes: []*graph.Node{}, Edges: []*graph.Edge{}})
+			return
+		}
 		http.Error(w, "failed to lookup graph node", http.StatusInternalServerError)
-		return
-	}
-	if node == nil {
-		writeDataEnvelope(w, http.StatusOK, &graph.Graph{Nodes: []*graph.Node{}, Edges: []*graph.Edge{}})
-		return
-	}
-	gs := s.graphStoreForTeam(r.Context(), teamID)
-	if gs == nil {
-		http.Error(w, "graph store unavailable", http.StatusInternalServerError)
 		return
 	}
 	subgraph, err := gs.GetSubgraph(r.Context(), teamID, node.ID, 2)
@@ -2000,18 +2010,18 @@ func (s *Server) handlePromoteIncidentGraphNode(w http.ResponseWriter, r *http.R
 		http.Error(w, "incident not found", http.StatusNotFound)
 		return
 	}
-	node, err := s.lookupIncidentGraphNode(r.Context(), teamID, incident.ID)
+	gs, err := s.graphStoreForTeam(r.Context(), teamID)
 	if err != nil {
+		http.Error(w, "failed to load graph config", http.StatusInternalServerError)
+		return
+	}
+	node, err := gs.FindNodeByExternalID(r.Context(), teamID, graph.NodeTypeIncident, incident.ID.String())
+	if err != nil {
+		if errors.Is(err, graph.ErrNodeNotFound) {
+			http.Error(w, "graph node not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "failed to lookup graph node", http.StatusInternalServerError)
-		return
-	}
-	if node == nil {
-		http.Error(w, "graph node not found", http.StatusNotFound)
-		return
-	}
-	gs := s.graphStoreForTeam(r.Context(), teamID)
-	if gs == nil {
-		http.Error(w, "graph store unavailable", http.StatusInternalServerError)
 		return
 	}
 	if err := gs.PromoteNode(r.Context(), teamID, node.ID); err != nil {
@@ -2041,9 +2051,9 @@ func (s *Server) handleDeleteGraphNode(w http.ResponseWriter, r *http.Request) {
 		writeForbidden(w)
 		return
 	}
-	gs := s.graphStoreForTeam(r.Context(), teamID)
-	if gs == nil {
-		http.Error(w, "graph store unavailable", http.StatusInternalServerError)
+	gs, err := s.graphStoreForTeam(r.Context(), teamID)
+	if err != nil {
+		http.Error(w, "failed to load graph config", http.StatusInternalServerError)
 		return
 	}
 	if err := gs.DeleteNode(r.Context(), teamID, nodeID); err != nil {
@@ -2063,7 +2073,7 @@ func (s *Server) handleGetGraphConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid team ID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTeamAdmin(r, teamID) {
+	if !s.requireTeamAccess(r, teamID) {
 		writeForbidden(w)
 		return
 	}
@@ -2102,37 +2112,6 @@ func (s *Server) handleUpsertGraphConfig(w http.ResponseWriter, r *http.Request)
 	writeDataEnvelope(w, http.StatusOK, graphConfigPayload{Enabled: cfg.Enabled, MinSimilarityScore: cfg.MinSimilarityScore})
 }
 
-func (s *Server) lookupIncidentGraphNode(ctx context.Context, teamID, incidentID uuid.UUID) (*graph.Node, error) {
-	if s.db == nil {
-		return nil, nil
-	}
-	var node graph.Node
-	var externalID *string
-	err := s.db.Pool().QueryRow(ctx, `
-		SELECT id, team_id, type, status, label, external_id, properties, created_at, updated_at
-		FROM graph_nodes
-		WHERE team_id = $1 AND type = 'incident' AND external_id = $2
-	`, teamID, incidentID.String()).Scan(
-		&node.ID,
-		&node.TeamID,
-		&node.Type,
-		&node.Status,
-		&node.Label,
-		&externalID,
-		&node.Properties,
-		&node.CreatedAt,
-		&node.UpdatedAt,
-	)
-	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			return nil, nil
-		}
-		return nil, err
-	}
-	node.ExternalID = externalID
-	return &node, nil
-}
-
 func incidentResolution(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -2148,6 +2127,59 @@ func incidentResolution(raw json.RawMessage) string {
 		return parsed.Resolution
 	}
 	return parsed.SuggestedAction
+}
+
+func (s *Server) getIncidentsByIDs(ctx context.Context, teamID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]*store.Incident, error) {
+	results := make(map[uuid.UUID]*store.Incident, len(ids))
+	if len(ids) == 0 || s.db == nil {
+		return results, nil
+	}
+
+	rows, err := s.db.Pool().Query(ctx, `
+		SELECT
+			id, team_id, title, message, severity, status, source,
+			alert_payload, context, analysis,
+			fired_at, acknowledged_at, resolved_at, snoozed_until,
+			escalation_step, created_at, updated_at, assigned_to
+		FROM incidents
+		WHERE team_id = $1 AND id = ANY($2)
+	`, teamID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		incident := &store.Incident{}
+		if err := rows.Scan(
+			&incident.ID,
+			&incident.TeamID,
+			&incident.Title,
+			&incident.Message,
+			&incident.Severity,
+			&incident.Status,
+			&incident.Source,
+			&incident.AlertPayload,
+			&incident.Context,
+			&incident.Analysis,
+			&incident.FiredAt,
+			&incident.AcknowledgedAt,
+			&incident.ResolvedAt,
+			&incident.SnoozedUntil,
+			&incident.EscalationStep,
+			&incident.CreatedAt,
+			&incident.UpdatedAt,
+			&incident.AssignedTo,
+		); err != nil {
+			return nil, err
+		}
+		results[incident.ID] = incident
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
 // requireTeamAdmin returns true when the caller holds admin or superadmin on teamID.

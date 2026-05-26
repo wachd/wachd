@@ -45,6 +45,7 @@ Incident graph endpoints are scoped per team under `/api/v1/teams/{teamId}`.
 ## Graph config
 
 - `GET /graph/config`
+- Role: viewer and above
 - `PUT /graph/config`
 - Role: admin only
 
@@ -61,4 +62,5 @@ Validation:
 
 - `teamId`, `incidentId`, and `nodeId` must be valid UUIDs
 - `min_similarity_score` must be between `0.0` and `1.0`
-- All responses use the standard `{"data": ..., "error": null}` envelope on success
+- All graph endpoint success responses use the standard `{"data": ..., "error": null}` envelope
+- `enabled=false` disables future graph write-back for the team, but previously written graph data remains readable

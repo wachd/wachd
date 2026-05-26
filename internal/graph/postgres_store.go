@@ -405,6 +405,38 @@ func (s *PostgresStore) FindSimilar(ctx context.Context, teamID uuid.UUID, nodeI
 	return matches, nil
 }
 
+// FindNodeByExternalID looks up a node by (team_id, type, external_id).
+func (s *PostgresStore) FindNodeByExternalID(ctx context.Context, teamID uuid.UUID, nodeType NodeType, externalID string) (*Node, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if teamID == uuid.Nil {
+		return nil, errors.New("team id is required")
+	}
+	if nodeType == "" {
+		return nil, errors.New("node type is required")
+	}
+	if strings.TrimSpace(externalID) == "" {
+		return nil, errors.New("external id is required")
+	}
+
+	node, err := scanNode(s.pool.QueryRow(ctx, `
+		SELECT id, team_id, type, status, label, external_id, properties, created_at, updated_at
+		FROM graph_nodes
+		WHERE team_id = $1
+		  AND type = $2
+		  AND external_id = $3
+	`, teamID, nodeType, externalID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNodeNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find graph node by external id: %w", err)
+	}
+
+	return node, nil
+}
+
 // PromoteNode marks a node as permanent.
 //
 // Any connected edges are promoted only when both endpoint nodes are permanent.

@@ -896,4 +896,18 @@ func TestE2E_GraphTeamIsolationAndViewerPromoteForbidden(t *testing.T) {
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("cross-team delete: got %d want 403", resp.Code)
 	}
+
+	req = httptest.NewRequest("GET", fmt.Sprintf("/api/v1/teams/%s/graph/config", env.kafkaTeam.ID), nil)
+	req.AddCookie(env.kongCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("cross-team graph config read: got %d want 403", resp.Code)
+	}
+
+	req = httptest.NewRequest("GET", fmt.Sprintf("/api/v1/teams/%s/graph/config", env.kongTeam.ID), nil)
+	req.AddCookie(env.kongViewerCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("viewer graph config read: got %d want 200 body=%s", resp.Code, resp.Body.String())
+	}
 }
