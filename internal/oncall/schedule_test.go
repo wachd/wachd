@@ -61,6 +61,15 @@ func (m *mockConfigStore) GetTeamGraphConfig(_ context.Context, _ uuid.UUID) (*s
 func (m *mockConfigStore) UpsertTeamGraphConfig(_ context.Context, _ *store.TeamGraphConfig) error {
 	return nil
 }
+func (m *mockConfigStore) ListServiceDependencies(_ context.Context, _ uuid.UUID, _ string) ([]*store.ServiceDependency, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) CreateServiceDependency(_ context.Context, _ *store.ServiceDependency) (*store.ServiceDependency, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) DeleteServiceDependency(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
+}
 
 // Unused interface methods — return zero values.
 func (m *mockConfigStore) GetTeam(_ context.Context, _ uuid.UUID) (*store.Team, error) {

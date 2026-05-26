@@ -223,6 +223,10 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 		}
 	}
 
+	// Collect context for declared service dependencies (e.g. Redis, Postgres).
+	// Uses the same connectors already configured for the team.
+	w.collectDependencyContext(ctx, incident, cfg, serviceName, since, result)
+
 	return result
 }
 
@@ -272,7 +276,144 @@ func (w *Worker) collectGrafanaMCPContext(ctx context.Context, cfg *store.TeamCo
 	return logsSuccess, metricsSuccess
 }
 
-// sanitizeContext strips PII from all collected context before it touches the AI engine.
+// maxDependencyContextServices caps the number of dependency services whose
+// context is collected per incident, bounding outbound calls on large graphs.
+const maxDependencyContextServices = 10
+
+// collectDependencyContext loads declared service dependencies for the alerting service
+// and appends logs and metrics for each dependency to result using the team's existing
+// configured connectors. Errors per dependency are logged and skipped — they never
+// block the primary alert context from being returned.
+func (w *Worker) collectDependencyContext(ctx context.Context, incident *store.Incident, cfg *store.TeamConfig, serviceName string, since time.Time, result *correlator.Context) {
+	deps, err := w.db.ListServiceDependencies(ctx, incident.TeamID, serviceName)
+	if err != nil {
+		log.Printf("  ⚠ Load service dependencies for %s: %v", serviceName, err)
+		return
+	}
+	if len(deps) == 0 {
+		return
+	}
+	if len(deps) > maxDependencyContextServices {
+		log.Printf("  ⚠ %d dependencies for %s — capping collection at %d", len(deps), serviceName, maxDependencyContextServices)
+		deps = deps[:maxDependencyContextServices]
+	}
+	log.Printf("  🔗 Collecting context for %d declared dependencies of %s", len(deps), serviceName)
+
+	// When Grafana MCP is configured, prefer it for each dependency.
+	// Deps where MCP returns an error (not just empty) fall back to direct connectors.
+	var directDeps []*store.ServiceDependency
+	if cfg.GrafanaMCPURL != nil && *cfg.GrafanaMCPURL != "" &&
+		cfg.GrafanaMCPTokenEncrypted != nil && *cfg.GrafanaMCPTokenEncrypted != "" && w.enc != nil {
+		if err := validate.EndpointURL(*cfg.GrafanaMCPURL); err != nil {
+			log.Printf("  ⚠ Grafana MCP endpoint blocked (SSRF) for dependency collection: %v", err)
+			directDeps = deps
+		} else if token, decryptErr := w.enc.Decrypt(*cfg.GrafanaMCPTokenEncrypted); decryptErr != nil {
+			log.Printf("  ⚠ Failed to decrypt Grafana MCP token for dependency collection: %v", decryptErr)
+			directDeps = deps
+		} else if token != "" {
+			mc := newGrafanaMCPCollector(*cfg.GrafanaMCPURL, token)
+			for _, dep := range deps {
+				logsOK, metricsOK := collectDepViaMCP(ctx, mc, dep, since, incident.FiredAt, result)
+				if !logsOK || !metricsOK {
+					directDeps = append(directDeps, dep)
+				}
+			}
+		} else {
+			directDeps = deps
+		}
+	} else {
+		directDeps = deps
+	}
+
+	if len(directDeps) > 0 {
+		applyDependencyContext(ctx, incident, cfg, directDeps, since, result)
+	}
+}
+
+// collectDepViaMCP fetches logs and metrics for a single dependency via Grafana MCP.
+// Returns (logsOK, metricsOK) — true when the call completed without error, even if
+// no data was returned. A successful-but-empty call still marks the connector as
+// handled so the dep is not double-collected via direct Loki/Prometheus.
+func collectDepViaMCP(ctx context.Context, mc grafanaMCPCollector, dep *store.ServiceDependency, since, until time.Time, result *correlator.Context) (bool, bool) {
+	label := dep.DependsOn
+	if dep.Label != nil && *dep.Label != "" {
+		label = *dep.Label
+	}
+
+	logsOK := false
+	if logs, err := mc.FetchErrorLogs(ctx, dep.DependsOn, since, until, 50); err != nil {
+		log.Printf("    ⚠ Grafana MCP logs for dependency %s: %v", dep.DependsOn, err)
+	} else {
+		logsOK = true
+		if len(logs) > 0 {
+			result.Logs = append(result.Logs, logs...)
+			log.Printf("    ✓ %d error logs from Grafana MCP for %s (%s)", len(logs), dep.DependsOn, label)
+		}
+	}
+
+	metricsOK := false
+	if metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, 30*time.Minute); err != nil {
+		log.Printf("    ⚠ Grafana MCP metrics for dependency %s: %v", dep.DependsOn, err)
+	} else {
+		metricsOK = true
+		if len(metrics) > 0 {
+			result.Metrics = append(result.Metrics, metrics...)
+			log.Printf("    ✓ %d metric points from Grafana MCP for %s (%s)", len(metrics), dep.DependsOn, label)
+		}
+	}
+
+	return logsOK, metricsOK
+}
+
+// applyDependencyContext pulls logs and metrics for each declared dependency
+// using the team's configured connectors. Extracted as a pure function so it
+// can be unit tested without a real database.
+// When Grafana MCP is configured, prefer using collectGrafanaMCPContext at the
+// Worker level before calling this for direct Loki/Prometheus fallback per dep.
+func applyDependencyContext(ctx context.Context, incident *store.Incident, cfg *store.TeamConfig, deps []*store.ServiceDependency, since time.Time, result *correlator.Context) {
+	for _, dep := range deps {
+		label := dep.DependsOn
+		if dep.Label != nil && *dep.Label != "" {
+			label = *dep.Label
+		}
+		log.Printf("    → dependency: %s (%s)", dep.DependsOn, label)
+
+		if cfg.LokiEndpoint != nil && *cfg.LokiEndpoint != "" {
+			if err := validate.EndpointURL(*cfg.LokiEndpoint); err != nil {
+				log.Printf("    ⚠ Loki endpoint blocked (SSRF) for dependency %s: %v", dep.DependsOn, err)
+			} else {
+				lc := collector.NewLogsCollector(*cfg.LokiEndpoint)
+				logs, err := lc.FetchErrorLogs(ctx, dep.DependsOn, since, incident.FiredAt, 50)
+				if err != nil {
+					log.Printf("    ⚠ Loki for dependency %s: %v", dep.DependsOn, err)
+				} else if len(logs) > 0 {
+					result.Logs = append(result.Logs, logs...)
+					log.Printf("    ✓ %d error logs from Loki for %s", len(logs), dep.DependsOn)
+				}
+			}
+		}
+
+		if cfg.PrometheusEndpoint != nil && *cfg.PrometheusEndpoint != "" {
+			if err := validate.EndpointURL(*cfg.PrometheusEndpoint); err != nil {
+				log.Printf("    ⚠ Prometheus endpoint blocked (SSRF) for dependency %s: %v", dep.DependsOn, err)
+			} else {
+				mc, err := collector.NewMetricsCollector(*cfg.PrometheusEndpoint)
+				if err != nil {
+					log.Printf("    ⚠ Prometheus client for dependency %s: %v", dep.DependsOn, err)
+				} else {
+					metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, 30*time.Minute)
+					if err != nil {
+						log.Printf("    ⚠ Prometheus for dependency %s: %v", dep.DependsOn, err)
+					} else if len(metrics) > 0 {
+						result.Metrics = append(result.Metrics, metrics...)
+						log.Printf("    ✓ %d metric points from Prometheus for %s", len(metrics), dep.DependsOn)
+					}
+				}
+			}
+		}
+	}
+}
+
 func (w *Worker) sanitizeContext(ctx *correlator.Context) *correlator.Context {
 	sanitized := &correlator.Context{
 		Commits: make([]collector.Commit, len(ctx.Commits)),

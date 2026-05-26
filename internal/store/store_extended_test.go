@@ -1714,3 +1714,145 @@ func TestDB_SyncTeamAccess_WithGroupMapping(t *testing.T) {
 		}
 	}
 }
+
+// ── Service Dependencies ──────────────────────────────────────────────────────
+
+func TestDB_ServiceDependencies_CreateListDelete(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("dep-team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	label := "shared Redis"
+	dep, err := db.CreateServiceDependency(ctx, &ServiceDependency{
+		TeamID:    team.ID,
+		Service:   "checkout-api",
+		DependsOn: "redis-cache",
+		Label:     &label,
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceDependency: %v", err)
+	}
+	if dep.ID == (uuid.UUID{}) {
+		t.Fatal("expected non-zero ID")
+	}
+	if dep.Service != "checkout-api" || dep.DependsOn != "redis-cache" {
+		t.Fatalf("unexpected fields: %+v", dep)
+	}
+
+	// List all for team
+	all, err := db.ListServiceDependencies(ctx, team.ID, "")
+	if err != nil {
+		t.Fatalf("ListServiceDependencies all: %v", err)
+	}
+	if len(all) != 1 || all[0].ID != dep.ID {
+		t.Fatalf("expected 1 dependency, got %d", len(all))
+	}
+
+	// List filtered by service
+	filtered, err := db.ListServiceDependencies(ctx, team.ID, "checkout-api")
+	if err != nil {
+		t.Fatalf("ListServiceDependencies filtered: %v", err)
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 filtered dependency, got %d", len(filtered))
+	}
+
+	// List for unknown service returns empty
+	empty, err := db.ListServiceDependencies(ctx, team.ID, "unknown-service")
+	if err != nil {
+		t.Fatalf("ListServiceDependencies unknown: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected 0 for unknown service, got %d", len(empty))
+	}
+
+	// Delete
+	if err := db.DeleteServiceDependency(ctx, team.ID, dep.ID); err != nil {
+		t.Fatalf("DeleteServiceDependency: %v", err)
+	}
+	after, _ := db.ListServiceDependencies(ctx, team.ID, "")
+	if len(after) != 0 {
+		t.Fatal("expected empty after delete")
+	}
+}
+
+func TestDB_ServiceDependencies_DuplicateRejected(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("dep-dup-team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	d := &ServiceDependency{TeamID: team.ID, Service: "api", DependsOn: "redis"}
+	if _, err := db.CreateServiceDependency(ctx, d); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	if _, err := db.CreateServiceDependency(ctx, d); err == nil {
+		t.Fatal("expected error on duplicate, got nil")
+	}
+}
+
+func TestDB_ServiceDependencies_SelfDependencyRejected(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, unique("dep-self-team"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
+
+	_, err = db.CreateServiceDependency(ctx, &ServiceDependency{
+		TeamID:    team.ID,
+		Service:   "api",
+		DependsOn: "api",
+	})
+	if err == nil {
+		t.Fatal("expected error for self-dependency, got nil")
+	}
+}
+
+func TestDB_ServiceDependencies_CrossTeamDeleteBlocked(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	teamA, err := db.CreateTeam(ctx, unique("dep-team-a"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam A: %v", err)
+	}
+	teamB, err := db.CreateTeam(ctx, unique("dep-team-b"), unique("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam B: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.DeleteTeam(ctx, teamA.ID)
+		_ = db.DeleteTeam(ctx, teamB.ID)
+	})
+
+	dep, err := db.CreateServiceDependency(ctx, &ServiceDependency{
+		TeamID:    teamA.ID,
+		Service:   "checkout-api",
+		DependsOn: "redis-cache",
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceDependency: %v", err)
+	}
+
+	// Team B cannot delete team A's dependency
+	if err := db.DeleteServiceDependency(ctx, teamB.ID, dep.ID); err == nil {
+		t.Fatal("expected error when deleting another team's dependency, got nil")
+	}
+
+	// Team A can still delete its own
+	if err := db.DeleteServiceDependency(ctx, teamA.ID, dep.ID); err != nil {
+		t.Fatalf("DeleteServiceDependency by owner: %v", err)
+	}
+}

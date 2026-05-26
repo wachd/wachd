@@ -65,6 +65,11 @@ type ConfigStore interface {
 	GetTeamGraphConfig(ctx context.Context, teamID uuid.UUID) (*TeamGraphConfig, error)
 	UpsertTeamGraphConfig(ctx context.Context, cfg *TeamGraphConfig) error
 
+	// Service dependencies
+	ListServiceDependencies(ctx context.Context, teamID uuid.UUID, service string) ([]*ServiceDependency, error)
+	CreateServiceDependency(ctx context.Context, d *ServiceDependency) (*ServiceDependency, error)
+	DeleteServiceDependency(ctx context.Context, teamID uuid.UUID, id uuid.UUID) error
+
 	// User notification rules
 	ListUserNotificationRules(ctx context.Context, userID uuid.UUID, userSource string) ([]*UserNotificationRule, error)
 	GetUserNotificationRules(ctx context.Context, userID uuid.UUID, userSource, eventType string) ([]*UserNotificationRule, error)
