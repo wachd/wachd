@@ -373,6 +373,26 @@ CREATE TABLE IF NOT EXISTS service_dependencies (
 );
 CREATE INDEX IF NOT EXISTS idx_service_deps_team_service ON service_dependencies(team_id, service);
 
+-- Idempotent constraint additions (ADD CONSTRAINT IF NOT EXISTS is not supported
+-- for CHECK constraints in PostgreSQL; use DO/EXCEPTION instead).
+DO $$ BEGIN
+    ALTER TABLE service_dependencies
+        ADD CONSTRAINT chk_service_deps_no_self_dep
+        CHECK (lower(btrim(service)) <> lower(btrim(depends_on)));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    ALTER TABLE service_dependencies
+        ADD CONSTRAINT chk_service_deps_service_nonempty
+        CHECK (btrim(service) <> '');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    ALTER TABLE service_dependencies
+        ADD CONSTRAINT chk_service_deps_depends_on_nonempty
+        CHECK (btrim(depends_on) <> '');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- ============================================================
 -- Platform-wide system configuration (superadmin only)
 -- Singleton row: always use id = 1.

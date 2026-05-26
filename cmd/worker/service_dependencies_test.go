@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -131,4 +132,111 @@ func TestApplyDependencyContext_LabelUsedInLogging(t *testing.T) {
 	result := &correlator.Context{}
 	// No connectors — just verify nil/non-nil label is handled without panic.
 	applyDependencyContext(context.Background(), incident, &store.TeamConfig{}, deps, incident.FiredAt.Add(-30*time.Minute), result)
+}
+
+// ── collectDepViaMCP tests ────────────────────────────────────────────────────
+
+// mockMCPCollector is a test double for grafanaMCPCollector.
+type mockMCPCollector struct {
+	logs        []collector.LogLine
+	logsErr     error
+	metrics     []collector.MetricPoint
+	metricsErr  error
+	calledFor   []string // service names passed to FetchErrorLogs
+}
+
+func (m *mockMCPCollector) FetchErrorLogs(_ context.Context, service string, _, _ time.Time, _ int) ([]collector.LogLine, error) {
+	m.calledFor = append(m.calledFor, service)
+	return m.logs, m.logsErr
+}
+
+func (m *mockMCPCollector) FetchErrorRate(_ context.Context, _ string, _ time.Duration) ([]collector.MetricPoint, error) {
+	return m.metrics, m.metricsErr
+}
+
+func TestCollectDepViaMCP_SuccessAppendsData(t *testing.T) {
+	logLine := collector.LogLine{Timestamp: time.Now().UTC(), Message: "redis timeout"}
+	metricPt := collector.MetricPoint{Timestamp: time.Now().UTC(), Value: 0.5}
+	mc := &mockMCPCollector{logs: []collector.LogLine{logLine}, metrics: []collector.MetricPoint{metricPt}}
+
+	teamID := uuid.New()
+	dep := &store.ServiceDependency{ID: uuid.New(), TeamID: teamID, Service: "checkout-api", DependsOn: "redis-cache"}
+	result := &correlator.Context{}
+	since := time.Now().Add(-30 * time.Minute)
+
+	logsOK, metricsOK := collectDepViaMCP(context.Background(), mc, dep, since, time.Now(), result)
+
+	if !logsOK || !metricsOK {
+		t.Fatalf("expected both OK, got logsOK=%v metricsOK=%v", logsOK, metricsOK)
+	}
+	if len(result.Logs) != 1 || result.Logs[0].Message != "redis timeout" {
+		t.Errorf("expected log appended, got %+v", result.Logs)
+	}
+	if len(result.Metrics) != 1 {
+		t.Errorf("expected metric appended, got %+v", result.Metrics)
+	}
+	if len(mc.calledFor) != 1 || mc.calledFor[0] != "redis-cache" {
+		t.Errorf("expected FetchErrorLogs called with dep.DependsOn, got %v", mc.calledFor)
+	}
+}
+
+func TestCollectDepViaMCP_LogsErrorReturnsFalseForLogs(t *testing.T) {
+	mc := &mockMCPCollector{logsErr: errors.New("mcp unavailable")}
+
+	teamID := uuid.New()
+	dep := &store.ServiceDependency{ID: uuid.New(), TeamID: teamID, Service: "api", DependsOn: "postgres"}
+	result := &correlator.Context{}
+	since := time.Now().Add(-30 * time.Minute)
+
+	logsOK, metricsOK := collectDepViaMCP(context.Background(), mc, dep, since, time.Now(), result)
+
+	if logsOK {
+		t.Error("expected logsOK=false when FetchErrorLogs returns error")
+	}
+	// Metrics call does not fail — metricsOK should be true.
+	if !metricsOK {
+		t.Error("expected metricsOK=true when FetchErrorRate succeeds")
+	}
+	if len(result.Logs) != 0 {
+		t.Errorf("expected no logs on error, got %d", len(result.Logs))
+	}
+}
+
+func TestCollectDepViaMCP_BothErrorsReturnFalse(t *testing.T) {
+	mc := &mockMCPCollector{
+		logsErr:    errors.New("timeout"),
+		metricsErr: errors.New("timeout"),
+	}
+
+	teamID := uuid.New()
+	dep := &store.ServiceDependency{ID: uuid.New(), TeamID: teamID, Service: "api", DependsOn: "postgres"}
+	result := &correlator.Context{}
+
+	logsOK, metricsOK := collectDepViaMCP(context.Background(), mc, dep, time.Now().Add(-30*time.Minute), time.Now(), result)
+
+	if logsOK || metricsOK {
+		t.Errorf("expected both false on error, got logsOK=%v metricsOK=%v", logsOK, metricsOK)
+	}
+	if len(result.Logs) != 0 || len(result.Metrics) != 0 {
+		t.Error("expected no data appended on error")
+	}
+}
+
+func TestCollectDepViaMCP_EmptySuccessDoesNotAppend(t *testing.T) {
+	// MCP returns no error but no data — both OK flags should be true so the dep
+	// is not double-collected via direct Loki/Prometheus.
+	mc := &mockMCPCollector{logs: nil, metrics: nil}
+
+	teamID := uuid.New()
+	dep := &store.ServiceDependency{ID: uuid.New(), TeamID: teamID, Service: "api", DependsOn: "redis"}
+	result := &correlator.Context{}
+
+	logsOK, metricsOK := collectDepViaMCP(context.Background(), mc, dep, time.Now().Add(-30*time.Minute), time.Now(), result)
+
+	if !logsOK || !metricsOK {
+		t.Errorf("expected both true for empty success, got logsOK=%v metricsOK=%v", logsOK, metricsOK)
+	}
+	if len(result.Logs) != 0 || len(result.Metrics) != 0 {
+		t.Error("expected result unchanged when MCP returns empty data")
+	}
 }

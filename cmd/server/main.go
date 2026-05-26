@@ -38,6 +38,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 	"github.com/wachd/wachd/internal/auth"
 	"github.com/wachd/wachd/internal/license"
@@ -2567,7 +2568,8 @@ func (s *Server) handleListServiceDependencies(w http.ResponseWriter, r *http.Re
 		writeForbidden(w)
 		return
 	}
-	deps, err := s.cfg.ListServiceDependencies(r.Context(), teamID, "")
+	service := strings.TrimSpace(r.URL.Query().Get("service"))
+	deps, err := s.cfg.ListServiceDependencies(r.Context(), teamID, service)
 	if err != nil {
 		log.Printf("handleListServiceDependencies: %v", err)
 		http.Error(w, "failed to list service dependencies", http.StatusInternalServerError)
@@ -2596,17 +2598,28 @@ func (s *Server) handleCreateServiceDependency(w http.ResponseWriter, r *http.Re
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if input.Service == "" || input.DependsOn == "" {
+	service := strings.TrimSpace(input.Service)
+	dependsOn := strings.TrimSpace(input.DependsOn)
+	if service == "" || dependsOn == "" {
 		http.Error(w, "service and depends_on are required", http.StatusBadRequest)
+		return
+	}
+	if strings.EqualFold(service, dependsOn) {
+		http.Error(w, "service cannot depend on itself", http.StatusBadRequest)
 		return
 	}
 	created, err := s.cfg.CreateServiceDependency(r.Context(), &store.ServiceDependency{
 		TeamID:    teamID,
-		Service:   input.Service,
-		DependsOn: input.DependsOn,
+		Service:   service,
+		DependsOn: dependsOn,
 		Label:     input.Label,
 	})
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			http.Error(w, "dependency already exists", http.StatusConflict)
+			return
+		}
 		log.Printf("handleCreateServiceDependency: %v", err)
 		http.Error(w, "failed to create service dependency", http.StatusInternalServerError)
 		return
