@@ -804,6 +804,7 @@ func TestE2E_UpdateMember_UserMustBeTeamMember(t *testing.T) {
 	}
 }
 
+
 func TestE2E_GraphSimilarAndDeleteNode(t *testing.T) {
 	env := newE2EEnv(t)
 	ctx := context.Background()
@@ -909,5 +910,76 @@ func TestE2E_GraphTeamIsolationAndViewerPromoteForbidden(t *testing.T) {
 	resp = env.do(req)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("viewer graph config read: got %d want 200 body=%s", resp.Code, resp.Body.String())
+
+// TestE2E_ServiceDependencies_FilterByService verifies that GET
+// /api/v1/teams/{teamId}/dependencies?service=<name> returns only dependencies
+// where service matches, and that omitting the filter returns all dependencies.
+func TestE2E_ServiceDependencies_FilterByService(t *testing.T) {
+	env := newE2EEnv(t)
+
+	createDep := func(service, dependsOn string) {
+		t.Helper()
+		req := httptest.NewRequest("POST",
+			fmt.Sprintf("/api/v1/teams/%s/dependencies", env.kongTeam.ID),
+			e2eBody(t, map[string]any{"service": service, "depends_on": dependsOn}))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(env.kongCookie)
+		resp := env.do(req)
+		if resp.Code != http.StatusCreated {
+			t.Fatalf("create dep %s→%s: got %d, want 201", service, dependsOn, resp.Code)
+		}
+	}
+
+	createDep("checkout-api", "redis-cache")
+	createDep("checkout-api", "payments-db")
+	createDep("payments-service", "postgres")
+
+	listDeps := func(serviceFilter string) []map[string]any {
+		t.Helper()
+		url := fmt.Sprintf("/api/v1/teams/%s/dependencies", env.kongTeam.ID)
+		if serviceFilter != "" {
+			url += "?service=" + serviceFilter
+		}
+		req := httptest.NewRequest("GET", url, nil)
+		req.AddCookie(env.kongCookie)
+		resp := env.do(req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("list deps (filter=%q): got %d, want 200", serviceFilter, resp.Code)
+		}
+		var deps []map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&deps); err != nil {
+			t.Fatalf("decode deps: %v", err)
+		}
+		return deps
+	}
+
+	// No filter — all three deps returned.
+	all := listDeps("")
+	if len(all) < 3 {
+		t.Errorf("expected at least 3 deps with no filter, got %d", len(all))
+	}
+
+	// Filter by checkout-api — only its two deps returned.
+	checkoutDeps := listDeps("checkout-api")
+	if len(checkoutDeps) != 2 {
+		t.Errorf("expected 2 deps for checkout-api, got %d", len(checkoutDeps))
+	}
+	for _, d := range checkoutDeps {
+		if d["service"] != "checkout-api" {
+			t.Errorf("filter returned dep with service=%q, want checkout-api", d["service"])
+		}
+	}
+
+	// Filter by payments-service — only its one dep returned.
+	paymentsDeps := listDeps("payments-service")
+	if len(paymentsDeps) != 1 {
+		t.Errorf("expected 1 dep for payments-service, got %d", len(paymentsDeps))
+	}
+
+	// Filter by a depends_on value — should return nothing (filter is on service, not depends_on).
+	redisDeps := listDeps("redis-cache")
+	if len(redisDeps) != 0 {
+		t.Errorf("filter by depends_on value should return 0 results, got %d", len(redisDeps))
+
 	}
 }
