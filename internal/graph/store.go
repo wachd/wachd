@@ -152,6 +152,10 @@ type Store interface {
 	// prevent active-incident AI analysis from contaminating similarity results.
 	FindSimilar(ctx context.Context, teamID uuid.UUID, nodeID uuid.UUID, limit int) ([]*SimilarNode, error)
 
+	// FindNodeByExternalID resolves a node by its stable external identity within
+	// a team boundary.
+	FindNodeByExternalID(ctx context.Context, teamID uuid.UUID, nodeType NodeType, externalID string) (*Node, error)
+
 	// PromoteNode flips a node from pending to permanent, making it visible to
 	// FindSimilar and GetSubgraph neighbour traversal. Call this when the
 	// incident is resolved.

@@ -65,6 +65,10 @@ func (m *mockGraphStore) FindSimilar(context.Context, uuid.UUID, uuid.UUID, int)
 	panic("unexpected call")
 }
 
+func (m *mockGraphStore) FindNodeByExternalID(context.Context, uuid.UUID, graph.NodeType, string) (*graph.Node, error) {
+	panic("unexpected call")
+}
+
 func (m *mockGraphStore) PromoteNode(_ context.Context, _ uuid.UUID, nodeID uuid.UUID) error {
 	m.promoteCalled = true
 	m.promoteNodeID = nodeID

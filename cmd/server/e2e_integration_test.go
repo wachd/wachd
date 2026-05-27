@@ -50,6 +50,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/redis/go-redis/v9"
 	"github.com/wachd/wachd/internal/auth"
+	"github.com/wachd/wachd/internal/graph"
 	"github.com/wachd/wachd/internal/license"
 	"github.com/wachd/wachd/internal/oncall"
 	"github.com/wachd/wachd/internal/queue"
@@ -145,6 +146,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		sessions:       sessions,
 		license:        lic,
 		enc:            enc,
+		graphStore:     graph.NewPostgresStore(db.Pool()),
 		webhookLimiter: newWebhookIPLimiter(),
 	}
 
@@ -172,6 +174,12 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	api.HandleFunc("/{teamId}/members", server.handleListMembers).Methods("GET")
 	api.HandleFunc("/{teamId}/config", server.handleGetTeamConfig).Methods("GET")
 	api.HandleFunc("/{teamId}/config", server.handleUpsertTeamConfig).Methods("PUT")
+	api.HandleFunc("/{teamId}/graph/config", server.handleGetGraphConfig).Methods("GET")
+	api.HandleFunc("/{teamId}/graph/config", server.handleUpsertGraphConfig).Methods("PUT")
+	api.HandleFunc("/{teamId}/graph/nodes/{nodeId}", server.handleDeleteGraphNode).Methods("DELETE")
+	api.HandleFunc("/{teamId}/incidents/{incidentId}/similar", server.handleGetSimilarIncidents).Methods("GET")
+	api.HandleFunc("/{teamId}/incidents/{incidentId}/graph", server.handleGetIncidentGraph).Methods("GET")
+	api.HandleFunc("/{teamId}/incidents/{incidentId}/promote", server.handlePromoteIncidentGraphNode).Methods("POST")
 	api.HandleFunc("/{teamId}/schedule/overrides", server.handleCreateOverride).Methods("POST")
 	api.HandleFunc("/{teamId}/members/{userId}", server.handleUpdateMember).Methods("PUT")
 
@@ -707,6 +715,7 @@ func TestE2E_Override_ViewerIsDenied(t *testing.T) {
 		t.Errorf("viewer create override: got %d, want 403", resp.Code)
 	}
 }
+
 // admin role — a responder must receive 403 on both GET and PUT.
 func TestE2E_Config_RequiresAdmin(t *testing.T) {
 	env := newE2EEnv(t)
@@ -792,6 +801,114 @@ func TestE2E_UpdateMember_UserMustBeTeamMember(t *testing.T) {
 	resp := env.do(req)
 	if resp.Code != http.StatusUnprocessableEntity {
 		t.Errorf("phone update for non-member: got %d, want 422", resp.Code)
+	}
+}
+
+func TestE2E_GraphSimilarAndDeleteNode(t *testing.T) {
+	env := newE2EEnv(t)
+	ctx := context.Background()
+	gs := graph.NewPostgresStore(env.db.Pool())
+
+	incA := &store.Incident{TeamID: env.kongTeam.ID, Title: "Checkout timeout", Severity: "critical", Status: "resolved", Source: "grafana", FiredAt: time.Now().UTC().Add(-2 * time.Hour)}
+	incB := &store.Incident{TeamID: env.kongTeam.ID, Title: "Checkout payment timeout", Severity: "critical", Status: "resolved", Source: "grafana", FiredAt: time.Now().UTC().Add(-90 * time.Minute)}
+	if err := env.db.CreateIncident(ctx, incA); err != nil {
+		t.Fatalf("CreateIncident A: %v", err)
+	}
+	if err := env.db.CreateIncident(ctx, incB); err != nil {
+		t.Fatalf("CreateIncident B: %v", err)
+	}
+
+	extA, extB := incA.ID.String(), incB.ID.String()
+	nodeA, err := gs.UpsertNode(ctx, env.kongTeam.ID, &graph.Node{Type: graph.NodeTypeIncident, Status: graph.NodeStatusPermanent, Label: incA.Title, ExternalID: &extA})
+	if err != nil {
+		t.Fatalf("UpsertNode A: %v", err)
+	}
+	_, err = gs.UpsertNode(ctx, env.kongTeam.ID, &graph.Node{Type: graph.NodeTypeIncident, Status: graph.NodeStatusPermanent, Label: incB.Title, ExternalID: &extB})
+	if err != nil {
+		t.Fatalf("UpsertNode B: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/teams/%s/incidents/%s/similar", env.kongTeam.ID, incA.ID), nil)
+	req.AddCookie(env.kongCookie)
+	resp := env.do(req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("similar status: got %d want 200 body=%s", resp.Code, resp.Body.String())
+	}
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if len(body.Data) == 0 {
+		t.Fatal("expected similarity results")
+	}
+
+	req = httptest.NewRequest("DELETE", fmt.Sprintf("/api/v1/teams/%s/graph/nodes/%s", env.kongTeam.ID, nodeA.ID), nil)
+	req.AddCookie(env.kongCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("delete node status: got %d want 200 body=%s", resp.Code, resp.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", fmt.Sprintf("/api/v1/teams/%s/incidents/%s/similar", env.kongTeam.ID, incA.ID), nil)
+	req.AddCookie(env.kongCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("similar after delete status: got %d want 200", resp.Code)
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if len(body.Data) != 0 {
+		t.Fatalf("expected no similarity results after delete, got %+v", body.Data)
+	}
+}
+
+func TestE2E_GraphTeamIsolationAndViewerPromoteForbidden(t *testing.T) {
+	env := newE2EEnv(t)
+	ctx := context.Background()
+	gs := graph.NewPostgresStore(env.db.Pool())
+
+	inc := &store.Incident{TeamID: env.kafkaTeam.ID, Title: "Kafka timeout", Severity: "critical", Status: "resolved", Source: "grafana", FiredAt: time.Now().UTC()}
+	if err := env.db.CreateIncident(ctx, inc); err != nil {
+		t.Fatalf("CreateIncident: %v", err)
+	}
+	ext := inc.ID.String()
+	node, err := gs.UpsertNode(ctx, env.kafkaTeam.ID, &graph.Node{Type: graph.NodeTypeIncident, Status: graph.NodeStatusPending, Label: inc.Title, ExternalID: &ext})
+	if err != nil {
+		t.Fatalf("UpsertNode: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/teams/%s/incidents/%s/similar", env.kafkaTeam.ID, inc.ID), nil)
+	req.AddCookie(env.kongCookie)
+	resp := env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("cross-team similar: got %d want 403", resp.Code)
+	}
+
+	req = httptest.NewRequest("POST", fmt.Sprintf("/api/v1/teams/%s/incidents/%s/promote", env.kafkaTeam.ID, inc.ID), nil)
+	req.AddCookie(env.kongViewerCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("viewer promote: got %d want 403", resp.Code)
+	}
+
+	req = httptest.NewRequest("DELETE", fmt.Sprintf("/api/v1/teams/%s/graph/nodes/%s", env.kafkaTeam.ID, node.ID), nil)
+	req.AddCookie(env.kongCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("cross-team delete: got %d want 403", resp.Code)
+	}
+
+	req = httptest.NewRequest("GET", fmt.Sprintf("/api/v1/teams/%s/graph/config", env.kafkaTeam.ID), nil)
+	req.AddCookie(env.kongCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("cross-team graph config read: got %d want 403", resp.Code)
+	}
+
+	req = httptest.NewRequest("GET", fmt.Sprintf("/api/v1/teams/%s/graph/config", env.kongTeam.ID), nil)
+	req.AddCookie(env.kongViewerCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("viewer graph config read: got %d want 200 body=%s", resp.Code, resp.Body.String())
 	}
 }
 
