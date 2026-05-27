@@ -38,6 +38,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 	"github.com/wachd/wachd/internal/auth"
 	"github.com/wachd/wachd/internal/graph"
@@ -605,6 +606,9 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/similar", server.handleGetSimilarIncidents).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/graph", server.handleGetIncidentGraph).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/promote", server.handlePromoteIncidentGraphNode).Methods("POST")
+	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleListServiceDependencies).Methods("GET")
+	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleCreateServiceDependency).Methods("POST")
+	apiRouter.HandleFunc("/{teamId}/dependencies/{depId}", server.handleDeleteServiceDependency).Methods("DELETE")
 
 	// Wrap router with CORS middleware
 	handler := corsMiddleware(router)
@@ -2924,4 +2928,101 @@ func sessionIdentity(sess *auth.Session) (uuid.UUID, string) {
 		return *sess.IdentityID, "sso"
 	}
 	return uuid.Nil, "local"
+}
+
+// ── Service Dependencies ──────────────────────────────────────────────────────
+
+func (s *Server) handleListServiceDependencies(w http.ResponseWriter, r *http.Request) {
+	teamID, err := uuid.Parse(mux.Vars(r)["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAccess(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	service := strings.TrimSpace(r.URL.Query().Get("service"))
+	deps, err := s.cfg.ListServiceDependencies(r.Context(), teamID, service)
+	if err != nil {
+		log.Printf("handleListServiceDependencies: %v", err)
+		http.Error(w, "failed to list service dependencies", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(deps)
+}
+
+func (s *Server) handleCreateServiceDependency(w http.ResponseWriter, r *http.Request) {
+	teamID, err := uuid.Parse(mux.Vars(r)["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	var input struct {
+		Service   string  `json:"service"`
+		DependsOn string  `json:"depends_on"`
+		Label     *string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	service := strings.TrimSpace(input.Service)
+	dependsOn := strings.TrimSpace(input.DependsOn)
+	if service == "" || dependsOn == "" {
+		http.Error(w, "service and depends_on are required", http.StatusBadRequest)
+		return
+	}
+	if strings.EqualFold(service, dependsOn) {
+		http.Error(w, "service cannot depend on itself", http.StatusBadRequest)
+		return
+	}
+	created, err := s.cfg.CreateServiceDependency(r.Context(), &store.ServiceDependency{
+		TeamID:    teamID,
+		Service:   service,
+		DependsOn: dependsOn,
+		Label:     input.Label,
+	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			http.Error(w, "dependency already exists", http.StatusConflict)
+			return
+		}
+		log.Printf("handleCreateServiceDependency: %v", err)
+		http.Error(w, "failed to create service dependency", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(created)
+}
+
+func (s *Server) handleDeleteServiceDependency(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID, err := uuid.Parse(vars["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	depID, err := uuid.Parse(vars["depId"])
+	if err != nil {
+		http.Error(w, "invalid dependency ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+	if err := s.cfg.DeleteServiceDependency(r.Context(), teamID, depID); err != nil {
+		log.Printf("handleDeleteServiceDependency: %v", err)
+		http.Error(w, "service dependency not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

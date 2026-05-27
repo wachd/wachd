@@ -356,6 +356,44 @@ CREATE TABLE IF NOT EXISTS team_graph_config (
 );
 
 -- ============================================================
+-- Service dependencies
+-- Teams declare which services a given service depends on.
+-- When an alert fires for a service, the collector also pulls
+-- logs and metrics for each declared dependency using the team's
+-- existing configured connectors.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS service_dependencies (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id      UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    service      TEXT NOT NULL,
+    depends_on   TEXT NOT NULL,
+    label        TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(team_id, service, depends_on)
+);
+CREATE INDEX IF NOT EXISTS idx_service_deps_team_service ON service_dependencies(team_id, service);
+
+-- Idempotent constraint additions (ADD CONSTRAINT IF NOT EXISTS is not supported
+-- for CHECK constraints in PostgreSQL; use DO/EXCEPTION instead).
+DO $$ BEGIN
+    ALTER TABLE service_dependencies
+        ADD CONSTRAINT chk_service_deps_no_self_dep
+        CHECK (lower(btrim(service)) <> lower(btrim(depends_on)));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    ALTER TABLE service_dependencies
+        ADD CONSTRAINT chk_service_deps_service_nonempty
+        CHECK (btrim(service) <> '');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    ALTER TABLE service_dependencies
+        ADD CONSTRAINT chk_service_deps_depends_on_nonempty
+        CHECK (btrim(depends_on) <> '');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ============================================================
 -- Platform-wide system configuration (superadmin only)
 -- Singleton row: always use id = 1.
 -- ============================================================
