@@ -28,7 +28,7 @@ func TestSlackNotifierSendIncidentAlertWithSimilarIncludesBlock(t *testing.T) {
 	var payload SlackMessage
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode slack payload: %v", err)

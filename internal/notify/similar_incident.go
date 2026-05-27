@@ -280,19 +280,30 @@ func formatSimilarIncidentEmail(similar *SimilarIncident) string {
 
 	b.WriteString("Similar past incident\n")
 	b.WriteString("---------------------\n")
-	b.WriteString(fmt.Sprintf("Title: %s\n", title))
-	b.WriteString(fmt.Sprintf("Similarity: %s\n", formatSimilarityPercent(similar.Score)))
+	b.WriteString("Title: ")
+	b.WriteString(title)
+	b.WriteByte('\n')
+
+	b.WriteString("Similarity: ")
+	b.WriteString(formatSimilarityPercent(similar.Score))
+	b.WriteByte('\n')
 
 	if !similar.FiredAt.IsZero() {
-		b.WriteString(fmt.Sprintf("Fired at: %s\n", similar.FiredAt.Format(time.RFC3339)))
+		b.WriteString("Fired at: ")
+		b.WriteString(similar.FiredAt.Format(time.RFC3339))
+		b.WriteByte('\n')
 	}
 
 	if strings.TrimSpace(similar.Resolution) != "" {
-		b.WriteString(fmt.Sprintf("Previous resolution: %s\n", strings.TrimSpace(similar.Resolution)))
+		b.WriteString("Previous resolution: ")
+		b.WriteString(strings.TrimSpace(similar.Resolution))
+		b.WriteByte('\n')
 	}
 
 	if strings.TrimSpace(similar.URL) != "" {
-		b.WriteString(fmt.Sprintf("View: %s\n", strings.TrimSpace(similar.URL)))
+		b.WriteString("View: ")
+		b.WriteString(strings.TrimSpace(similar.URL))
+		b.WriteByte('\n')
 	}
 
 	b.WriteString("\n")
