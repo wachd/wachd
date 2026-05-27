@@ -391,14 +391,16 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 		}
 	}
 
+	similarIncident := w.findSimilarIncidentForNotification(ctx, incident, sanitizedCtx, aiAnalysis)
+
 	// Notify on-call engineer via their personal notification rules (email/SMS/voice).
 	// Slack fires separately below — once per incident, team-level, not per-user.
 	if onCallUser != nil {
-		w.sendNotifications(ctx, incident, onCallUser, aiAnalysis)
+		w.sendNotifications(ctx, incident, onCallUser, aiAnalysis, similarIncident)
 	}
 
 	// Fire team Slack channel once — one post per incident, keeps the channel clean.
-	w.fireTeamSlack(ctx, incident, onCallUser, aiAnalysis)
+	w.fireTeamSlack(ctx, incident, onCallUser, aiAnalysis, similarIncident)
 
 	log.Printf("✓ Incident %s processed", incident.ID)
 	return nil
@@ -425,7 +427,7 @@ func (w *Worker) processResolvedIncidentJob(ctx context.Context, job *queue.Job)
 // If the user has notification rules configured, only those channels fire (with
 // optional delay). If no rules exist the function falls back to firing all
 // globally-configured channels immediately (preserving pre-rules behaviour).
-func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
+func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse, similar *notify.SimilarIncident) {
 	rules, err := w.db.GetUserNotificationRules(ctx, onCallUser.ID, onCallUser.Source, "new_alert")
 	if err != nil {
 		log.Printf("warn: load notification rules for user %s: %v — falling back to all channels", onCallUser.ID, err)
@@ -433,7 +435,7 @@ func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident
 
 	if len(rules) == 0 {
 		// No rules configured — fire all available channels immediately (legacy behaviour).
-		w.fireAllChannels(ctx, incident, onCallUser, analysis)
+		w.fireAllChannels(ctx, incident, onCallUser, analysis, similar)
 		return
 	}
 
@@ -442,7 +444,7 @@ func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident
 			continue
 		}
 		if rule.DelayMinutes == 0 {
-			w.fireChannel(ctx, rule.Channel, incident, onCallUser, analysis)
+			w.fireChannel(ctx, rule.Channel, incident, onCallUser, analysis, similar)
 		} else {
 			p := &store.PendingNotification{
 				IncidentID:  incident.ID,
@@ -463,7 +465,7 @@ func (w *Worker) sendNotifications(ctx context.Context, incident *store.Incident
 
 // fireTeamSlack posts one notification to the team Slack channel.
 // Called once when the incident is first created — not on escalation steps.
-func (w *Worker) fireTeamSlack(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
+func (w *Worker) fireTeamSlack(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse, similar *notify.SimilarIncident) {
 	slackNotifier := w.slackNotifier
 	if cfg, err := w.db.GetTeamConfig(ctx, incident.TeamID); err == nil && cfg != nil {
 		if cfg.SlackWebhookURL != nil && *cfg.SlackWebhookURL != "" {
@@ -477,7 +479,7 @@ func (w *Worker) fireTeamSlack(ctx context.Context, incident *store.Incident, on
 	if slackNotifier == nil {
 		return
 	}
-	if err := slackNotifier.SendIncidentAlert(ctx, incident, onCallUser, analysis); err != nil {
+	if err := slackNotifier.SendIncidentAlertWithSimilar(ctx, incident, onCallUser, analysis, similar); err != nil {
 		log.Printf("Slack notification failed: %v", err)
 	} else {
 		log.Printf("  ✓ Slack (team channel)")
@@ -487,9 +489,9 @@ func (w *Worker) fireTeamSlack(ctx context.Context, incident *store.Incident, on
 // fireAllChannels sends email/SMS/voice for a user — used as fallback when no
 // notification rules are configured, and for escalation re-notifications.
 // Slack is intentionally excluded: it fires once at incident creation only.
-func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) {
+func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse, similar *notify.SimilarIncident) {
 	if w.emailNotifier != nil {
-		if err := w.emailNotifier.SendIncidentAlert(ctx, incident, onCallUser, analysis); err != nil {
+		if err := w.emailNotifier.SendIncidentAlertWithSimilar(ctx, incident, onCallUser, analysis, similar); err != nil {
 			log.Printf("Email notification failed: %v", err)
 		} else {
 			log.Printf("  ✓ Email")
@@ -497,7 +499,7 @@ func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, 
 	}
 
 	if w.smsNotifier != nil {
-		if err := w.smsNotifier.SendIncidentAlert(ctx, incident, onCallUser, analysis); err != nil {
+		if err := w.smsNotifier.SendIncidentAlertWithSimilar(ctx, incident, onCallUser, analysis, similar); err != nil {
 			log.Printf("SMS notification failed: %v", err)
 		} else {
 			log.Printf("  ✓ SMS")
@@ -515,11 +517,11 @@ func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, 
 
 // fireChannel sends a single notification channel for a user.
 // Slack is not handled here — it fires once at incident creation via fireTeamSlack.
-func (w *Worker) fireChannel(ctx context.Context, channel string, incident *store.Incident, user *store.TeamMember, analysis *ai.AnalysisResponse) {
+func (w *Worker) fireChannel(ctx context.Context, channel string, incident *store.Incident, user *store.TeamMember, analysis *ai.AnalysisResponse, similar *notify.SimilarIncident) {
 	switch channel {
 	case "email":
 		if w.emailNotifier != nil {
-			if err := w.emailNotifier.SendIncidentAlert(ctx, incident, user, analysis); err != nil {
+			if err := w.emailNotifier.SendIncidentAlertWithSimilar(ctx, incident, user, analysis, similar); err != nil {
 				log.Printf("Email notification failed: %v", err)
 			} else {
 				log.Printf("  ✓ Email")
@@ -527,7 +529,7 @@ func (w *Worker) fireChannel(ctx context.Context, channel string, incident *stor
 		}
 	case "sms":
 		if w.smsNotifier != nil {
-			if err := w.smsNotifier.SendIncidentAlert(ctx, incident, user, analysis); err != nil {
+			if err := w.smsNotifier.SendIncidentAlertWithSimilar(ctx, incident, user, analysis, similar); err != nil {
 				log.Printf("SMS notification failed: %v", err)
 			} else {
 				log.Printf("  ✓ SMS")
@@ -587,7 +589,7 @@ func (w *Worker) firePendingNotifications(ctx context.Context) {
 			continue
 		}
 		log.Printf("⏰ Firing delayed %s for incident %s (user: %s)", p.Channel, p.IncidentID, user.Name)
-		w.fireChannel(ctx, p.Channel, incident, user, nil) // no AI analysis for delayed sends
+		w.fireChannel(ctx, p.Channel, incident, user, nil, nil) // no AI analysis for delayed sends
 		_ = w.db.MarkPendingNotificationSent(ctx, p.ID)
 	}
 }
