@@ -165,6 +165,46 @@ func TestLoadSimilarIncidentForNotificationReturnsErrorWhenFindSimilarErrors(t *
 	}
 }
 
+func TestLoadSimilarIncidentForNotificationTreatsMissingGraphConfigAsEnabled(t *testing.T) {
+	ctx := context.Background()
+	teamID := uuid.New()
+
+	lookup := &similarNotificationLookup{
+		graphConfig: nil,
+	}
+	graphStore := &similarNotificationGraphStore{}
+
+	buildCalled := false
+	similar, err := loadSimilarIncidentForNotification(ctx, lookup, graphStore, teamID, func() (*graph.Node, error) {
+		buildCalled = true
+		return &graph.Node{
+			ID:     uuid.New(),
+			TeamID: teamID,
+			Type:   graph.NodeTypeIncident,
+			Label:  "New incident",
+		}, nil
+	}, "https://wachd.example.com")
+	if err != nil {
+		t.Fatalf("load similar incident: %v", err)
+	}
+
+	if similar != nil {
+		t.Fatalf("expected no similar incident when graph has no matches, got %+v", similar)
+	}
+
+	if !buildCalled {
+		t.Fatal("expected active incident graph node to be built when config row is missing")
+	}
+
+	if !graphStore.upsertCalled {
+		t.Fatal("expected graph node to be written when config row is missing")
+	}
+
+	if !graphStore.findCalled {
+		t.Fatal("expected FindSimilar to run when config row is missing")
+	}
+}
+
 func TestLoadSimilarIncidentForNotificationOmitsWhenGraphDisabled(t *testing.T) {
 	ctx := context.Background()
 	teamID := uuid.New()
@@ -228,6 +268,7 @@ func (s *similarNotificationLookup) GetIncident(ctx context.Context, teamID uuid
 
 type similarNotificationGraphStore struct {
 	upsertCalled bool
+	findCalled   bool
 	upsertErr    error
 	findErr      error
 	matches      []*graph.SimilarNode
@@ -257,6 +298,8 @@ func (s *similarNotificationGraphStore) GetSubgraph(ctx context.Context, teamID 
 }
 
 func (s *similarNotificationGraphStore) FindSimilar(ctx context.Context, teamID uuid.UUID, nodeID uuid.UUID, limit int) ([]*graph.SimilarNode, error) {
+	s.findCalled = true
+
 	if s.findErr != nil {
 		return nil, s.findErr
 	}

@@ -66,6 +66,8 @@ func loadSimilarIncidentForNotification(ctx context.Context, lookup notification
 	if err != nil {
 		return nil, fmt.Errorf("load graph config: %w", err)
 	}
+	// Missing graph config means the team has not opted out, so the graph is
+	// enabled by default. Only an explicit enabled=false disables lookup.
 	if cfg != nil && !cfg.Enabled {
 		return nil, nil
 	}
