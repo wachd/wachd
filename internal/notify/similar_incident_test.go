@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,45 @@ func TestSlackNotifierSendIncidentAlertWithSimilarIncludesBlock(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected Slack payload to contain %q, got:\n%s", want, text)
 		}
+	}
+}
+
+func TestSlackNotifierSendIncidentAlertWithSimilarNilMatchesBaseAlert(t *testing.T) {
+	var payloads []SlackMessage
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+
+		var payload SlackMessage
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode slack payload: %v", err)
+		}
+
+		payloads = append(payloads, payload)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	notifier := newSlackNotifierWithClient(server.URL, "#alerts", server.Client())
+
+	incident := makeTestIncident()
+	member := makeTestMember()
+	analysis := makeTestAnalysis()
+
+	if err := notifier.SendIncidentAlert(context.Background(), incident, member, analysis); err != nil {
+		t.Fatalf("send base slack alert: %v", err)
+	}
+
+	if err := notifier.SendIncidentAlertWithSimilar(context.Background(), incident, member, analysis, nil); err != nil {
+		t.Fatalf("send slack alert with nil similar incident: %v", err)
+	}
+
+	if len(payloads) != 2 {
+		t.Fatalf("expected two Slack payloads, got %d", len(payloads))
+	}
+
+	if !reflect.DeepEqual(payloads[0], payloads[1]) {
+		t.Fatalf("expected nil similar path to match base Slack alert\nbase: %+v\nwith nil similar: %+v", payloads[0], payloads[1])
 	}
 }
 

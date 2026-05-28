@@ -43,90 +43,37 @@ type SimilarIncident struct {
 
 // SendIncidentAlertWithSimilar sends the normal Slack incident alert and, when
 // present, includes the most similar past incident.
+
 func (s *SlackNotifier) SendIncidentAlertWithSimilar(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse, similar *SimilarIncident) error {
-	text := fmt.Sprintf("*Alert:* %s", incident.Title)
-
-	onCallText := "Unassigned"
-	if onCallUser != nil {
-		onCallText = fmt.Sprintf("%s <%s>", onCallUser.Name, onCallUser.Email)
+	if similar == nil {
+		return s.SendIncidentAlert(ctx, incident, onCallUser, analysis)
 	}
 
-	message := SlackMessage{
-		Channel: s.channel,
-		Text:    text,
-		Blocks: []Block{
-			{
-				Type: "section",
-				Text: &Text{
-					Type: "mrkdwn",
-					Text: text,
-				},
-			},
-			{
-				Type: "section",
-				Text: &Text{
-					Type: "mrkdwn",
-					Text: fmt.Sprintf(
-						"*Severity:* %s\n*Source:* %s\n*On-Call:* %s",
-						incident.Severity,
-						incident.Source,
-						onCallText,
-					),
-				},
-			},
-		},
-	}
+	message := s.buildIncidentAlertMessage(incident, onCallUser, analysis)
 
-	if incident.Message != nil && *incident.Message != "" {
-		message.Blocks = append(message.Blocks, Block{
-			Type: "section",
-			Text: &Text{
-				Type: "mrkdwn",
-				Text: fmt.Sprintf("*Message:* %s", *incident.Message),
-			},
-		})
-	}
-
-	if analysis != nil {
-		analysisText := fmt.Sprintf(
-			"*Root Cause Analysis:*\n\n*Probable Cause:* %s\n\n*Suggested Action:* %s\n\n*Confidence:* %s",
-			analysis.RootCause,
-			analysis.SuggestedAction,
-			analysis.Confidence,
-		)
-
-		message.Blocks = append(message.Blocks, Block{
-			Type: "section",
-			Text: &Text{
-				Type: "mrkdwn",
-				Text: analysisText,
-			},
-		})
-	}
-
-	if similar != nil {
-		message.Blocks = append(message.Blocks, Block{
-			Type: "section",
-			Text: &Text{
-				Type: "mrkdwn",
-				Text: formatSimilarIncidentSlack(similar),
-			},
-		})
-	}
-
-	message.Blocks = append(message.Blocks, Block{
+	message.Blocks = insertSlackBlockBeforeIncidentID(message.Blocks, Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf(
-				"*Incident ID:* `%s`\n*Fired at:* %s",
-				incident.ID.String(),
-				incident.FiredAt.Format(time.RFC3339),
-			),
+			Text: formatSimilarIncidentSlack(similar),
 		},
 	})
 
 	return s.sendMessage(ctx, message)
+}
+
+func insertSlackBlockBeforeIncidentID(blocks []Block, block Block) []Block {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if blocks[i].Text != nil && strings.Contains(blocks[i].Text.Text, "*Incident ID:*") {
+			updated := make([]Block, 0, len(blocks)+1)
+			updated = append(updated, blocks[:i]...)
+			updated = append(updated, block)
+			updated = append(updated, blocks[i:]...)
+			return updated
+		}
+	}
+
+	return append(blocks, block)
 }
 
 // SendIncidentAlertWithSimilar sends the normal email alert and, when present,
