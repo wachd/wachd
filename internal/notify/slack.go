@@ -70,9 +70,18 @@ func newSlackNotifierWithClient(webhookURL, channel string, client *http.Client)
 }
 
 // SendIncidentAlert sends an incident alert to Slack
+
 func (s *SlackNotifier) SendIncidentAlert(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) error {
-	// Format the message
-	text := fmt.Sprintf("🚨 *Alert:* %s", incident.Title)
+	return s.sendMessage(ctx, s.buildIncidentAlertMessage(incident, onCallUser, analysis))
+}
+
+func (s *SlackNotifier) buildIncidentAlertMessage(incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse) SlackMessage {
+	text := fmt.Sprintf("*Alert:* %s", incident.Title)
+
+	onCallText := "Unassigned"
+	if onCallUser != nil {
+		onCallText = fmt.Sprintf("%s <%s>", onCallUser.Name, onCallUser.Email)
+	}
 
 	message := SlackMessage{
 		Channel: s.channel,
@@ -89,18 +98,17 @@ func (s *SlackNotifier) SendIncidentAlert(ctx context.Context, incident *store.I
 				Type: "section",
 				Text: &Text{
 					Type: "mrkdwn",
-					Text: fmt.Sprintf("*Severity:* %s\n*Source:* %s\n*On-Call:* %s <%s>",
+					Text: fmt.Sprintf(
+						"*Severity:* %s\n*Source:* %s\n*On-Call:* %s",
 						incident.Severity,
 						incident.Source,
-						onCallUser.Name,
-						onCallUser.Email,
+						onCallText,
 					),
 				},
 			},
 		},
 	}
 
-	// Add message if present
 	if incident.Message != nil && *incident.Message != "" {
 		message.Blocks = append(message.Blocks, Block{
 			Type: "section",
@@ -111,9 +119,9 @@ func (s *SlackNotifier) SendIncidentAlert(ctx context.Context, incident *store.I
 		})
 	}
 
-	// Add root cause analysis if available
 	if analysis != nil {
-		analysisText := fmt.Sprintf("🤖 *Root Cause Analysis:*\n\n*Probable Cause:* %s\n\n*Suggested Action:* %s\n\n*Confidence:* %s",
+		analysisText := fmt.Sprintf(
+			"*Root Cause Analysis:*\n\n*Probable Cause:* %s\n\n*Suggested Action:* %s\n\n*Confidence:* %s",
 			analysis.RootCause,
 			analysis.SuggestedAction,
 			analysis.Confidence,
@@ -128,20 +136,19 @@ func (s *SlackNotifier) SendIncidentAlert(ctx context.Context, incident *store.I
 		})
 	}
 
-	// Add incident ID
 	message.Blocks = append(message.Blocks, Block{
 		Type: "section",
 		Text: &Text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*Incident ID:* `%s`\n*Fired at:* %s",
+			Text: fmt.Sprintf(
+				"*Incident ID:* `%s`\n*Fired at:* %s",
 				incident.ID.String(),
 				incident.FiredAt.Format(time.RFC3339),
 			),
 		},
 	})
 
-	// Send the message
-	return s.sendMessage(ctx, message)
+	return message
 }
 
 // SendTestMessage sends a simple test message to verify the Slack webhook is working.
