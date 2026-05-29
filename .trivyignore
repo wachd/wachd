@@ -1,0 +1,6 @@
+# CVE-2026-33671: picomatch ReDoS — bundled inside next/dist/compiled/picomatch
+# We are on the latest Next.js 16.x (16.2.6). The fix (picomatch 4.0.4) has not
+# been included in a Next.js release yet. This path is internal to the Next.js
+# standalone runtime and does not process untrusted user input directly.
+# Revisit when a Next.js 16.x patch ships with picomatch >= 4.0.4.
+CVE-2026-33671
