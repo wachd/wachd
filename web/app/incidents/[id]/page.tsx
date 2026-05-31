@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { useSession } from '@/lib/session-context';
+import { useSession } from '@/lib/session-context'; import SimilarIncidentsPanel from '@/components/similar-incidents-panel';
 import type { Incident } from '@/lib/types';
 
 function formatDate(dateString: string) {
@@ -335,7 +335,7 @@ export default function IncidentDetailPage() {
           </div>
         )}
 
-        {/* Alert Payload */}
+        {primaryTeamId && ( <SimilarIncidentsPanel teamId={primaryTeamId} incidentId={incident.id} /> )} {/* Alert Payload */}
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">
             Alert Payload

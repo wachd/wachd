@@ -69,6 +69,10 @@ func (m *mockGraphStore) FindNodeByExternalID(context.Context, uuid.UUID, graph.
 	panic("unexpected call")
 }
 
+func (m *mockGraphStore) ListNodes(ctx context.Context, teamID uuid.UUID, status graph.NodeStatus, limit int) ([]*graph.Node, error) {
+	panic("not used")
+}
+
 func (m *mockGraphStore) PromoteNode(_ context.Context, _ uuid.UUID, nodeID uuid.UUID) error {
 	m.promoteCalled = true
 	m.promoteNodeID = nodeID

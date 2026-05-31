@@ -599,6 +599,7 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/config", server.handleUpsertTeamConfig).Methods("PUT")
 	apiRouter.HandleFunc("/{teamId}/graph/config", server.handleGetGraphConfig).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/graph/config", server.handleUpsertGraphConfig).Methods("PUT")
+	apiRouter.HandleFunc("/{teamId}/graph/nodes", server.handleListGraphNodes).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/graph/nodes/{nodeId}", server.handleDeleteGraphNode).Methods("DELETE")
 	apiRouter.HandleFunc("/{teamId}/config/test-notification", server.handleTestNotification).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleGetEscalationPolicy).Methods("GET")
@@ -2037,6 +2038,58 @@ func (s *Server) handlePromoteIncidentGraphNode(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeDataEnvelope(w, http.StatusOK, map[string]string{"status": "promoted", "node_id": node.ID.String()})
+}
+
+func (s *Server) handleListGraphNodes(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+
+	teamID, err := uuid.Parse(vars["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+
+	if !s.requireTeamAdmin(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+
+	status := graph.NodeStatus(strings.TrimSpace(r.URL.Query().Get("status")))
+	if status == "" {
+		status = graph.NodeStatusPermanent
+	}
+	if status != graph.NodeStatusPending && status != graph.NodeStatusPermanent {
+		http.Error(w, "status must be pending or permanent", http.StatusBadRequest)
+		return
+	}
+
+	limit := 50
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit <= 0 {
+			http.Error(w, "limit must be a positive integer", http.StatusBadRequest)
+			return
+		}
+
+		limit = parsedLimit
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	gs, err := s.graphStoreForTeam(r.Context(), teamID)
+	if err != nil {
+		http.Error(w, "failed to load graph config", http.StatusInternalServerError)
+		return
+	}
+
+	nodes, err := gs.ListNodes(r.Context(), teamID, status, limit)
+	if err != nil {
+		http.Error(w, "failed to list graph nodes", http.StatusInternalServerError)
+		return
+	}
+
+	writeDataEnvelope(w, http.StatusOK, nodes)
 }
 
 func (s *Server) handleDeleteGraphNode(w http.ResponseWriter, r *http.Request) {

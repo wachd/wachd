@@ -156,6 +156,10 @@ type Store interface {
 	// a team boundary.
 	FindNodeByExternalID(ctx context.Context, teamID uuid.UUID, nodeType NodeType, externalID string) (*Node, error)
 
+	// ListNodes returns graph nodes for the team, optionally filtered by status.
+	// This is used by the web admin Graph settings panel.
+	ListNodes(ctx context.Context, teamID uuid.UUID, status NodeStatus, limit int) ([]*Node, error)
+
 	// PromoteNode flips a node from pending to permanent, making it visible to
 	// FindSimilar and GetSubgraph neighbour traversal. Call this when the
 	// incident is resolved.
