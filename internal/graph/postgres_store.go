@@ -437,6 +437,58 @@ func (s *PostgresStore) FindNodeByExternalID(ctx context.Context, teamID uuid.UU
 	return node, nil
 }
 
+// ListNodes returns graph nodes for a team, optionally filtered by status.
+func (s *PostgresStore) ListNodes(ctx context.Context, teamID uuid.UUID, status NodeStatus, limit int) ([]*Node, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if teamID == uuid.Nil {
+		return nil, errors.New("team id is required")
+	}
+
+	switch status {
+	case "", NodeStatusPending, NodeStatusPermanent:
+	default:
+		return nil, fmt.Errorf("invalid node status %q", status)
+	}
+
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, team_id, type, status, label, external_id, properties, created_at, updated_at
+		FROM graph_nodes
+		WHERE team_id = $1
+		  AND ($2 = '' OR status = $2)
+		ORDER BY updated_at DESC
+		LIMIT $3
+	`, teamID, string(status), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list graph nodes: %w", err)
+	}
+	defer rows.Close()
+
+	nodes := make([]*Node, 0)
+	for rows.Next() {
+		node, err := scanNode(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph node: %w", err)
+		}
+
+		nodes = append(nodes, node)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read graph nodes: %w", err)
+	}
+
+	return nodes, nil
+}
+
 // PromoteNode marks a node as permanent.
 //
 // Any connected edges are promoted only when both endpoint nodes are permanent.

@@ -29,7 +29,7 @@ export interface Incident {
   acknowledged_at?: string;
   resolved_at?: string;
   snoozed_until?: string;
-  alert_payload: Record<string, any>;
+  alert_payload: Record<string, unknown>;
   context?: IncidentContext;
   analysis?: IncidentAnalysis;
   created_at: string;
@@ -74,7 +74,7 @@ export interface Schedule {
   id: string;
   team_id: string;
   name: string;
-  rotation_config: Record<string, any>;
+  rotation_config: Record<string, unknown>;
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -110,3 +110,48 @@ export interface ScheduleOverride {
   created_at: string;
 }
 
+
+
+export interface SimilarIncident {
+  incident_id: string;
+  title: string;
+  score: number;
+  reason: string;
+  occurred_at?: string;
+  resolution?: string;
+}
+
+export interface GraphConfig {
+  enabled: boolean;
+  min_similarity_score: number;
+}
+
+export interface GraphNode {
+  id: string;
+  team_id: string;
+  type: string;
+  status: 'pending' | 'permanent';
+  label: string;
+  external_id?: string;
+  properties?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GraphEdge {
+  id: string;
+  team_id: string;
+  from_node_id: string;
+  to_node_id: string;
+  type: string;
+  status: 'pending' | 'permanent';
+  weight: number;
+  properties?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}

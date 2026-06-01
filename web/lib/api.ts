@@ -1,6 +1,6 @@
 // API client for the Wachd backend
 
-import type { Incident, TeamMember, Schedule, OnCallUser, ScheduleOverride } from './types';
+import type { Incident, TeamMember, Schedule, OnCallUser, ScheduleOverride, SimilarIncident, GraphConfig, GraphNode, IncidentGraph } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -30,6 +30,20 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
   if (!text) return undefined as unknown as T;
   return JSON.parse(text);
 }
+
+interface GraphEnvelope<T> {
+  data: T;
+  error: unknown;
+}
+
+function unwrapGraphData<T>(payload: T | GraphEnvelope<T>): T {
+  if (payload && typeof payload === 'object' && 'data' in payload) {
+    return (payload as GraphEnvelope<T>).data;
+  }
+
+  return payload as T;
+}
+
 
 export interface TeamConfigPublic {
   team_id: string;
@@ -143,7 +157,7 @@ export const api = {
       return data as Schedule;
     },
 
-    upsert: (teamId: string, payload: { name?: string; rotation_config: Record<string, any>; enabled?: boolean }) =>
+    upsert: (teamId: string, payload: { name?: string; rotation_config: Record<string, unknown>; enabled?: boolean }) =>
       fetchApi<Schedule>(`/api/v1/teams/${teamId}/schedule`, {
         method: 'PUT',
         body: JSON.stringify(payload),
@@ -339,6 +353,50 @@ export const api = {
         `/api/v1/teams/${teamId}/escalation`,
         { method: 'PUT', body: JSON.stringify({ config }) }
       ),
+  },
+
+  // Graph and similarity APIs
+  graph: {
+    listSimilarIncidents: async (teamId: string, incidentId: string, limit = 5): Promise<SimilarIncident[]> => {
+      const response = await fetchApi<GraphEnvelope<SimilarIncident[]> | SimilarIncident[]>(
+        `/api/v1/teams/${teamId}/incidents/${incidentId}/similar?limit=${limit}`
+      );
+      return unwrapGraphData(response) ?? [];
+    },
+    getIncidentGraph: async (teamId: string, incidentId: string): Promise<IncidentGraph> => {
+      const response = await fetchApi<GraphEnvelope<IncidentGraph> | IncidentGraph>(
+        `/api/v1/teams/${teamId}/incidents/${incidentId}/graph`
+      );
+      return unwrapGraphData(response);
+    },
+    getConfig: async (teamId: string): Promise<GraphConfig> => {
+      const response = await fetchApi<GraphEnvelope<GraphConfig> | GraphConfig>(
+        `/api/v1/teams/${teamId}/graph/config`
+      );
+      return unwrapGraphData(response);
+    },
+    updateConfig: async (teamId: string, config: GraphConfig): Promise<GraphConfig> => {
+      const response = await fetchApi<GraphEnvelope<GraphConfig> | GraphConfig>(
+        `/api/v1/teams/${teamId}/graph/config`,
+        {
+          method: 'PUT',
+          body: JSON.stringify(config),
+        }
+      );
+      return unwrapGraphData(response);
+    },
+    listNodes: async (teamId: string, status: 'pending' | 'permanent' = 'permanent', limit = 50): Promise<GraphNode[]> => {
+      const response = await fetchApi<GraphEnvelope<GraphNode[]> | GraphNode[]>(
+        `/api/v1/teams/${teamId}/graph/nodes?status=${status}&limit=${limit}`
+      );
+      return unwrapGraphData(response) ?? [];
+    },
+    deleteNode: async (teamId: string, nodeId: string): Promise<void> => {
+      await fetchApi<GraphEnvelope<{ deleted: string }>>(
+        `/api/v1/teams/${teamId}/graph/nodes/${nodeId}`,
+        { method: 'DELETE' }
+      );
+    },
   },
 
   // User notification rules (per-user profile settings)
