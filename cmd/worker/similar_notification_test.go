@@ -311,6 +311,10 @@ func (s *similarNotificationGraphStore) FindNodeByExternalID(ctx context.Context
 	panic("not used")
 }
 
+func (s *similarNotificationGraphStore) ListNodes(ctx context.Context, teamID uuid.UUID, status graph.NodeStatus, limit int) ([]*graph.Node, error) {
+	panic("not used")
+}
+
 func (s *similarNotificationGraphStore) PromoteNode(ctx context.Context, teamID uuid.UUID, nodeID uuid.UUID) error {
 	panic("not used")
 }
