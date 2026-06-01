@@ -29,6 +29,7 @@ export default function GraphSettingsPanel({ teamId, isAdmin }: GraphSettingsPan
   const [loading, setLoading] = useState(true);
   const [nodesLoading, setNodesLoading] = useState(isAdmin);
   const [saving, setSaving] = useState(false);
+  const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -126,8 +127,18 @@ export default function GraphSettingsPanel({ teamId, isAdmin }: GraphSettingsPan
       return;
     }
 
-    await api.graph.deleteNode(teamId, node.id);
-    setNodes((current) => current.filter((item) => item.id !== node.id));
+    setDeletingNodeId(node.id);
+    setMessage(null);
+
+    try {
+      await api.graph.deleteNode(teamId, node.id);
+      setNodes((current) => current.filter((item) => item.id !== node.id));
+      setMessage("Graph node deleted.");
+    } catch {
+      setMessage("Failed to delete node. Please try again.");
+    } finally {
+      setDeletingNodeId(null);
+    }
   };
 
   if (loading) {
@@ -258,9 +269,10 @@ export default function GraphSettingsPanel({ teamId, isAdmin }: GraphSettingsPan
                         <button
                           type="button"
                           onClick={() => void deleteNode(node)}
-                          className="text-xs text-red-600 hover:underline"
+                          disabled={deletingNodeId === node.id}
+                          className="text-xs text-red-600 hover:underline disabled:opacity-50"
                         >
-                          Delete
+                          {deletingNodeId === node.id ? "Deleting..." : "Delete"}
                         </button>
                       )}
                     </td>

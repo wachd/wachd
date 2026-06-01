@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { useSession } from '@/lib/session-context'; import GraphSettingsPanel from '@/components/graph-settings-panel';
+import { useCallback, useEffect, useState } from 'react';
+
+import GraphSettingsPanel from '@/components/graph-settings-panel';
 import { api, type TeamConfigPublic, type TeamConfigInput, type EscalationConfig } from '@/lib/api';
+import { useSession } from '@/lib/session-context';
 import type { TeamMember } from '@/lib/types';
 
 type Tab = 'general' | 'datasources' | 'notifications' | 'graph' | 'members' | 'escalation';
@@ -489,8 +491,13 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* ── Members ── */}
-      {activeTab === 'graph' && isAdmin && primaryTeamId && ( <GraphSettingsPanel teamId={primaryTeamId} isAdmin={Boolean(isAdmin)} /> )} {activeTab === 'members' && (
+      {/* Graph */}
+      {activeTab === 'graph' && isAdmin && primaryTeamId && (
+        <GraphSettingsPanel teamId={primaryTeamId} isAdmin={Boolean(isAdmin)} />
+      )}
+
+      {/* Members */}
+      {activeTab === 'members' && (
         <div className="bg-white rounded-lg border border-gray-200">
           <div className="p-6 border-b border-gray-100">
             <h2 className="text-lg font-semibold text-gray-900">Team Members</h2>
