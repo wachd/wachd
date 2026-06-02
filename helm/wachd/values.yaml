@@ -472,6 +472,10 @@ analysis:
   openaiApiKeySecret: wachd-openai-key
   openaiApiKeyKey: api-key
   openaiModel: gpt-4o-mini
+  # Override to point at any OpenAI-compatible endpoint.
+  # Examples: vLLM, LLMKube InferenceService, Azure OpenAI, Groq, Together.ai.
+  # Leave empty to use the default https://api.openai.com/v1
+  openaiBaseURL: ""
 
   # ---------------------------------------------------------------------------
   # Gemini (Google) — free tier available, fast

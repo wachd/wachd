@@ -371,30 +371,30 @@ func TestClaudeBackend_Analyze_EmptyContent(t *testing.T) {
 // ── OpenAIBackend ─────────────────────────────────────────────────────────────
 
 func TestOpenAIBackend_GetModelName(t *testing.T) {
-	b := NewOpenAIBackend("key", "gpt-4o")
+	b := NewOpenAIBackend("key", "gpt-4o", "")
 	if b.GetModelName() != "gpt-4o" {
 		t.Errorf("unexpected model: %q", b.GetModelName())
 	}
 }
 
 func TestOpenAIBackend_DefaultModel(t *testing.T) {
-	b := NewOpenAIBackend("key", "")
+	b := NewOpenAIBackend("key", "", "")
 	if b.GetModelName() == "" {
 		t.Error("expected default model")
 	}
 }
 
 func TestOpenAIBackend_IsAvailable(t *testing.T) {
-	if !NewOpenAIBackend("key", "").IsAvailable(context.Background()) {
+	if !NewOpenAIBackend("key", "", "").IsAvailable(context.Background()) {
 		t.Error("expected true with key")
 	}
-	if NewOpenAIBackend("", "").IsAvailable(context.Background()) {
+	if NewOpenAIBackend("", "", "").IsAvailable(context.Background()) {
 		t.Error("expected false without key")
 	}
 }
 
 func TestOpenAIBackend_Analyze_NoKey(t *testing.T) {
-	b := NewOpenAIBackend("", "")
+	b := NewOpenAIBackend("", "", "")
 	_, err := b.Analyze(context.Background(), "prompt")
 	if err == nil {
 		t.Error("expected error when no API key")

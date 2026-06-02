@@ -27,9 +27,10 @@ import (
 
 // OpenAIBackend implements AI backend using OpenAI API
 type OpenAIBackend struct {
-	apiKey string
-	model  string
-	client *http.Client
+	apiKey  string
+	model   string
+	baseURL string
+	client  *http.Client
 }
 
 // OpenAIRequest represents a request to OpenAI API
@@ -59,15 +60,22 @@ type OpenAIResponse struct {
 	} `json:"choices"`
 }
 
-// NewOpenAIBackend creates a new OpenAI backend
-func NewOpenAIBackend(apiKey, model string) *OpenAIBackend {
+// NewOpenAIBackend creates a new OpenAI backend.
+// baseURL overrides the default https://api.openai.com/v1 endpoint — use this
+// to point at any OpenAI-compatible server (vLLM, LLMKube, Azure OpenAI, etc.).
+// Pass an empty string to use the default.
+func NewOpenAIBackend(apiKey, model, baseURL string) *OpenAIBackend {
 	if model == "" {
 		model = "gpt-4o-mini" // Cost-effective model for analysis
 	}
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
 
 	return &OpenAIBackend{
-		apiKey: apiKey,
-		model:  model,
+		apiKey:  apiKey,
+		model:   model,
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -95,7 +103,7 @@ func (o *OpenAIBackend) Analyze(ctx context.Context, prompt string) (string, err
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", o.baseURL+"/chat/completions", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
