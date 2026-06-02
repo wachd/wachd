@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
 import SimilarIncidentsPanel from '@/components/similar-incidents-panel';
+import IncidentTimeline from '@/components/incident-timeline';
 import { api } from '@/lib/api';
 import { useSession } from '@/lib/session-context';
 import type { Incident } from '@/lib/types';
@@ -335,6 +336,10 @@ export default function IncidentDetailPage() {
               </div>
             )}
           </div>
+        )}
+
+        {primaryTeamId && (
+          <IncidentTimeline teamId={primaryTeamId} incidentId={incident.id} />
         )}
 
         {primaryTeamId && (

@@ -30,6 +30,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -607,6 +608,7 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/similar", server.handleGetSimilarIncidents).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/graph", server.handleGetIncidentGraph).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/promote", server.handlePromoteIncidentGraphNode).Methods("POST")
+	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/timeline", server.handleGetIncidentTimeline).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleListServiceDependencies).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleCreateServiceDependency).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/dependencies/{depId}", server.handleDeleteServiceDependency).Methods("DELETE")
@@ -2038,6 +2040,162 @@ func (s *Server) handlePromoteIncidentGraphNode(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeDataEnvelope(w, http.StatusOK, map[string]string{"status": "promoted", "node_id": node.ID.String()})
+}
+
+// timelineEvent is a single chronological event in an incident's lifecycle.
+type timelineEvent struct {
+	Time   time.Time         `json:"time"`
+	Kind   string            `json:"kind"`
+	Title  string            `json:"title"`
+	Detail string            `json:"detail,omitempty"`
+	Meta   map[string]string `json:"meta,omitempty"`
+}
+
+// GET /api/v1/teams/{teamId}/incidents/{incidentId}/timeline
+func (s *Server) handleGetIncidentTimeline(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID, err := uuid.Parse(vars["teamId"])
+	if err != nil {
+		http.Error(w, "invalid team ID", http.StatusBadRequest)
+		return
+	}
+	incidentID, err := uuid.Parse(vars["incidentId"])
+	if err != nil {
+		http.Error(w, "invalid incident ID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTeamAccess(r, teamID) {
+		writeForbidden(w)
+		return
+	}
+
+	incident, err := s.db.GetIncident(r.Context(), teamID, incidentID)
+	if err != nil {
+		log.Printf("handleGetIncidentTimeline: get incident: %v", err)
+		http.Error(w, "failed to load incident", http.StatusInternalServerError)
+		return
+	}
+	if incident == nil {
+		http.Error(w, "incident not found", http.StatusNotFound)
+		return
+	}
+
+	var events []timelineEvent
+
+	// Alert fired
+	events = append(events, timelineEvent{
+		Time:   incident.FiredAt,
+		Kind:   "alert_fired",
+		Title:  "Alert fired",
+		Detail: incident.Title,
+		Meta:   map[string]string{"source": incident.Source, "severity": incident.Severity},
+	})
+
+	// Commits and first log spike from collected context
+	if len(incident.Context) > 0 {
+		var ctx struct {
+			Commits []struct {
+				SHA       string    `json:"sha"`
+				Message   string    `json:"message"`
+				Author    string    `json:"author"`
+				Timestamp time.Time `json:"timestamp"`
+			} `json:"commits"`
+			Logs []struct {
+				Timestamp time.Time `json:"timestamp"`
+				Message   string    `json:"message"`
+				Level     string    `json:"level"`
+			} `json:"logs"`
+		}
+		if err := json.Unmarshal(incident.Context, &ctx); err == nil {
+			for _, c := range ctx.Commits {
+				if c.Timestamp.IsZero() {
+					continue
+				}
+				sha := c.SHA
+				if len(sha) > 7 {
+					sha = sha[:7]
+				}
+				events = append(events, timelineEvent{
+					Time:   c.Timestamp,
+					Kind:   "commit",
+					Title:  fmt.Sprintf("Commit by %s", c.Author),
+					Detail: c.Message,
+					Meta:   map[string]string{"sha": sha, "author": c.Author},
+				})
+			}
+			// Emit one event for the first error/warn log entry
+			for _, l := range ctx.Logs {
+				lvl := strings.ToLower(l.Level)
+				if lvl == "error" || lvl == "warn" || lvl == "warning" || lvl == "critical" {
+					events = append(events, timelineEvent{
+						Time:   l.Timestamp,
+						Kind:   "log_spike",
+						Title:  "Error logs detected",
+						Detail: l.Message,
+						Meta:   map[string]string{"level": l.Level},
+					})
+					break
+				}
+			}
+		}
+	}
+
+	// AI root cause analysis
+	if len(incident.Analysis) > 0 {
+		var analysis struct {
+			RootCause  string `json:"root_cause"`
+			Confidence string `json:"confidence"`
+		}
+		if err := json.Unmarshal(incident.Analysis, &analysis); err == nil && analysis.RootCause != "" {
+			events = append(events, timelineEvent{
+				Time:   incident.UpdatedAt,
+				Kind:   "analysis_complete",
+				Title:  "AI root cause analysis complete",
+				Detail: analysis.RootCause,
+				Meta:   map[string]string{"confidence": analysis.Confidence},
+			})
+		}
+	}
+
+	// Sent notifications
+	notifEvents, err := s.db.GetIncidentNotificationEvents(r.Context(), teamID, incidentID)
+	if err != nil {
+		log.Printf("handleGetIncidentTimeline: get notifications: %v", err)
+		// Non-fatal — return partial timeline without notification events
+	} else {
+		for _, n := range notifEvents {
+			events = append(events, timelineEvent{
+				Time:  n.SentAt,
+				Kind:  "notification_sent",
+				Title: fmt.Sprintf("%s notified via %s", n.Username, n.Channel),
+				Meta:  map[string]string{"channel": n.Channel, "username": n.Username},
+			})
+		}
+	}
+
+	// Acknowledged
+	if incident.AcknowledgedAt != nil {
+		events = append(events, timelineEvent{
+			Time:  *incident.AcknowledgedAt,
+			Kind:  "acknowledged",
+			Title: "Incident acknowledged",
+		})
+	}
+
+	// Resolved
+	if incident.ResolvedAt != nil {
+		events = append(events, timelineEvent{
+			Time:  *incident.ResolvedAt,
+			Kind:  "resolved",
+			Title: "Incident resolved",
+		})
+	}
+
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Time.Before(events[j].Time)
+	})
+
+	writeDataEnvelope(w, http.StatusOK, events)
 }
 
 func (s *Server) handleListGraphNodes(w http.ResponseWriter, r *http.Request) {
