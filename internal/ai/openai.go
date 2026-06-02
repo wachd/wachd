@@ -71,6 +71,7 @@ func NewOpenAIBackend(apiKey, model, baseURL string) *OpenAIBackend {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
+	baseURL = strings.TrimRight(baseURL, "/")
 
 	return &OpenAIBackend{
 		apiKey:  apiKey,

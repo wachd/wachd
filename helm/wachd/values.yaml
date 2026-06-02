@@ -473,8 +473,13 @@ analysis:
   openaiApiKeyKey: api-key
   openaiModel: gpt-4o-mini
   # Override to point at any OpenAI-compatible endpoint.
-  # Examples: vLLM, LLMKube InferenceService, Azure OpenAI, Groq, Together.ai.
   # Leave empty to use the default https://api.openai.com/v1
+  #
+  # LLMKube InferenceService (llama.cpp backend listens on 8080, vLLM on 8000):
+  #   openaiBaseURL: "http://<inferenceservice-name>.<namespace>.svc.cluster.local:8080/v1"
+  # The exact URL is published on the InferenceService resource at .status.endpoint
+  #
+  # Other examples: Azure OpenAI, Groq, Together.ai, self-hosted vLLM.
   openaiBaseURL: ""
 
   # ---------------------------------------------------------------------------
