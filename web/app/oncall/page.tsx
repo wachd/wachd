@@ -188,12 +188,12 @@ export default function OnCallPage() {
           setScheduleMode('rotation');
           const layer = cfg.layers[0];
           setRotMembers(Array.isArray(layer.members) ? layer.members : []);
-          const hours: number = cfg.rotation_interval_hours ?? 168;
+          const hours: number = Number(cfg.rotation_interval_hours ?? 168);
           if (hours <= 24) setRotInterval('daily');
           else if (hours <= 168) setRotInterval('weekly');
           else if (hours <= 336) setRotInterval('biweekly');
           else setRotInterval('monthly');
-          setRotStart(cfg.rotation_start ? cfg.rotation_start.slice(0, 16) : '');
+          setRotStart(typeof cfg.rotation_start === 'string' ? cfg.rotation_start.slice(0, 16) : '');
           setRotRestriction(layer.time_restriction?.type === 'weekdays' ? 'weekdays' :
             layer.time_restriction?.type === 'weekends' ? 'weekends' : 'always');
         } else if (cfg?.type === 'weekly' && Array.isArray(cfg.rotation)) {
