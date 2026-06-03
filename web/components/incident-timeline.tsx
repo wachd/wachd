@@ -36,6 +36,9 @@ export default function IncidentTimeline({ teamId, incidentId }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setLoading(true);
+    setError(null);
+
     api.incidents.timeline(teamId, incidentId)
       .then(setEvents)
       .catch(() => setError('Failed to load timeline'))
