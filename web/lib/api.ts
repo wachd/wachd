@@ -1,6 +1,6 @@
 // API client for the Wachd backend
 
-import type { Incident, TeamMember, Schedule, OnCallUser, ScheduleOverride, SimilarIncident, GraphConfig, GraphNode, IncidentGraph } from './types';
+import type { Incident, TeamMember, Schedule, OnCallUser, ScheduleOverride, SimilarIncident, GraphConfig, GraphNode, IncidentGraph, TimelineEvent } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -138,6 +138,13 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ minutes }),
       }),
+
+    timeline: async (teamId: string, incidentId: string): Promise<TimelineEvent[]> => {
+      const response = await fetchApi<GraphEnvelope<TimelineEvent[]> | TimelineEvent[]>(
+        `/api/v1/teams/${teamId}/incidents/${incidentId}/timeline`
+      );
+      return unwrapGraphData(response) ?? [];
+    },
   },
 
   // On-call schedule

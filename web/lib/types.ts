@@ -155,3 +155,18 @@ export interface IncidentGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
+
+export interface TimelineEvent {
+  time: string;
+  kind:
+    | 'alert_fired'
+    | 'commit'
+    | 'log_spike'
+    | 'analysis_complete'
+    | 'notification_sent'
+    | 'acknowledged'
+    | 'resolved';
+  title: string;
+  detail?: string;
+  meta?: Record<string, string>;
+}

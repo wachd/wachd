@@ -313,6 +313,39 @@ func (db *DB) GetOpenIncidentsForEscalation(ctx context.Context, minAge time.Dur
 	return incidents, rows.Err()
 }
 
+// NotificationEvent represents a sent notification for timeline display.
+type NotificationEvent struct {
+	SentAt   time.Time `json:"sent_at"`
+	Channel  string    `json:"channel"`
+	Username string    `json:"username"`
+}
+
+// GetIncidentNotificationEvents returns notifications that were sent for an incident,
+// joined with user names for display. Only rows with a non-null sent_at are returned.
+func (db *DB) GetIncidentNotificationEvents(ctx context.Context, teamID, incidentID uuid.UUID) ([]*NotificationEvent, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT pn.sent_at, pn.channel, COALESCE(u.username, 'unknown')
+		FROM pending_notifications pn
+		LEFT JOIN users u ON u.id = pn.user_id
+		WHERE pn.incident_id = $1 AND pn.team_id = $2 AND pn.sent_at IS NOT NULL
+		ORDER BY pn.sent_at ASC
+	`, incidentID, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("query notification events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []*NotificationEvent
+	for rows.Next() {
+		e := &NotificationEvent{}
+		if err := rows.Scan(&e.SentAt, &e.Channel, &e.Username); err != nil {
+			return nil, fmt.Errorf("scan notification event: %w", err)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
 // IncrementEscalationStep advances the escalation_step by 1 only when the current
 // value matches fromStep. Returns true if the row was updated (i.e. this caller
 // "won" the escalation — prevents double-escalation with concurrent workers).
