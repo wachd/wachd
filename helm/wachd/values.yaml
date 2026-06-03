@@ -472,6 +472,21 @@ analysis:
   openaiApiKeySecret: wachd-openai-key
   openaiApiKeyKey: api-key
   openaiModel: gpt-4o-mini
+  # Override to point at any OpenAI-compatible endpoint.
+  # Leave empty to use the default https://api.openai.com/v1
+  #
+  # LLMKube InferenceService (llama.cpp backend listens on 8080, vLLM on 8000):
+  #   openaiBaseURL: "http://<inferenceservice-name>.<namespace>.svc.cluster.local:8080/v1"
+  # The exact URL is published on the InferenceService resource at .status.endpoint
+  #
+  # Azure OpenAI:
+  #   openaiBaseURL: "https://<resource>.openai.azure.com/openai/deployments/<deployment>"
+  #   openaiAPIVersion: "2024-02-01"
+  #
+  # Other examples: Groq, Together.ai, self-hosted vLLM.
+  openaiBaseURL: ""
+  # API version query parameter — required for Azure OpenAI, leave empty for all other providers.
+  openaiAPIVersion: ""
 
   # ---------------------------------------------------------------------------
   # Gemini (Google) — free tier available, fast

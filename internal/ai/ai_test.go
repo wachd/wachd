@@ -371,30 +371,30 @@ func TestClaudeBackend_Analyze_EmptyContent(t *testing.T) {
 // ── OpenAIBackend ─────────────────────────────────────────────────────────────
 
 func TestOpenAIBackend_GetModelName(t *testing.T) {
-	b := NewOpenAIBackend("key", "gpt-4o")
+	b := NewOpenAIBackend("key", "gpt-4o", "", "")
 	if b.GetModelName() != "gpt-4o" {
 		t.Errorf("unexpected model: %q", b.GetModelName())
 	}
 }
 
 func TestOpenAIBackend_DefaultModel(t *testing.T) {
-	b := NewOpenAIBackend("key", "")
+	b := NewOpenAIBackend("key", "", "", "")
 	if b.GetModelName() == "" {
 		t.Error("expected default model")
 	}
 }
 
 func TestOpenAIBackend_IsAvailable(t *testing.T) {
-	if !NewOpenAIBackend("key", "").IsAvailable(context.Background()) {
+	if !NewOpenAIBackend("key", "", "", "").IsAvailable(context.Background()) {
 		t.Error("expected true with key")
 	}
-	if NewOpenAIBackend("", "").IsAvailable(context.Background()) {
+	if NewOpenAIBackend("", "", "", "").IsAvailable(context.Background()) {
 		t.Error("expected false without key")
 	}
 }
 
 func TestOpenAIBackend_Analyze_NoKey(t *testing.T) {
-	b := NewOpenAIBackend("", "")
+	b := NewOpenAIBackend("", "", "", "")
 	_, err := b.Analyze(context.Background(), "prompt")
 	if err == nil {
 		t.Error("expected error when no API key")
@@ -461,6 +461,164 @@ func TestOpenAIBackend_Analyze_APIError(t *testing.T) {
 	_, err := b.Analyze(context.Background(), "prompt")
 	if err == nil {
 		t.Error("expected error for 429 response")
+	}
+}
+
+func TestOpenAIBackend_DefaultBaseURL(t *testing.T) {
+	var gotURL string
+	b := NewOpenAIBackend("sk-test", "", "", "")
+	b.client = mockClient(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(OpenAIResponse{
+			Choices: []struct {
+				Index   int `json:"index"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			}{{Message: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Content: "ok"}}},
+		})
+	})
+
+	if _, err := b.Analyze(context.Background(), "prompt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "api.openai.com") {
+		t.Errorf("expected default api.openai.com in URL, got %q", gotURL)
+	}
+}
+
+func TestOpenAIBackend_CustomBaseURL(t *testing.T) {
+	var gotURL string
+	b := NewOpenAIBackend("sk-test", "", "https://custom.inference.local/v1", "")
+	b.client = mockClient(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(OpenAIResponse{
+			Choices: []struct {
+				Index   int `json:"index"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			}{{Message: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Content: "ok"}}},
+		})
+	})
+
+	if _, err := b.Analyze(context.Background(), "prompt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "custom.inference.local") {
+		t.Errorf("expected custom host in URL, got %q", gotURL)
+	}
+}
+
+func TestOpenAIBackend_TrailingSlashTrimmed(t *testing.T) {
+	var gotURL string
+	b := NewOpenAIBackend("sk-test", "", "https://custom.inference.local/v1/", "")
+	b.client = mockClient(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(OpenAIResponse{
+			Choices: []struct {
+				Index   int `json:"index"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			}{{Message: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Content: "ok"}}},
+		})
+	})
+
+	if _, err := b.Analyze(context.Background(), "prompt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(gotURL, "//chat/completions") {
+		t.Errorf("trailing slash not trimmed — got double slash in URL: %q", gotURL)
+	}
+}
+
+func TestOpenAIBackend_Analyze_AzureAuthHeader(t *testing.T) {
+	var gotAuthHeader, gotAPIKeyHeader string
+	b := &OpenAIBackend{
+		apiKey:  "my-azure-key",
+		model:   "gpt-4o",
+		baseURL: "https://myresource.openai.azure.com/openai/deployments/my-deployment",
+		client: mockClient(func(w http.ResponseWriter, r *http.Request) {
+			gotAuthHeader = r.Header.Get("Authorization")
+			gotAPIKeyHeader = r.Header.Get("api-key")
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(OpenAIResponse{
+				Choices: []struct {
+					Index   int `json:"index"`
+					Message struct {
+						Role    string `json:"role"`
+						Content string `json:"content"`
+					} `json:"message"`
+					FinishReason string `json:"finish_reason"`
+				}{{Message: struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				}{Content: "ok"}}},
+			})
+		}),
+	}
+
+	if _, err := b.Analyze(context.Background(), "prompt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotAPIKeyHeader != "my-azure-key" {
+		t.Errorf("expected api-key header %q, got %q", "my-azure-key", gotAPIKeyHeader)
+	}
+	if gotAuthHeader != "" {
+		t.Errorf("expected no Authorization header for Azure, got %q", gotAuthHeader)
+	}
+}
+
+func TestOpenAIBackend_Analyze_APIVersionQueryParam(t *testing.T) {
+	var gotURL string
+	b := &OpenAIBackend{
+		apiKey:     "sk-test",
+		model:      "gpt-4o-mini",
+		baseURL:    "https://myresource.openai.azure.com/openai/deployments/my-deployment",
+		apiVersion: "2024-02-01",
+		client: mockClient(func(w http.ResponseWriter, r *http.Request) {
+			gotURL = r.URL.String()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(OpenAIResponse{
+				Choices: []struct {
+					Index   int `json:"index"`
+					Message struct {
+						Role    string `json:"role"`
+						Content string `json:"content"`
+					} `json:"message"`
+					FinishReason string `json:"finish_reason"`
+				}{{Message: struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				}{Content: "ok"}}},
+			})
+		}),
+	}
+
+	if _, err := b.Analyze(context.Background(), "prompt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "api-version=2024-02-01") {
+		t.Errorf("expected api-version query param in URL, got %q", gotURL)
 	}
 }
 
