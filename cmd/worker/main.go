@@ -196,11 +196,12 @@ func main() {
 	case "openai":
 		apiKey := os.Getenv("OPENAI_API_KEY")
 		baseURL := os.Getenv("OPENAI_BASE_URL")
+		apiVersion := os.Getenv("OPENAI_API_VERSION")
 		model := ""
 		if sc.AIModel != nil {
 			model = *sc.AIModel
 		}
-		aiEngine = ai.NewOpenAIBackend(apiKey, model, baseURL)
+		aiEngine = ai.NewOpenAIBackend(apiKey, model, baseURL, apiVersion)
 		if aiEngine.IsAvailable(context.Background()) {
 			log.Printf("✓ OpenAI backend configured (model: %s)", aiEngine.GetModelName())
 		} else {

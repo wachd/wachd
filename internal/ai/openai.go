@@ -27,10 +27,11 @@ import (
 
 // OpenAIBackend implements AI backend using OpenAI API
 type OpenAIBackend struct {
-	apiKey  string
-	model   string
-	baseURL string
-	client  *http.Client
+	apiKey     string
+	model      string
+	baseURL    string
+	apiVersion string // non-empty appends ?api-version=... (required for Azure OpenAI)
+	client     *http.Client
 }
 
 // OpenAIRequest represents a request to OpenAI API
@@ -61,12 +62,13 @@ type OpenAIResponse struct {
 }
 
 // NewOpenAIBackend creates a new OpenAI backend.
-// baseURL overrides the default https://api.openai.com/v1 endpoint — use this
-// to point at any OpenAI-compatible server (vLLM, LLMKube, Azure OpenAI, etc.).
-// Pass an empty string to use the default.
-func NewOpenAIBackend(apiKey, model, baseURL string) *OpenAIBackend {
+// baseURL overrides the default https://api.openai.com/v1 — use this to point
+// at any OpenAI-compatible server (vLLM, LLMKube, Groq, Together.ai, etc.).
+// apiVersion, if non-empty, is appended as ?api-version=... — required for
+// Azure OpenAI (e.g. "2024-02-01"). Pass empty strings to use the defaults.
+func NewOpenAIBackend(apiKey, model, baseURL, apiVersion string) *OpenAIBackend {
 	if model == "" {
-		model = "gpt-4o-mini" // Cost-effective model for analysis
+		model = "gpt-4o-mini"
 	}
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
@@ -74,9 +76,10 @@ func NewOpenAIBackend(apiKey, model, baseURL string) *OpenAIBackend {
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	return &OpenAIBackend{
-		apiKey:  apiKey,
-		model:   model,
-		baseURL: baseURL,
+		apiKey:     apiKey,
+		model:      model,
+		baseURL:    baseURL,
+		apiVersion: apiVersion,
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -104,13 +107,23 @@ func (o *OpenAIBackend) Analyze(ctx context.Context, prompt string) (string, err
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", o.baseURL+"/chat/completions", bytes.NewBuffer(reqBody))
+	endpoint := o.baseURL + "/chat/completions"
+	if o.apiVersion != "" {
+		endpoint += "?api-version=" + o.apiVersion
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+	// Azure OpenAI uses api-key header; all other compatible endpoints use Bearer.
+	if strings.Contains(o.baseURL, ".openai.azure.com") {
+		httpReq.Header.Set("api-key", o.apiKey)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+	}
 
 	resp, err := o.client.Do(httpReq)
 	if err != nil {
