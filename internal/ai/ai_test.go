@@ -464,6 +464,93 @@ func TestOpenAIBackend_Analyze_APIError(t *testing.T) {
 	}
 }
 
+func TestOpenAIBackend_DefaultBaseURL(t *testing.T) {
+	var gotURL string
+	b := NewOpenAIBackend("sk-test", "", "", "")
+	b.client = mockClient(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(OpenAIResponse{
+			Choices: []struct {
+				Index   int `json:"index"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			}{{Message: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Content: "ok"}}},
+		})
+	})
+
+	if _, err := b.Analyze(context.Background(), "prompt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "api.openai.com") {
+		t.Errorf("expected default api.openai.com in URL, got %q", gotURL)
+	}
+}
+
+func TestOpenAIBackend_CustomBaseURL(t *testing.T) {
+	var gotURL string
+	b := NewOpenAIBackend("sk-test", "", "https://custom.inference.local/v1", "")
+	b.client = mockClient(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(OpenAIResponse{
+			Choices: []struct {
+				Index   int `json:"index"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			}{{Message: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Content: "ok"}}},
+		})
+	})
+
+	if _, err := b.Analyze(context.Background(), "prompt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "custom.inference.local") {
+		t.Errorf("expected custom host in URL, got %q", gotURL)
+	}
+}
+
+func TestOpenAIBackend_TrailingSlashTrimmed(t *testing.T) {
+	var gotURL string
+	b := NewOpenAIBackend("sk-test", "", "https://custom.inference.local/v1/", "")
+	b.client = mockClient(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(OpenAIResponse{
+			Choices: []struct {
+				Index   int `json:"index"`
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			}{{Message: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Content: "ok"}}},
+		})
+	})
+
+	if _, err := b.Analyze(context.Background(), "prompt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(gotURL, "//chat/completions") {
+		t.Errorf("trailing slash not trimmed — got double slash in URL: %q", gotURL)
+	}
+}
+
 func TestOpenAIBackend_Analyze_AzureAuthHeader(t *testing.T) {
 	var gotAuthHeader, gotAPIKeyHeader string
 	b := &OpenAIBackend{
