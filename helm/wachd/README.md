@@ -66,10 +66,35 @@ Set `analysis.backend` to one of:
 |---|---|
 | `ollama` | Local LLM — air-gapped, no external API calls (default) |
 | `claude` | Anthropic Claude — highest quality analysis |
-| `openai` | OpenAI GPT-4o |
+| `openai` | OpenAI GPT-4o, or any OpenAI-compatible endpoint |
 | `gemini` | Google Gemini — free tier available |
 
 For air-gapped deployments, set `analysis.ollama.enabled: true` to deploy Ollama in-cluster alongside Wachd.
+
+### OpenAI-compatible endpoints
+
+`analysis.backend: openai` works with any OpenAI-compatible server — not just OpenAI itself. Set `analysis.openaiBaseURL` to point at a self-hosted inference server:
+
+```yaml
+# vLLM or LLMKube InferenceService (llama.cpp on 8080, vLLM on 8000)
+analysis:
+  backend: openai
+  openaiBaseURL: "http://<inferenceservice-name>.<namespace>.svc.cluster.local:8080/v1"
+
+# Azure OpenAI
+analysis:
+  backend: openai
+  openaiBaseURL: "https://<resource>.openai.azure.com/openai/deployments/<deployment>"
+  openaiAPIVersion: "2024-02-01"
+
+# Groq, Together.ai, or any other compatible provider
+analysis:
+  backend: openai
+  openaiBaseURL: "https://api.groq.com/openai/v1"
+```
+
+Leave `openaiBaseURL` empty to use `https://api.openai.com/v1` (default).
+Azure OpenAI is detected automatically from the URL — the correct `api-key` auth header is set without any extra configuration.
 
 ## Authentication
 

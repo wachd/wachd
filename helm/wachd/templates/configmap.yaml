@@ -20,6 +20,12 @@ data:
   CLAUDE_MODEL: {{ .Values.analysis.claudeModel | quote }}
   {{- else if eq .Values.analysis.backend "openai" }}
   OPENAI_MODEL: {{ .Values.analysis.openaiModel | quote }}
+  {{- if .Values.analysis.openaiBaseURL }}
+  OPENAI_BASE_URL: {{ .Values.analysis.openaiBaseURL | quote }}
+  {{- end }}
+  {{- if .Values.analysis.openaiAPIVersion }}
+  OPENAI_API_VERSION: {{ .Values.analysis.openaiAPIVersion | quote }}
+  {{- end }}
   {{- else if eq .Values.analysis.backend "gemini" }}
   GEMINI_MODEL: {{ .Values.analysis.geminiModel | quote }}
   {{- end }}
