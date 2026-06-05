@@ -78,7 +78,7 @@ func (f *Forwarder) send(ctx context.Context, ev agent.Event) error {
 	if err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("unexpected status %d from %s", resp.StatusCode, f.endpoint)
