@@ -271,11 +271,24 @@ func (c *Collector) reconcile(obj *unstructured.Unstructured, kind string) (agen
 	}, true
 }
 
-// nestedInt reads an int64 from a nested path in an unstructured object.
-// Returns 0 if the path does not exist or the value is not an integer.
+// nestedInt reads a numeric value from a nested path in an unstructured object.
+// Handles both int64 (manually constructed objects, tests) and float64
+// (JSON-decoded objects from the k8s watch stream). Returns 0 if not found.
 func nestedInt(obj *unstructured.Unstructured, fields ...string) int {
-	v, _, _ := unstructured.NestedInt64(obj.Object, fields...)
-	return int(v)
+	val, found, _ := unstructured.NestedFieldNoCopy(obj.Object, fields...)
+	if !found {
+		return 0
+	}
+	switch v := val.(type) {
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case int:
+		return v
+	default:
+		return 0
+	}
 }
 
 // loadKubeConfig returns in-cluster config when running inside Kubernetes,
