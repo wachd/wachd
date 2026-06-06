@@ -11,9 +11,3 @@ rules:
       - workloadconfigurationscansummaries
       - vulnerabilitymanifestsummaries
     verbs: ["get", "list", "watch"]
-  # Kubescape raw CRDs — fetched on-demand for alert body only
-  - apiGroups: ["spdx.softwarecomposition.kubescape.io"]
-    resources:
-      - workloadconfigurationscans
-      - vulnerabilitymanifests
-    verbs: ["get"]

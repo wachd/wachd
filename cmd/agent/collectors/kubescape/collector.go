@@ -164,15 +164,29 @@ func (c *Collector) watchSummaries(ctx context.Context, gvr schema.GroupVersionR
 	}
 }
 
-// runWatch opens a single watch stream and processes events until the stream closes or ctx is done.
+// runWatch lists existing summaries to prime dedup state, then opens a watch
+// stream from the resulting ResourceVersion. On any error the caller retries.
 func (c *Collector) runWatch(ctx context.Context, gvr schema.GroupVersionResource, kind string, out chan<- agent.Event) error {
-	watcher, err := c.client.Resource(gvr).Namespace(c.namespace).Watch(ctx, metav1.ListOptions{})
+	// List first — prime in-memory state so we don't re-fire on restart.
+	list, err := c.client.Resource(gvr).Namespace(c.namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list: %w", err)
+	}
+	for i := range list.Items {
+		c.reconcile(&list.Items[i], kind) // prime state only, discard event
+	}
+	rv := list.GetResourceVersion()
+
+	watcher, err := c.client.Resource(gvr).Namespace(c.namespace).Watch(ctx, metav1.ListOptions{
+		ResourceVersion:     rv,
+		AllowWatchBookmarks: true,
+	})
 	if err != nil {
 		return fmt.Errorf("watch: %w", err)
 	}
 	defer watcher.Stop()
 
-	log.Printf("kubescape: watching %s in namespace %s", gvr.Resource, c.namespace)
+	log.Printf("kubescape: watching %s in namespace %s (rv=%s)", gvr.Resource, c.namespace, rv)
 
 	for {
 		select {
@@ -181,6 +195,9 @@ func (c *Collector) runWatch(ctx context.Context, gvr schema.GroupVersionResourc
 		case we, ok := <-watcher.ResultChan():
 			if !ok {
 				return fmt.Errorf("watch channel closed")
+			}
+			if we.Type == watch.Bookmark {
+				continue
 			}
 			if we.Type != watch.Added && we.Type != watch.Modified {
 				continue
@@ -210,12 +227,6 @@ func (c *Collector) reconcile(obj *unstructured.Unstructured, kind string) (agen
 
 	// Gate: only process completed scans.
 	if annotations[annotationStatus] != statusCompleted {
-		return agent.Event{}, false
-	}
-
-	// Skip if the spec hasn't changed since we last processed this object.
-	genKey := fmt.Sprintf("%s/%s/gen", obj.GetNamespace(), obj.GetName())
-	if !c.state.isNew(genKey, int(obj.GetGeneration())) {
 		return agent.Event{}, false
 	}
 

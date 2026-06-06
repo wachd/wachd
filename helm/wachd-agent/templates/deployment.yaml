@@ -32,13 +32,13 @@ spec:
               drop: ["ALL"]
           env:
             - name: WACHD_ENDPOINT
-              value: {{ .Values.wachd.endpoint | quote }}
+              value: {{ required "wachd.endpoint is required" .Values.wachd.endpoint | quote }}
             - name: WACHD_TEAM_ID
-              value: {{ .Values.wachd.teamID | quote }}
+              value: {{ required "wachd.teamID is required" .Values.wachd.teamID | quote }}
             - name: WACHD_WEBHOOK_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "wachd-agent.fullname" . }}-secret
+                  name: {{ if .Values.wachd.existingSecret }}{{ .Values.wachd.existingSecret }}{{ else }}{{ include "wachd-agent.fullname" . }}-secret{{ end }}
                   key: WACHD_WEBHOOK_SECRET
             - name: KUBESCAPE_ENABLED
               value: {{ .Values.kubescape.enabled | quote }}

@@ -4,9 +4,12 @@ wachd:
   endpoint: ""
   # Team ID to route findings to (UUID)
   teamID: ""
-  # Webhook secret for the team — stored in a k8s Secret, referenced below
-  # Set via --set wachd.webhookSecret=<value> or create the Secret manually
+  # Webhook secret for the team.
+  # Option A: set webhookSecret — chart creates a Secret automatically.
+  # Option B: set existingSecret to the name of a pre-existing k8s Secret
+  #           (must contain key WACHD_WEBHOOK_SECRET). webhookSecret is ignored.
   webhookSecret: ""
+  existingSecret: ""
 
 # Kubescape collector
 kubescape:
