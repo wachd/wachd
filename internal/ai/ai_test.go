@@ -58,6 +58,9 @@ func TestBuildPrompt_MinimalRequest(t *testing.T) {
 	if !strings.Contains(prompt, "ROOT CAUSE") {
 		t.Error("prompt should contain ROOT CAUSE instruction")
 	}
+	if !strings.Contains(prompt, "DEPLOYMENT CAUSE") {
+		t.Error("prompt should contain DEPLOYMENT CAUSE instruction")
+	}
 }
 
 func TestBuildPrompt_WithAllFields(t *testing.T) {
@@ -142,6 +145,57 @@ High`
 	}
 	if resp.Confidence != "high" {
 		t.Errorf("expected confidence=high, got %q", resp.Confidence)
+	}
+}
+
+func TestParseAnalysisResponse_DeploymentCauseYes(t *testing.T) {
+	raw := `ROOT CAUSE
+The new deployment introduced a connection-pool misconfiguration.
+
+SUGGESTED ACTION
+Roll back the deployment.
+
+CONFIDENCE
+High
+
+DEPLOYMENT CAUSE
+YES`
+
+	resp := ParseAnalysisResponse(raw)
+	if !resp.IsDeploymentCause {
+		t.Error("expected IsDeploymentCause=true for YES answer")
+	}
+}
+
+func TestParseAnalysisResponse_DeploymentCauseNo(t *testing.T) {
+	raw := `ROOT CAUSE
+Database ran out of disk space.
+
+SUGGESTED ACTION
+Expand disk.
+
+CONFIDENCE
+Medium
+
+DEPLOYMENT CAUSE
+NO`
+
+	resp := ParseAnalysisResponse(raw)
+	if resp.IsDeploymentCause {
+		t.Error("expected IsDeploymentCause=false for NO answer")
+	}
+}
+
+func TestParseAnalysisResponse_DeploymentCauseAbsent(t *testing.T) {
+	raw := `ROOT CAUSE
+Unknown spike.
+
+CONFIDENCE
+Low`
+
+	resp := ParseAnalysisResponse(raw)
+	if resp.IsDeploymentCause {
+		t.Error("expected IsDeploymentCause=false when section is absent")
 	}
 }
 

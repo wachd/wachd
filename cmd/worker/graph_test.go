@@ -39,6 +39,15 @@ type mockGraphStore struct {
 	upsertErr     error
 	promoteErr    error
 	returnedNode  *graph.Node
+
+	// edge tracking
+	upsertEdgeCalled bool
+	upsertEdges      []*graph.Edge
+	upsertEdgeErr    error
+
+	// FindSimilar control
+	findSimilarNodes []*graph.SimilarNode
+	findSimilarErr   error
 }
 
 func (m *mockGraphStore) UpsertNode(_ context.Context, _ uuid.UUID, n *graph.Node) (*graph.Node, error) {
@@ -50,19 +59,35 @@ func (m *mockGraphStore) UpsertNode(_ context.Context, _ uuid.UUID, n *graph.Nod
 	if m.returnedNode != nil {
 		return m.returnedNode, nil
 	}
-	return &graph.Node{ID: uuid.New()}, nil
+	out := *n
+	if out.ID == uuid.Nil {
+		out.ID = uuid.New()
+	}
+	return &out, nil
 }
 
-func (m *mockGraphStore) UpsertEdge(context.Context, uuid.UUID, *graph.Edge) (*graph.Edge, error) {
-	panic("unexpected call")
+func (m *mockGraphStore) UpsertEdge(_ context.Context, _ uuid.UUID, e *graph.Edge) (*graph.Edge, error) {
+	m.upsertEdgeCalled = true
+	m.upsertEdges = append(m.upsertEdges, e)
+	if m.upsertEdgeErr != nil {
+		return nil, m.upsertEdgeErr
+	}
+	out := *e
+	if out.ID == uuid.Nil {
+		out.ID = uuid.New()
+	}
+	return &out, nil
 }
 
 func (m *mockGraphStore) GetSubgraph(context.Context, uuid.UUID, uuid.UUID, int) (*graph.Graph, error) {
 	panic("unexpected call")
 }
 
-func (m *mockGraphStore) FindSimilar(context.Context, uuid.UUID, uuid.UUID, int) ([]*graph.SimilarNode, error) {
-	panic("unexpected call")
+func (m *mockGraphStore) FindSimilar(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int) ([]*graph.SimilarNode, error) {
+	if m.findSimilarErr != nil {
+		return nil, m.findSimilarErr
+	}
+	return m.findSimilarNodes, nil
 }
 
 func (m *mockGraphStore) FindNodeByExternalID(context.Context, uuid.UUID, graph.NodeType, string) (*graph.Node, error) {
@@ -157,6 +182,7 @@ func TestPersistResolvedIncidentNode_SkipsWhenGraphDisabled(t *testing.T) {
 			buildCalled = true
 			return &graph.Node{Label: "never-called", Type: graph.NodeTypeIncident}, nil
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("persistResolvedIncidentNode: %v", err)
@@ -183,6 +209,7 @@ func TestPersistResolvedIncidentNode_PromoteErrorDoesNotBubble(t *testing.T) {
 		func() (*graph.Node, error) {
 			return &graph.Node{Label: "sanitised incident", Type: graph.NodeTypeIncident}, nil
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("expected fail-safe nil error, got %v", err)
@@ -193,4 +220,196 @@ func TestPersistResolvedIncidentNode_PromoteErrorDoesNotBubble(t *testing.T) {
 	if !graphStore.promoteCalled {
 		t.Fatal("expected promote to be attempted")
 	}
+}
+
+func TestPersistResolvedIncidentNode_CallsWriteEdgesAfterPromotion(t *testing.T) {
+	promotedID := uuid.New()
+	graphStore := &mockGraphStore{
+		returnedNode: &graph.Node{ID: promotedID},
+	}
+
+	var edgeNodeID uuid.UUID
+	writeEdgesCalled := false
+
+	err := persistResolvedIncidentNode(
+		context.Background(),
+		mockGraphConfigStore{cfg: &store.TeamGraphConfig{Enabled: true}},
+		graphStore,
+		uuid.New(),
+		func() (*graph.Node, error) {
+			return &graph.Node{Label: "checkout timeout", Type: graph.NodeTypeIncident}, nil
+		},
+		func(_ context.Context, nodeID uuid.UUID) error {
+			writeEdgesCalled = true
+			edgeNodeID = nodeID
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !graphStore.promoteCalled {
+		t.Fatal("expected PromoteNode to be called")
+	}
+	if !writeEdgesCalled {
+		t.Fatal("expected writeEdges to be called after promotion")
+	}
+	if edgeNodeID != promotedID {
+		t.Fatalf("expected writeEdges to receive promoted node id %s, got %s", promotedID, edgeNodeID)
+	}
+}
+
+func TestPersistResolvedIncidentNode_WriteEdgesErrorDoesNotBubble(t *testing.T) {
+	graphStore := &mockGraphStore{
+		returnedNode: &graph.Node{ID: uuid.New()},
+	}
+	err := persistResolvedIncidentNode(
+		context.Background(),
+		mockGraphConfigStore{cfg: &store.TeamGraphConfig{Enabled: true}},
+		graphStore,
+		uuid.New(),
+		func() (*graph.Node, error) {
+			return &graph.Node{Label: "payment error", Type: graph.NodeTypeIncident}, nil
+		},
+		func(_ context.Context, _ uuid.UUID) error {
+			return errors.New("edge write failure")
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected edge write error to be swallowed, got %v", err)
+	}
+}
+
+func TestWriteIncidentEdges_WritesSimilarToEdges(t *testing.T) {
+	teamID := uuid.New()
+	nodeID := uuid.New()
+	similarNodeID := uuid.New()
+
+	gs := &mockGraphStore{
+		findSimilarNodes: []*graph.SimilarNode{
+			{Node: &graph.Node{ID: similarNodeID}, Score: 0.75},
+		},
+	}
+
+	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, &correlator.Context{}, nil); err != nil {
+		t.Fatalf("writeIncidentEdges: %v", err)
+	}
+	if !gs.upsertEdgeCalled {
+		t.Fatal("expected UpsertEdge to be called for similar_to")
+	}
+	if len(gs.upsertEdges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(gs.upsertEdges))
+	}
+	e := gs.upsertEdges[0]
+	if e.Type != graph.EdgeTypeSimilarTo {
+		t.Fatalf("expected similar_to edge, got %s", e.Type)
+	}
+	if e.FromNodeID != nodeID || e.ToNodeID != similarNodeID {
+		t.Fatalf("edge endpoints wrong: from=%s to=%s", e.FromNodeID, e.ToNodeID)
+	}
+	if e.Status != graph.EdgeStatusPermanent {
+		t.Fatalf("expected permanent edge status, got %s", e.Status)
+	}
+	if e.Weight != 0.75 {
+		t.Fatalf("expected weight=0.75, got %f", e.Weight)
+	}
+}
+
+func TestWriteIncidentEdges_SkipsBelowThreshold(t *testing.T) {
+	gs := &mockGraphStore{
+		findSimilarNodes: []*graph.SimilarNode{
+			{Node: &graph.Node{ID: uuid.New()}, Score: 0.05}, // below 0.12
+		},
+	}
+	if err := writeIncidentEdges(context.Background(), gs, uuid.New(), uuid.New(), &correlator.Context{}, nil); err != nil {
+		t.Fatalf("writeIncidentEdges: %v", err)
+	}
+	if gs.upsertEdgeCalled {
+		t.Fatal("expected no edges for below-threshold match")
+	}
+}
+
+func TestWriteIncidentEdges_WritesCausedByEdge(t *testing.T) {
+	teamID := uuid.New()
+	nodeID := uuid.New()
+	sha := "abc1234"
+
+	gs := &mockGraphStore{} // no similar nodes
+
+	sanitizedCtx := &correlator.Context{
+		Commits: []collector.Commit{{SHA: sha, Message: "rollback checkout"}},
+	}
+	analysis := &ai.AnalysisResponse{IsDeploymentCause: true}
+
+	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, sanitizedCtx, analysis); err != nil {
+		t.Fatalf("writeIncidentEdges: %v", err)
+	}
+
+	// UpsertNode called for the deployment node, then UpsertEdge for caused_by.
+	if !gs.upsertCalled {
+		t.Fatal("expected UpsertNode for deployment node")
+	}
+	if !gs.upsertEdgeCalled {
+		t.Fatal("expected UpsertEdge for caused_by")
+	}
+	if len(gs.upsertEdges) != 1 {
+		t.Fatalf("expected 1 caused_by edge, got %d", len(gs.upsertEdges))
+	}
+	e := gs.upsertEdges[0]
+	if e.Type != graph.EdgeTypeCausedBy {
+		t.Fatalf("expected caused_by edge, got %s", e.Type)
+	}
+	if e.FromNodeID != nodeID {
+		t.Fatalf("expected from=%s, got %s", nodeID, e.FromNodeID)
+	}
+	if e.Status != graph.EdgeStatusPermanent {
+		t.Fatalf("expected permanent status, got %s", e.Status)
+	}
+}
+
+func TestWriteIncidentEdges_NoCausedByWhenNotDeploymentCause(t *testing.T) {
+	gs := &mockGraphStore{}
+	sanitizedCtx := &correlator.Context{
+		Commits: []collector.Commit{{SHA: "abc1234", Message: "routine deploy"}},
+	}
+	analysis := &ai.AnalysisResponse{IsDeploymentCause: false}
+
+	if err := writeIncidentEdges(context.Background(), gs, uuid.New(), uuid.New(), sanitizedCtx, analysis); err != nil {
+		t.Fatalf("writeIncidentEdges: %v", err)
+	}
+	// No similar nodes, not a deployment cause → no edges at all.
+	if gs.upsertEdgeCalled {
+		t.Fatal("expected no edges when IsDeploymentCause is false")
+	}
+}
+
+func TestWriteIncidentEdges_FindSimilarErrorDoesNotBlockCausedBy(t *testing.T) {
+	teamID := uuid.New()
+	nodeID := uuid.New()
+
+	gs := &mockGraphStore{
+		findSimilarErr: errors.New("db offline"),
+	}
+	sanitizedCtx := &correlator.Context{
+		Commits: []collector.Commit{{SHA: "abc1234", Message: "deploy"}},
+	}
+	analysis := &ai.AnalysisResponse{IsDeploymentCause: true}
+
+	// FindSimilar fails, but caused_by should still be written.
+	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, sanitizedCtx, analysis); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !gs.upsertEdgeCalled {
+		t.Fatal("expected caused_by edge to be written despite FindSimilar failure")
+	}
+}
+
+func TestWorker_WritePendingIncidentToGraph_SkipsWhenGraphStoreNil(t *testing.T) {
+	w := &Worker{db: nil, graphStore: nil, sanitiser: sanitiser.NewSanitiser()}
+	// Should not panic.
+	w.writePendingIncidentToGraph(context.Background(), &store.Incident{
+		ID:     uuid.New(),
+		TeamID: uuid.New(),
+		Title:  "test",
+	})
 }

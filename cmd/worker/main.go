@@ -318,6 +318,8 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 
 	log.Printf("✓ Incident: [%s] %s (team: %s)", incident.Severity, incident.Title, incident.TeamID)
 
+	w.writePendingIncidentToGraph(ctx, incident)
+
 	onCallUser, err := w.oncallManager.GetCurrentOnCall(ctx, incident.TeamID)
 	if err != nil {
 		log.Printf("  ⚠ No on-call person found: %v", err)

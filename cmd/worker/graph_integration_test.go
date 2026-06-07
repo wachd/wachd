@@ -166,3 +166,203 @@ func createResolvedIncidentFixture(t *testing.T, ctx context.Context, db *store.
 func uniqueGraphName(prefix string) string {
 	return prefix + "-" + uuid.NewString()[:8]
 }
+
+// TestWorker_ProcessResolvedIncidentJob_WritesSimilarToEdges verifies that
+// graph_edges gets a similar_to row after two incidents with the same title
+// resolve in sequence.
+func TestWorker_ProcessResolvedIncidentJob_WritesSimilarToEdges(t *testing.T) {
+	db := requireWorkerDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, uniqueGraphName("edge-team"), uniqueGraphName("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool().Exec(context.Background(), "DELETE FROM teams WHERE id = $1", team.ID)
+	})
+
+	worker := &Worker{
+		db:         db,
+		sanitiser:  sanitiser.NewSanitiser(),
+		graphStore: graph.NewPostgresStore(db.Pool()),
+	}
+
+	// Resolve the first incident — no similar nodes exist yet, so no edges.
+	first := createResolvedIncidentFixture(t, ctx, db, team.ID)
+	job := &queue.Job{Type: "incident_resolved", IncidentID: first.ID, TeamID: team.ID}
+	if err := worker.processResolvedIncidentJob(ctx, job); err != nil {
+		t.Fatalf("first processResolvedIncidentJob: %v", err)
+	}
+
+	// Resolve a second incident with the same title so FindSimilar returns the first.
+	second := createResolvedIncidentFixture(t, ctx, db, team.ID)
+	job2 := &queue.Job{Type: "incident_resolved", IncidentID: second.ID, TeamID: team.ID}
+	if err := worker.processResolvedIncidentJob(ctx, job2); err != nil {
+		t.Fatalf("second processResolvedIncidentJob: %v", err)
+	}
+
+	var edgeCount int
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM graph_edges e
+		JOIN graph_nodes fn ON fn.id = e.from_id AND fn.team_id = $1
+		JOIN graph_nodes tn ON tn.id = e.to_id   AND tn.team_id = $1
+		WHERE e.team_id = $1 AND e.type = 'similar_to'
+	`, team.ID).Scan(&edgeCount); err != nil {
+		t.Fatalf("query graph_edges: %v", err)
+	}
+	if edgeCount == 0 {
+		t.Fatal("expected at least one similar_to edge in graph_edges, got 0")
+	}
+}
+
+// TestWorker_ProcessResolvedIncidentJob_WritesCausedByEdge verifies that a
+// caused_by edge and a deployment node are written when IsDeploymentCause=true
+// in the stored AI analysis.
+func TestWorker_ProcessResolvedIncidentJob_WritesCausedByEdge(t *testing.T) {
+	db := requireWorkerDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, uniqueGraphName("causedby-team"), uniqueGraphName("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool().Exec(context.Background(), "DELETE FROM teams WHERE id = $1", team.ID)
+	})
+
+	worker := &Worker{
+		db:         db,
+		sanitiser:  sanitiser.NewSanitiser(),
+		graphStore: graph.NewPostgresStore(db.Pool()),
+	}
+
+	incident := createCausedByIncidentFixture(t, ctx, db, team.ID)
+	job := &queue.Job{Type: "incident_resolved", IncidentID: incident.ID, TeamID: team.ID}
+	if err := worker.processResolvedIncidentJob(ctx, job); err != nil {
+		t.Fatalf("processResolvedIncidentJob: %v", err)
+	}
+
+	var edgeCount int
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM graph_edges e
+		JOIN graph_nodes fn ON fn.id = e.from_id AND fn.team_id = $1
+		JOIN graph_nodes tn ON tn.id = e.to_id   AND tn.team_id = $1
+		WHERE e.team_id = $1 AND e.type = 'caused_by'
+	`, team.ID).Scan(&edgeCount); err != nil {
+		t.Fatalf("query caused_by edges: %v", err)
+	}
+	if edgeCount == 0 {
+		t.Fatal("expected a caused_by edge in graph_edges, got 0")
+	}
+
+	// Verify the deployment node was written with the correct external_id.
+	var deployCount int
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM graph_nodes
+		WHERE team_id = $1 AND type = 'deployment' AND external_id = 'deadbeef123'
+	`, team.ID).Scan(&deployCount); err != nil {
+		t.Fatalf("query deployment node: %v", err)
+	}
+	if deployCount != 1 {
+		t.Fatalf("expected 1 deployment node, got %d", deployCount)
+	}
+}
+
+// createCausedByIncidentFixture builds a resolved incident whose AI analysis
+// sets IsDeploymentCause=true and includes a known commit SHA.
+func createCausedByIncidentFixture(t *testing.T, ctx context.Context, db *store.DB, teamID uuid.UUID) *store.Incident {
+	t.Helper()
+	incident := &store.Incident{
+		TeamID:       teamID,
+		Title:        "API latency spike caused by deploy",
+		Severity:     "high",
+		Status:       "resolved",
+		Source:       "prometheus",
+		AlertPayload: []byte(`{}`),
+		FiredAt:      time.Now().UTC().Add(-15 * time.Minute),
+	}
+	if err := db.CreateIncident(ctx, incident); err != nil {
+		t.Fatalf("CreateIncident: %v", err)
+	}
+
+	sanitizedCtx := &correlator.Context{
+		Commits: []collector.Commit{{SHA: "deadbeef123", Message: "feat: increase thread pool", Author: "[EMAIL]"}},
+	}
+	analysis := &ai.AnalysisResponse{
+		RootCause:         "thread pool exhaustion after deployment",
+		SuggestedAction:   "roll back the deployment",
+		Confidence:        "high",
+		IsDeploymentCause: true,
+	}
+	ctxJSON, _ := json.Marshal(sanitizedCtx)
+	analysisJSON, _ := json.Marshal(analysis)
+	resolvedAt := time.Now().UTC()
+	if _, err := db.Pool().Exec(ctx, `
+		UPDATE incidents
+		SET status = 'resolved', context = $1, analysis = $2, resolved_at = $3, updated_at = $3
+		WHERE id = $4 AND team_id = $5
+	`, ctxJSON, analysisJSON, resolvedAt, incident.ID, incident.TeamID); err != nil {
+		t.Fatalf("seed resolved incident fields: %v", err)
+	}
+
+	loaded, err := db.GetIncident(ctx, incident.TeamID, incident.ID)
+	if err != nil {
+		t.Fatalf("GetIncident: %v", err)
+	}
+	return loaded
+}
+
+// TestWorker_ProcessAlertJob_WritesPendingNode verifies that a pending graph
+// node is written the moment an alert fires, before resolution.
+func TestWorker_ProcessAlertJob_WritesPendingNode(t *testing.T) {
+	db := requireWorkerDB(t)
+	ctx := context.Background()
+
+	team, err := db.CreateTeam(ctx, uniqueGraphName("pending-team"), uniqueGraphName("secret"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool().Exec(context.Background(), "DELETE FROM teams WHERE id = $1", team.ID)
+	})
+
+	worker := &Worker{
+		db:        db,
+		sanitiser: sanitiser.NewSanitiser(),
+		graphStore: graph.NewPostgresStore(db.Pool()),
+	}
+
+	incident := &store.Incident{
+		TeamID:       team.ID,
+		Title:        "Database connection refused",
+		Severity:     "critical",
+		Status:       "firing",
+		Source:       "grafana",
+		AlertPayload: []byte(`{}`),
+		FiredAt:      time.Now().UTC(),
+	}
+	if err := db.CreateIncident(ctx, incident); err != nil {
+		t.Fatalf("CreateIncident: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool().Exec(context.Background(), "DELETE FROM incidents WHERE id = $1", incident.ID)
+	})
+
+	worker.writePendingIncidentToGraph(ctx, incident)
+
+	var status string
+	err = db.Pool().QueryRow(ctx, `
+		SELECT status FROM graph_nodes
+		WHERE team_id = $1 AND type = 'incident' AND external_id = $2
+	`, team.ID, incident.ID.String()).Scan(&status)
+	if err != nil {
+		t.Fatalf("query pending node: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("expected pending status, got %q", status)
+	}
+}
