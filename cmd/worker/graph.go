@@ -35,10 +35,6 @@ const (
 	// edgeSimilarLimit caps how many similar_to edges we write per incident.
 	// FindSimilar returns at most this many candidates.
 	edgeSimilarLimit = 10
-
-	// edgeSimilarThreshold mirrors the default minimum similarity score in the
-	// postgres store. Only matches at or above this score get an edge.
-	edgeSimilarThreshold = 0.12
 )
 
 type teamGraphConfigReader interface {
@@ -147,7 +143,8 @@ func persistResolvedIncidentNode(ctx context.Context, cfgStore teamGraphConfigRe
 // deployment commit node when the AI identified a deployment as the root cause.
 //
 // Both write paths are individually fail-open: an error on one does not abort
-// the other. The function always returns nil so the caller can log-and-continue.
+// the other. Errors are logged internally; this function always returns nil so
+// the caller can unconditionally log-and-continue without an extra nil check.
 func writeIncidentEdges(ctx context.Context, graphStore graph.Store, teamID uuid.UUID, nodeID uuid.UUID, sanitizedCtx *correlator.Context, analysis *ai.AnalysisResponse) error {
 	writeSimilarEdges(ctx, graphStore, teamID, nodeID)
 	writeCausedByEdge(ctx, graphStore, teamID, nodeID, sanitizedCtx, analysis)
@@ -161,8 +158,12 @@ func writeSimilarEdges(ctx context.Context, graphStore graph.Store, teamID uuid.
 		return
 	}
 
+	// FindSimilar is the authority on the similarity threshold — it applies
+	// the store's configured minSimilarityScore before returning results.
+	// No second threshold check here; doing so would silently override the
+	// store's setting if it was tuned via WithMinimumSimilarityScore.
 	for _, match := range similar {
-		if match == nil || match.Node == nil || match.Score < edgeSimilarThreshold {
+		if match == nil || match.Node == nil {
 			continue
 		}
 		edge := &graph.Edge{
@@ -186,7 +187,8 @@ func writeCausedByEdge(ctx context.Context, graphStore graph.Store, teamID uuid.
 		return
 	}
 
-	// Use the most recent commit (index 0) as the deployment that caused the incident.
+	// Commits[0] is the most recent commit — the collector returns them newest-first.
+	// This is the deployment most likely to have caused the incident.
 	commit := sanitizedCtx.Commits[0]
 	sha := strings.TrimSpace(commit.SHA)
 	if sha == "" {

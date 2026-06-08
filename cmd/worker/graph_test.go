@@ -315,17 +315,18 @@ func TestWriteIncidentEdges_WritesSimilarToEdges(t *testing.T) {
 	}
 }
 
-func TestWriteIncidentEdges_SkipsBelowThreshold(t *testing.T) {
+func TestWriteIncidentEdges_NoEdgesWhenFindSimilarReturnsEmpty(t *testing.T) {
+	// FindSimilar is the authority on the similarity threshold — it filters
+	// before returning. The worker trusts the store's result set entirely.
+	// Simulate the store returning nothing (all candidates below its threshold).
 	gs := &mockGraphStore{
-		findSimilarNodes: []*graph.SimilarNode{
-			{Node: &graph.Node{ID: uuid.New()}, Score: 0.05}, // below 0.12
-		},
+		findSimilarNodes: []*graph.SimilarNode{},
 	}
 	if err := writeIncidentEdges(context.Background(), gs, uuid.New(), uuid.New(), &correlator.Context{}, nil); err != nil {
 		t.Fatalf("writeIncidentEdges: %v", err)
 	}
 	if gs.upsertEdgeCalled {
-		t.Fatal("expected no edges for below-threshold match")
+		t.Fatal("expected no edges when FindSimilar returns empty")
 	}
 }
 
