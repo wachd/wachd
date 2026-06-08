@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "wachd-agent.fullname" . }}
+  labels:
+    {{- include "wachd-agent.labels" . | nindent 4 }}
+rules:
+  # Kubescape summary CRDs — trigger source (small objects, watched continuously)
+  - apiGroups: ["spdx.softwarecomposition.kubescape.io"]
+    resources:
+      - workloadconfigurationscansummaries
+      - vulnerabilitymanifestsummaries
+    verbs: ["get", "list", "watch"]

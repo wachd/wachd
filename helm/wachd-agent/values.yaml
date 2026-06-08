@@ -1,0 +1,40 @@
+# Central Wachd connection — required
+wachd:
+  # Base URL of the central Wachd instance, e.g. https://wachd.company.internal
+  endpoint: ""
+  # Team ID to route findings to (UUID)
+  teamID: ""
+  # Webhook secret for the team.
+  # Option A: set webhookSecret — chart creates a Secret automatically.
+  # Option B: set existingSecret to the name of a pre-existing k8s Secret
+  #           (must contain key WACHD_WEBHOOK_SECRET). webhookSecret is ignored.
+  webhookSecret: ""
+  existingSecret: ""
+
+# Kubescape collector
+kubescape:
+  # Set to false to disable
+  enabled: true
+  # Namespace where Kubescape is installed
+  namespace: kubescape
+  # Minimum severity to fire on: "high" or "critical"
+  minSeverity: high
+
+image:
+  repository: ghcr.io/wachd/wachd-agent
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

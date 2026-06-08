@@ -69,6 +69,9 @@ jobs:
       - name: Build worker
         run: go build -o /tmp/wachd-worker ./cmd/worker
 
+      - name: Build agent
+        run: go build -o /tmp/wachd-agent ./cmd/agent
+
   publish:
     name: Publish Docker Image
     runs-on: ubuntu-latest
@@ -148,3 +151,59 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Extract metadata — agent
+        id: meta-agent
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}-agent
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build agent image for Trivy scan
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.agent
+          push: false
+          load: true
+          tags: wachd-agent:scan
+          labels: ${{ steps.meta-agent.outputs.labels }}
+
+      - name: Trivy scan agent — LOW / MEDIUM (report only)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: wachd-agent:scan
+          exit-code: '0'
+          ignore-unfixed: true
+          severity: LOW,MEDIUM
+          format: sarif
+          output: trivy-agent-low.sarif
+
+      - name: Upload agent LOW/MEDIUM results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-agent-low.sarif
+          category: trivy-agent-low-medium
+
+      - name: Trivy scan agent — HIGH / CRITICAL (blocks push)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: wachd-agent:scan
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          format: table
+
+      - name: Build and push agent image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.agent
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-agent.outputs.tags }}
+          labels: ${{ steps.meta-agent.outputs.labels }}

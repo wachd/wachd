@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wachd-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wachd-agent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "wachd-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wachd-agent.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "wachd-agent.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: WACHD_ENDPOINT
+              value: {{ required "wachd.endpoint is required" .Values.wachd.endpoint | quote }}
+            - name: WACHD_TEAM_ID
+              value: {{ required "wachd.teamID is required" .Values.wachd.teamID | quote }}
+            - name: WACHD_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.wachd.existingSecret }}{{ .Values.wachd.existingSecret }}{{ else }}{{ include "wachd-agent.fullname" . }}-secret{{ end }}
+                  key: WACHD_WEBHOOK_SECRET
+            - name: KUBESCAPE_ENABLED
+              value: {{ .Values.kubescape.enabled | quote }}
+            - name: KUBESCAPE_NAMESPACE
+              value: {{ .Values.kubescape.namespace | quote }}
+            - name: KUBESCAPE_MIN_SEVERITY
+              value: {{ .Values.kubescape.minSeverity | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
