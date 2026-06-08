@@ -177,7 +177,8 @@ func BuildPrompt(req *AnalysisRequest) string {
 	prompt.WriteString("Analyze this incident and provide:\n")
 	prompt.WriteString("1. ROOT CAUSE: Most likely cause (1-2 sentences)\n")
 	prompt.WriteString("2. SUGGESTED ACTION: Specific next step to take\n")
-	prompt.WriteString("3. CONFIDENCE: High, Medium, or Low\n\n")
+	prompt.WriteString("3. CONFIDENCE: High, Medium, or Low\n")
+	prompt.WriteString("4. DEPLOYMENT CAUSE: YES if a recent deployment listed above is the probable root cause, NO otherwise\n\n")
 	prompt.WriteString("Be concise and actionable. Focus on what the on-call engineer should do NOW.\n")
 
 	return prompt.String()
@@ -211,6 +212,9 @@ func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 		} else if strings.Contains(lowerLine, "confidence") {
 			currentSection = "confidence"
 			continue
+		} else if strings.Contains(lowerLine, "deployment cause") {
+			currentSection = "deployment_cause"
+			continue
 		}
 
 		// Parse content
@@ -232,6 +236,12 @@ func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 				response.Confidence = "high"
 			} else if strings.Contains(lowerLine, "low") {
 				response.Confidence = "low"
+			}
+		case "deployment_cause":
+			// Any line containing "yes" means a deployment is the probable cause.
+			// We stop after the first non-empty answer line.
+			if strings.Contains(lowerLine, "yes") {
+				response.IsDeploymentCause = true
 			}
 		}
 	}

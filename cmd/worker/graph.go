@@ -31,6 +31,10 @@ import (
 const (
 	maxGraphLogLines = 3
 	maxGraphCommits  = 2
+
+	// edgeSimilarLimit caps how many similar_to edges we write per incident.
+	// FindSimilar returns at most this many candidates.
+	edgeSimilarLimit = 10
 )
 
 type teamGraphConfigReader interface {
@@ -44,12 +48,52 @@ func (w *Worker) writeResolvedIncidentToGraph(ctx context.Context, incident *sto
 	sanitizedCtx := w.loadSanitizedIncidentContext(incident)
 	analysis := w.loadIncidentAnalysis(incident)
 
-	return persistResolvedIncidentNode(ctx, w.db, w.graphStore, incident.TeamID, func() (*graph.Node, error) {
-		return w.buildResolvedIncidentNode(incident, sanitizedCtx, analysis)
-	})
+	return persistResolvedIncidentNode(ctx, w.db, w.graphStore, incident.TeamID,
+		func() (*graph.Node, error) {
+			return w.buildResolvedIncidentNode(incident, sanitizedCtx, analysis)
+		},
+		func(ctx context.Context, nodeID uuid.UUID) error {
+			return writeIncidentEdges(ctx, w.graphStore, incident.TeamID, nodeID, sanitizedCtx, analysis)
+		},
+	)
 }
 
-func persistResolvedIncidentNode(ctx context.Context, cfgStore teamGraphConfigReader, graphStore graph.Store, teamID uuid.UUID, buildNode func() (*graph.Node, error)) error {
+// writePendingIncidentToGraph writes a minimal pending node for the incident
+// the moment an alert fires. This lets FindSimilar query against historical
+// permanent nodes during the active incident — before resolution data is available.
+// Errors are logged and swallowed: graph writes must never block alert routing.
+func (w *Worker) writePendingIncidentToGraph(ctx context.Context, incident *store.Incident) {
+	if w.graphStore == nil || w.db == nil || incident == nil {
+		return
+	}
+
+	cfg, err := w.db.GetTeamGraphConfig(ctx, incident.TeamID)
+	if err != nil {
+		log.Printf("warn: load team graph config for pending node, team %s: %v", incident.TeamID, err)
+		return
+	}
+	if cfg != nil && !cfg.Enabled {
+		return
+	}
+
+	externalID := incident.ID.String()
+	node := &graph.Node{
+		Type:       graph.NodeTypeIncident,
+		Status:     graph.NodeStatusPending,
+		Label:      w.sanitiseGraphValue("Untitled incident", incident.Title),
+		ExternalID: &externalID,
+	}
+	if _, err := w.graphStore.UpsertNode(ctx, incident.TeamID, node); err != nil {
+		log.Printf("warn: write pending graph node for incident %s: %v", incident.ID, err)
+	}
+}
+
+// persistResolvedIncidentNode upserts a pending node for the resolved incident
+// and promotes it to permanent. After promotion, writeEdges is called to wire
+// similar_to and caused_by relationships. All graph errors are fail-open.
+//
+// writeEdges may be nil — pass nil to skip edge writing (used in tests).
+func persistResolvedIncidentNode(ctx context.Context, cfgStore teamGraphConfigReader, graphStore graph.Store, teamID uuid.UUID, buildNode func() (*graph.Node, error), writeEdges func(ctx context.Context, nodeID uuid.UUID) error) error {
 	if graphStore == nil || cfgStore == nil || teamID == uuid.Nil || buildNode == nil {
 		return nil
 	}
@@ -84,8 +128,101 @@ func persistResolvedIncidentNode(ctx context.Context, cfgStore teamGraphConfigRe
 		return nil
 	}
 
+	if writeEdges != nil {
+		if err := writeEdges(ctx, created.ID); err != nil {
+			log.Printf("warn: write incident graph edges for team %s: %v", teamID, err)
+		}
+	}
+
 	log.Printf("✓ Resolved incident graph node promoted for team %s", teamID)
 	return nil
+}
+
+// writeIncidentEdges writes similar_to edges for every past incident whose
+// similarity score meets the threshold, and a caused_by edge to the most recent
+// deployment commit node when the AI identified a deployment as the root cause.
+//
+// Both write paths are individually fail-open: an error on one does not abort
+// the other. Errors are logged internally; this function always returns nil so
+// the caller can unconditionally log-and-continue without an extra nil check.
+func writeIncidentEdges(ctx context.Context, graphStore graph.Store, teamID uuid.UUID, nodeID uuid.UUID, sanitizedCtx *correlator.Context, analysis *ai.AnalysisResponse) error {
+	writeSimilarEdges(ctx, graphStore, teamID, nodeID)
+	writeCausedByEdge(ctx, graphStore, teamID, nodeID, sanitizedCtx, analysis)
+	return nil
+}
+
+func writeSimilarEdges(ctx context.Context, graphStore graph.Store, teamID uuid.UUID, nodeID uuid.UUID) {
+	similar, err := graphStore.FindSimilar(ctx, teamID, nodeID, edgeSimilarLimit)
+	if err != nil {
+		log.Printf("warn: find similar for edge writes, team %s: %v", teamID, err)
+		return
+	}
+
+	// FindSimilar is the authority on the similarity threshold — it applies
+	// the store's configured minSimilarityScore before returning results.
+	// No second threshold check here; doing so would silently override the
+	// store's setting if it was tuned via WithMinimumSimilarityScore.
+	for _, match := range similar {
+		if match == nil || match.Node == nil {
+			continue
+		}
+		edge := &graph.Edge{
+			FromNodeID: nodeID,
+			ToNodeID:   match.Node.ID,
+			Type:       graph.EdgeTypeSimilarTo,
+			Status:     graph.EdgeStatusPermanent, // both nodes are permanent at this point
+			Weight:     match.Score,
+		}
+		if _, err := graphStore.UpsertEdge(ctx, teamID, edge); err != nil {
+			log.Printf("warn: upsert similar_to edge for team %s node %s: %v", teamID, match.Node.ID, err)
+		}
+	}
+}
+
+func writeCausedByEdge(ctx context.Context, graphStore graph.Store, teamID uuid.UUID, nodeID uuid.UUID, sanitizedCtx *correlator.Context, analysis *ai.AnalysisResponse) {
+	if analysis == nil || !analysis.IsDeploymentCause {
+		return
+	}
+	if sanitizedCtx == nil || len(sanitizedCtx.Commits) == 0 {
+		return
+	}
+
+	// Commits[0] is the most recent commit — the collector returns them newest-first.
+	// This is the deployment most likely to have caused the incident.
+	commit := sanitizedCtx.Commits[0]
+	sha := strings.TrimSpace(commit.SHA)
+	if sha == "" {
+		return
+	}
+
+	label := strings.TrimSpace(commit.Message)
+	if label == "" {
+		label = sha
+	}
+
+	// Deployment nodes are permanent immediately — they represent immutable history.
+	deployNode := &graph.Node{
+		Type:       graph.NodeTypeDeployment,
+		Status:     graph.NodeStatusPermanent,
+		Label:      label,
+		ExternalID: &sha,
+	}
+	created, err := graphStore.UpsertNode(ctx, teamID, deployNode)
+	if err != nil {
+		log.Printf("warn: upsert deployment node for team %s sha %s: %v", teamID, sha, err)
+		return
+	}
+
+	edge := &graph.Edge{
+		FromNodeID: nodeID,
+		ToNodeID:   created.ID,
+		Type:       graph.EdgeTypeCausedBy,
+		Status:     graph.EdgeStatusPermanent,
+		Weight:     1,
+	}
+	if _, err := graphStore.UpsertEdge(ctx, teamID, edge); err != nil {
+		log.Printf("warn: upsert caused_by edge for team %s: %v", teamID, err)
+	}
 }
 
 func (w *Worker) buildResolvedIncidentNode(incident *store.Incident, sanitizedCtx *correlator.Context, analysis *ai.AnalysisResponse) (*graph.Node, error) {

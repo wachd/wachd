@@ -44,8 +44,9 @@ type AnalysisRequest struct {
 
 // AnalysisResponse represents the AI's analysis response
 type AnalysisResponse struct {
-	RootCause       string   `json:"root_cause"`        // 1-2 sentence explanation
-	SuggestedAction string   `json:"suggested_action"`  // What to do next
-	Confidence      string   `json:"confidence"`        // high, medium, low
-	KeyFindings     []string `json:"key_findings"`      // Bullet points
+	RootCause         string   `json:"root_cause"`          // 1-2 sentence explanation
+	SuggestedAction   string   `json:"suggested_action"`    // What to do next
+	Confidence        string   `json:"confidence"`          // high, medium, low
+	KeyFindings       []string `json:"key_findings"`        // Bullet points
+	IsDeploymentCause bool     `json:"is_deployment_cause"` // true when a recent deployment is the probable root cause
 }
