@@ -1,0 +1,22 @@
+apiVersion: v2
+name: wachd-agent
+description: Wachd agent — deploys into a customer cluster to watch security tool CRDs and forward findings to central Wachd
+type: application
+version: 0.1.0
+appVersion: "0.4.23"
+keywords:
+  - devops
+  - monitoring
+  - alerting
+  - security
+  - kubescape
+  - on-call
+home: https://github.com/wachd/wachd
+sources:
+  - https://github.com/wachd/wachd
+maintainers:
+  - name: NTC Dev
+    email: info@ntcdev.com
+annotations:
+  category: Security
+  licenses: Apache-2.0
