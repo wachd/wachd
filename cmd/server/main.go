@@ -261,6 +261,28 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string) 
 		return t, msg, sev, "datadog"
 	}
 
+	// Generic fallback — handles wachd-agent payloads and any source that sets
+	// the "source" field explicitly. Must run before Grafana detection because
+	// Grafana struct matches on "title" alone, which agent payloads also have.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err == nil {
+		if src, _ := raw["source"].(string); src != "" {
+			t, _ := raw["title"].(string)
+			if t == "" {
+				t, _ = raw["name"].(string)
+			}
+			if t == "" {
+				t = "Alert"
+			}
+			msg, _ := raw["message"].(string)
+			sev, _ := raw["severity"].(string)
+			if sev == "" {
+				sev = "unknown"
+			}
+			return t, msg, sev, src
+		}
+	}
+
 	// Try Grafana
 	var gf GrafanaWebhook
 	if err := json.Unmarshal(body, &gf); err == nil && (gf.Title != "" || gf.RuleName != "") {
@@ -279,8 +301,7 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string) 
 	}
 
 	// Generic fallback — extract title/message from any JSON payload
-	var raw map[string]interface{}
-	if err := json.Unmarshal(body, &raw); err == nil {
+	if raw != nil {
 		t, _ := raw["title"].(string)
 		if t == "" {
 			t, _ = raw["name"].(string)
