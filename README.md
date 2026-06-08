@@ -7,7 +7,7 @@ Wachd receives alerts from your monitoring tools (Grafana, Datadog, Prometheus) 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/go-1.24%2B-00ADD8.svg)](go.mod)
 [![Go Report Card](https://goreportcard.com/badge/github.com/wachd/wachd)](https://goreportcard.com/report/github.com/wachd/wachd)
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XAgXgnqxa)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/zV86KNgkcJ)
 [![GitHub Stars](https://img.shields.io/github/stars/wachd/wachd?style=social)](https://github.com/wachd/wachd)
 
 If Wachd is useful to you, a ⭐ on GitHub helps other engineers find it.
@@ -15,7 +15,7 @@ If Wachd is useful to you, a ⭐ on GitHub helps other engineers find it.
 ![Wachd demo — on-call check, alert fire, AI root cause analysis](docs/demo.gif)
 
 > **Founders Program — 10 lifetime SMB licenses**
-> We're giving 10 engineering teams a lifetime Wachd SMB license at no cost. Deploy it, use it seriously, tell us what's broken. [Claim a slot on Discord](https://discord.gg/XAgXgnqxa) or email sales@wachd.io.
+> We're giving 10 engineering teams a lifetime Wachd SMB license at no cost. Deploy it, use it seriously, tell us what's broken. [Claim a slot on Discord](https://discord.gg/zV86KNgkcJ) or email sales@wachd.io.
 
 ---
 
@@ -548,7 +548,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 Questions, feedback, or just want to follow the build?
 
-- **Discord:** [discord.gg/XAgXgnqxa](https://discord.gg/XAgXgnqxa)
+- **Discord:** [discord.gg/zV86KNgkcJ](https://discord.gg/zV86KNgkcJ)
 - **GitHub Issues:** [github.com/wachd/wachd/issues](https://github.com/wachd/wachd/issues)
 - **X:** [@Wachd_io](https://x.com/Wachd_io)
 
