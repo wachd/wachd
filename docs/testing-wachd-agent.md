@@ -13,7 +13,7 @@ No real Kubernetes cluster required — everything runs in a kind cluster on you
 | kind | 0.24+ | `brew install kind` |
 | kubectl | 1.29+ | `brew install kubectl` |
 | Helm | 3.15+ | `brew install helm` |
-| Go | 1.25+ | https://go.dev/dl |
+| Go | 1.22+ | https://go.dev/dl |
 
 ---
 
@@ -145,9 +145,12 @@ Verify the agent is watching:
 ```bash
 kubectl -n wachd-agent logs -f deploy/wachd-agent
 # Should see:
-# kubescape: watching vulnerabilitymanifestsummaries in namespace kubescape
-# kubescape: watching workloadconfigurationscansummaries in namespace kubescape
+# kubescape: watching vulnerabilitymanifestsummaries across all namespaces (rv=)
+# kubescape: watching workloadconfigurationscansummaries across all namespaces (rv=)
 ```
+
+Note: `rv=` (empty) is expected — Kubescape uses a custom storage backend that does not
+return `metadata.resourceVersion` in list responses. The watch still receives events correctly.
 
 ---
 
@@ -167,27 +170,33 @@ kubectl scale deployment vuln-test --replicas=1 --namespace=default
 Trigger Kubescape to scan immediately (instead of waiting for the scheduled scan):
 
 ```bash
-# Annotate the namespace to trigger a scan
-kubectl annotate namespace default \
-  kubescape.io/scan=true --overwrite
+# Manually trigger kubevuln (vulnerability scanner) via a one-off job
+kubectl -n kubescape create job --from=cronjob/kubevuln-scheduler kubevuln-scan-now
 
-# Or use the Kubescape CLI if installed
-kubescape scan --submit --enable-host-scan
+# Wait for it to complete (~30s)
+kubectl -n kubescape wait --for=condition=complete job/kubevuln-scan-now --timeout=120s
 ```
 
-Watch for CRDs to appear:
+Note: `kubectl annotate namespace default kubescape.io/scan=true` does **not** trigger a scan
+in kind clusters — use the job approach above.
+
+Note: the `node-agent` pod will be in `CrashLoopBackOff` in kind — this is expected.
+Without node-agent (eBPF), `.relevant` severity counts are absent and the agent falls back
+to `.all` counts automatically.
+
+Watch for summaries to appear in the **workload namespace** (not the kubescape namespace):
 
 ```bash
-# In a new terminal — watch for summary objects
-kubectl get vulnerabilitymanifestsummaries -n kubescape -w
-kubectl get workloadconfigurationscansummaries -n kubescape -w
+# Summaries appear in the namespace of the scanned workload, not in the kubescape namespace
+kubectl get vulnerabilitymanifestsummaries -n default -w
+kubectl get workloadconfigurationscansummaries -n default -w
 ```
 
 ---
 
 ## 8. Verify an event was forwarded
 
-Once a summary object appears with `kubescape.io/status: completed`, the agent should forward it.
+Once a summary object appears with `kubescape.io/status: ready`, the agent should forward it.
 
 Check the agent logs:
 
@@ -209,10 +218,11 @@ Check the fake Wachd server (terminal from step 5):
 
 ## 9. Verify deduplication
 
-Trigger another scan of the same workload without changing anything:
+Bump the annotation on an existing summary (without changing findings) to trigger a re-reconcile:
 
 ```bash
-kubectl annotate namespace default kubescape.io/scan=true --overwrite
+kubectl annotate vulnerabilitymanifestsummary <name> -n default \
+  kubescape.io/bump="$(date +%s)" --overwrite
 ```
 
 The agent should **not** forward a second event for the same workload at the same finding count.
@@ -276,9 +286,9 @@ kind delete cluster --name wachd-agent-test
 
 **Agent not seeing scan results**
 
-Check that the summary objects have `kubescape.io/status: completed`:
+Check that the summary objects have `kubescape.io/status: ready`:
 ```bash
-kubectl get vulnerabilitymanifestsummaries -n kubescape -o json \
+kubectl get vulnerabilitymanifestsummaries -n default -o json \
   | jq '.items[].metadata.annotations["kubescape.io/status"]'
 ```
 
@@ -308,8 +318,10 @@ If connection refused: check your firewall allows port 8080 from the Docker brid
 
 This would mean the severity counts are always 0. Inspect a raw summary object:
 ```bash
-kubectl get vulnerabilitymanifestsummary <name> -n kubescape \
+kubectl get vulnerabilitymanifestsummary <name> -n default \
   -o jsonpath='{.spec.severities}'
 ```
 
-The `.relevant.critical` and `.relevant.high` fields should have non-zero values for old images with known CVEs.
+Summaries appear in the **workload namespace** (e.g. `default`), not in the `kubescape` namespace.
+In kind clusters without network access, the kubevuln scanner may return all-zero counts — this is
+a cluster limitation, not an agent bug. The agent correctly fires no event when counts are zero.

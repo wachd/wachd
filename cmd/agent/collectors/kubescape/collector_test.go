@@ -276,6 +276,33 @@ func TestReconcile_VulnUsesRelevantNotAll(t *testing.T) {
 	}
 }
 
+func TestReconcile_VulnFallsBackToAllWhenNoRelevant(t *testing.T) {
+	c := newTestCollector("high")
+	// No .relevant field at all — node-agent not running. Should fall back to .all.
+	obj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"name": "scan-1", "namespace": "default", "generation": int64(1),
+				"annotations": map[string]interface{}{annotationStatus: statusCompleted},
+				"labels":      map[string]interface{}{labelNamespace: "default", labelKind: "Deployment", labelName: "vuln-test"},
+			},
+			"spec": map[string]interface{}{
+				"severities": map[string]interface{}{
+					"critical": map[string]interface{}{"all": int64(42)},
+					"high":     map[string]interface{}{"all": int64(218)},
+				},
+			},
+		},
+	}
+	ev, fire := c.reconcile(obj, "vulnerability")
+	if !fire {
+		t.Fatal("should fire when .relevant absent and .all > 0 (node-agent not running)")
+	}
+	if ev.Severity != "critical" {
+		t.Fatalf("want severity critical, got %s", ev.Severity)
+	}
+}
+
 func TestReconcile_ConfigCriticalFires(t *testing.T) {
 	c := newTestCollector("high")
 	obj := configScanSummary("scan-1", statusCompleted, 1, 2, 0)
