@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import GraphServicesSection from "@/components/graph-services-section";
 import { api } from "@/lib/api";
 import type { GraphConfig, GraphNode } from "@/lib/types";
 
@@ -224,6 +225,8 @@ export default function GraphSettingsPanel({ teamId, isAdmin }: GraphSettingsPan
           {saving ? "Saving..." : "Save graph settings"}
         </button>
       </section>
+
+      <GraphServicesSection teamId={teamId} isAdmin={isAdmin} />
 
       <section className="bg-white rounded-lg border border-gray-200">
         <div className="p-6 border-b border-gray-100">

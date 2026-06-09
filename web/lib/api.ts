@@ -1,6 +1,6 @@
 // API client for the Wachd backend
 
-import type { Incident, TeamMember, Schedule, OnCallUser, ScheduleOverride, SimilarIncident, GraphConfig, GraphNode, IncidentGraph, TimelineEvent } from './types';
+import type { Incident, TeamMember, Schedule, OnCallUser, ScheduleOverride, SimilarIncident, GraphConfig, GraphNode, IncidentGraph, TimelineEvent, GraphService, GraphServiceInput } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -397,6 +397,28 @@ export const api = {
         `/api/v1/teams/${teamId}/graph/nodes?status=${status}&limit=${limit}`
       );
       return unwrapGraphData(response) ?? [];
+    },
+    listServices: async (teamId: string): Promise<GraphService[]> => {
+      const response = await fetchApi<GraphEnvelope<GraphService[]> | GraphService[]>(
+        `/api/v1/teams/${teamId}/graph/services`
+      );
+      return unwrapGraphData(response) ?? [];
+    },
+    createService: async (teamId: string, service: GraphServiceInput): Promise<GraphService> => {
+      const response = await fetchApi<GraphEnvelope<GraphService> | GraphService>(
+        `/api/v1/teams/${teamId}/graph/services`,
+        {
+          method: 'POST',
+          body: JSON.stringify(service),
+        }
+      );
+      return unwrapGraphData(response);
+    },
+    deleteService: async (teamId: string, nodeId: string): Promise<void> => {
+      await fetchApi<GraphEnvelope<{ deleted: string }>>(
+        `/api/v1/teams/${teamId}/graph/services/${nodeId}`,
+        { method: 'DELETE' }
+      );
     },
     deleteNode: async (teamId: string, nodeId: string): Promise<void> => {
       await fetchApi<GraphEnvelope<{ deleted: string }>>(

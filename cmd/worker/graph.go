@@ -53,7 +53,7 @@ func (w *Worker) writeResolvedIncidentToGraph(ctx context.Context, incident *sto
 			return w.buildResolvedIncidentNode(incident, sanitizedCtx, analysis)
 		},
 		func(ctx context.Context, nodeID uuid.UUID) error {
-			return writeIncidentEdges(ctx, w.graphStore, incident.TeamID, nodeID, sanitizedCtx, analysis)
+			return writeIncidentEdges(ctx, w.graphStore, incident.TeamID, nodeID, w.extractServiceName(incident), sanitizedCtx, analysis)
 		},
 	)
 }
@@ -145,7 +145,7 @@ func persistResolvedIncidentNode(ctx context.Context, cfgStore teamGraphConfigRe
 // Both write paths are individually fail-open: an error on one does not abort
 // the other. Errors are logged internally; this function always returns nil so
 // the caller can unconditionally log-and-continue without an extra nil check.
-func writeIncidentEdges(ctx context.Context, graphStore graph.Store, teamID uuid.UUID, nodeID uuid.UUID, sanitizedCtx *correlator.Context, analysis *ai.AnalysisResponse) error {
+func writeIncidentEdges(ctx context.Context, graphStore graph.Store, teamID uuid.UUID, nodeID uuid.UUID, serviceName string, sanitizedCtx *correlator.Context, analysis *ai.AnalysisResponse) error {
 	writeSimilarEdges(ctx, graphStore, teamID, nodeID)
 	writeCausedByEdge(ctx, graphStore, teamID, nodeID, sanitizedCtx, analysis)
 	return nil
