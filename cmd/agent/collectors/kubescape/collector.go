@@ -62,7 +62,7 @@ const (
 	labelContainer   = "kubescape.io/workload-container-name"
 	labelContext     = "kubescape.io/context"
 
-	statusCompleted = "completed"
+	statusCompleted = "ready"
 )
 
 var (
@@ -102,7 +102,6 @@ func (s *State) isNew(key string, value int) bool {
 // Collector watches Kubescape summary CRDs and emits Events for net-new findings.
 type Collector struct {
 	client      dynamic.Interface
-	namespace   string // Kubescape installation namespace (default: "kubescape")
 	minSeverity string // threshold: "critical" or "high" (default: "high")
 	state       *State
 }
@@ -119,10 +118,6 @@ func New() (*Collector, error) {
 		return nil, fmt.Errorf("dynamic client: %w", err)
 	}
 
-	ns := os.Getenv("KUBESCAPE_NAMESPACE")
-	if ns == "" {
-		ns = "kubescape"
-	}
 	minSev := os.Getenv("KUBESCAPE_MIN_SEVERITY")
 	if minSev != "critical" {
 		minSev = "high"
@@ -130,7 +125,6 @@ func New() (*Collector, error) {
 
 	return &Collector{
 		client:      client,
-		namespace:   ns,
 		minSeverity: minSev,
 		state:       newState(),
 	}, nil
@@ -168,7 +162,7 @@ func (c *Collector) watchSummaries(ctx context.Context, gvr schema.GroupVersionR
 // stream from the resulting ResourceVersion. On any error the caller retries.
 func (c *Collector) runWatch(ctx context.Context, gvr schema.GroupVersionResource, kind string, out chan<- agent.Event) error {
 	// List first — prime in-memory state so we don't re-fire on restart.
-	list, err := c.client.Resource(gvr).Namespace(c.namespace).List(ctx, metav1.ListOptions{})
+	list, err := c.client.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("list: %w", err)
 	}
@@ -177,7 +171,7 @@ func (c *Collector) runWatch(ctx context.Context, gvr schema.GroupVersionResourc
 	}
 	rv := list.GetResourceVersion()
 
-	watcher, err := c.client.Resource(gvr).Namespace(c.namespace).Watch(ctx, metav1.ListOptions{
+	watcher, err := c.client.Resource(gvr).Namespace("").Watch(ctx, metav1.ListOptions{
 		ResourceVersion:     rv,
 		AllowWatchBookmarks: true,
 	})
@@ -186,7 +180,7 @@ func (c *Collector) runWatch(ctx context.Context, gvr schema.GroupVersionResourc
 	}
 	defer watcher.Stop()
 
-	log.Printf("kubescape: watching %s in namespace %s (rv=%s)", gvr.Resource, c.namespace, rv)
+	log.Printf("kubescape: watching %s across all namespaces (rv=%s)", gvr.Resource, rv)
 
 	for {
 		select {
@@ -202,8 +196,18 @@ func (c *Collector) runWatch(ctx context.Context, gvr schema.GroupVersionResourc
 			if we.Type != watch.Added && we.Type != watch.Modified {
 				continue
 			}
-			obj, ok := we.Object.(*unstructured.Unstructured)
+			// Kubescape's custom storage backend sends watch events with
+			// incomplete spec data — only metadata is reliable in the event.
+			// Re-fetch the full object to get current severity counts.
+			partial, ok := we.Object.(*unstructured.Unstructured)
 			if !ok {
+				continue
+			}
+			obj, err := c.client.Resource(gvr).Namespace(partial.GetNamespace()).Get(
+				ctx, partial.GetName(), metav1.GetOptions{},
+			)
+			if err != nil {
+				log.Printf("kubescape: get %s/%s: %v", partial.GetNamespace(), partial.GetName(), err)
 				continue
 			}
 			ev, fire := c.reconcile(obj, kind)
@@ -237,11 +241,12 @@ func (c *Collector) reconcile(obj *unstructured.Unstructured, kind string) (agen
 	container := labels[labelContainer]
 
 	// Count severity — use .relevant for vulns (eBPF runtime signal),
-	// direct count for config scans (no relevant/all split).
+	// falling back to .all when node-agent is not running (field absent).
+	// For config scans there is no all/relevant split.
 	var critCount, highCount int
 	if kind == "vulnerability" {
-		critCount = nestedInt(obj, "spec", "severities", "critical", "relevant")
-		highCount = nestedInt(obj, "spec", "severities", "high", "relevant")
+		critCount = relevantOrAll(obj, "critical")
+		highCount = relevantOrAll(obj, "high")
 	} else {
 		critCount = nestedInt(obj, "spec", "severities", "critical")
 		highCount = nestedInt(obj, "spec", "severities", "high")
@@ -280,6 +285,18 @@ func (c *Collector) reconcile(obj *unstructured.Unstructured, kind string) (agen
 		Container: container,
 		Labels:    labels,
 	}, true
+}
+
+// relevantOrAll returns the .relevant severity count for vulnerability summaries.
+// When node-agent (eBPF) is not running the .relevant field is absent entirely —
+// in that case it falls back to .all so findings are not silently dropped.
+// If .relevant exists and is 0 (eBPF confirmed no runtime exposure), 0 is returned.
+func relevantOrAll(obj *unstructured.Unstructured, sev string) int {
+	_, found, _ := unstructured.NestedFieldNoCopy(obj.Object, "spec", "severities", sev, "relevant")
+	if found {
+		return nestedInt(obj, "spec", "severities", sev, "relevant")
+	}
+	return nestedInt(obj, "spec", "severities", sev, "all")
 }
 
 // nestedInt reads a numeric value from a nested path in an unstructured object.
