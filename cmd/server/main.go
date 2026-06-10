@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -235,7 +236,7 @@ type DatadogWebhook struct {
 // parseWebhookPayload detects the source format and extracts a normalised
 // (title, message, severity, source) tuple. Unknown payloads fall back to a
 // generic extraction using the raw JSON keys "title" and "message".
-func parseWebhookPayload(body []byte) (title, message, severity, source string) {
+func parseWebhookPayload(body []byte) (title, message, severity, source string, resolved bool) {
 	// Try to detect Datadog: it always has alert_id (int) or alert_transition field.
 	var dd DatadogWebhook
 	if err := json.Unmarshal(body, &dd); err == nil && (dd.AlertID != 0 || dd.AlertTransition != "") {
@@ -258,7 +259,7 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string) 
 		if t == "" {
 			t = "Datadog alert"
 		}
-		return t, msg, sev, "datadog"
+		return t, msg, sev, "datadog", dd.AlertType == "success"
 	}
 
 	// Generic fallback — handles wachd-agent payloads and any source that sets
@@ -279,7 +280,8 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string) 
 			if sev == "" {
 				sev = "unknown"
 			}
-			return t, msg, sev, src
+			status, _ := raw["status"].(string)
+			return t, msg, sev, src, status == "resolved"
 		}
 	}
 
@@ -297,7 +299,7 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string) 
 		case "ok":
 			sev = "low"
 		}
-		return t, gf.Message, sev, "grafana"
+		return t, gf.Message, sev, "grafana", gf.State == "ok"
 	}
 
 	// Generic fallback — extract title/message from any JSON payload
@@ -317,10 +319,10 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string) 
 		if sev == "" {
 			sev = "unknown"
 		}
-		return t, msg, sev, "generic"
+		return t, msg, sev, "generic", false
 	}
 
-	return "Alert", "", "unknown", "generic"
+	return "Alert", "", "unknown", "generic", false
 }
 
 func main() {
@@ -721,6 +723,14 @@ func writeForbidden(w http.ResponseWriter) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
 }
 
+// incidentFingerprint returns a SHA-256 hex digest of team+source+title.
+// Used to deduplicate firing alerts and match resolved events to open incidents.
+func incidentFingerprint(teamID uuid.UUID, source, title string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s|%s|%s", teamID.String(), source, strings.ToLower(strings.TrimSpace(title)))
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	teamIDStr := vars["teamId"]
@@ -787,7 +797,42 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
 
 	// Parse webhook — auto-detects Grafana, Datadog, or generic format
-	title, message, severity, source := parseWebhookPayload(body)
+	title, message, severity, source, resolved := parseWebhookPayload(body)
+
+	fingerprint := incidentFingerprint(teamID, source, title)
+
+	// Resolve path — find and close the matching open incident, no new row created.
+	if resolved {
+		if err := s.db.ResolveIncidentByFingerprint(r.Context(), teamID, fingerprint); err != nil {
+			log.Printf("warn: resolve by fingerprint team %s: %v", teamID, err)
+		} else {
+			log.Printf("→ resolved [%s] %s (team %s)", source, title, teamID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "resolved"})
+		return
+	}
+
+	// Dedup — if an open/acknowledged/snoozed incident with this fingerprint
+	// already exists, skip creating a duplicate.
+	existing, err := s.db.FindOpenIncidentByFingerprint(r.Context(), teamID, fingerprint)
+	if err != nil {
+		log.Printf("warn: fingerprint lookup team %s: %v", teamID, err)
+		// fail open — proceed to create so we never silently drop an alert
+	}
+	if existing != nil {
+		log.Printf("→ dedup [%s/%s] %s (open: %s)", source, severity, title, existing.ID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":      "deduplicated",
+			"incident_id": existing.ID,
+		})
+		return
+	}
+
+	fp := fingerprint
 
 	// Create incident
 	incident := &store.Incident{
@@ -798,6 +843,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		Status:       "open",
 		Source:       source,
 		AlertPayload: body,
+		Fingerprint:  &fp,
 	}
 
 	if err := s.db.CreateIncident(r.Context(), incident); err != nil {

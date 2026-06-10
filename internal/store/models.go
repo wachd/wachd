@@ -51,6 +51,7 @@ type Incident struct {
 	Status         string     `json:"status"`   // open, acknowledged, resolved, snoozed
 	Source         string     `json:"source"`   // grafana, datadog, prometheus, etc.
 	AlertPayload   []byte     `json:"alert_payload"`
+	Fingerprint    *string    `json:"-"`
 	Context        []byte     `json:"context,omitempty"`
 	Analysis       []byte     `json:"analysis,omitempty"`
 	FiredAt        time.Time  `json:"fired_at"`
