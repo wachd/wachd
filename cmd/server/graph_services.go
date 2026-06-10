@@ -41,10 +41,6 @@ type graphServiceResponse struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-func normalizeGraphServiceName(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
-}
-
 func graphServiceProperties(name, description string) json.RawMessage {
 	properties := map[string]string{
 		"name": name,
@@ -77,7 +73,7 @@ func graphServiceDescription(raw json.RawMessage) string {
 func graphServiceResponseFromNode(node *graph.Node) graphServiceResponse {
 	name := ""
 	if node.ExternalID != nil {
-		name = normalizeGraphServiceName(*node.ExternalID)
+		name = graph.NormalizeServiceName(*node.ExternalID)
 	}
 
 	return graphServiceResponse{
@@ -113,7 +109,7 @@ func (s *Server) handleListGraphServices(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !s.requireTeamAdmin(r, teamID) {
+	if !s.requireTeamAccess(r, teamID) {
 		writeForbidden(w)
 		return
 	}
@@ -156,7 +152,7 @@ func (s *Server) handleCreateGraphService(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	name := normalizeGraphServiceName(input.Name)
+	name := graph.NormalizeServiceName(input.Name)
 	if name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
@@ -170,6 +166,19 @@ func (s *Server) handleCreateGraphService(w http.ResponseWriter, r *http.Request
 	graphStore, err := s.graphStoreForTeam(r.Context(), teamID)
 	if err != nil {
 		http.Error(w, "failed to load graph store", http.StatusInternalServerError)
+		return
+	}
+
+	statusCode := http.StatusCreated
+
+	// POST is idempotent for the same normalized service name. A repeated POST
+	// updates the service label/properties and returns 200 instead of creating a
+	// duplicate service node.
+	existing, err := graphStore.FindNodeByExternalID(r.Context(), teamID, graph.NodeTypeService, name)
+	if err == nil && existing != nil {
+		statusCode = http.StatusOK
+	} else if err != nil && !errors.Is(err, graph.ErrNodeNotFound) {
+		http.Error(w, "failed to load existing service", http.StatusInternalServerError)
 		return
 	}
 
@@ -187,7 +196,7 @@ func (s *Server) handleCreateGraphService(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeDataEnvelope(w, http.StatusCreated, graphServiceResponseFromNode(created))
+	writeDataEnvelope(w, statusCode, graphServiceResponseFromNode(created))
 }
 
 func (s *Server) handleDeleteGraphService(w http.ResponseWriter, r *http.Request) {

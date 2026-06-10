@@ -147,6 +147,7 @@ func persistResolvedIncidentNode(ctx context.Context, cfgStore teamGraphConfigRe
 // the caller can unconditionally log-and-continue without an extra nil check.
 func writeIncidentEdges(ctx context.Context, graphStore graph.Store, teamID uuid.UUID, nodeID uuid.UUID, serviceName string, sanitizedCtx *correlator.Context, analysis *ai.AnalysisResponse) error {
 	writeSimilarEdges(ctx, graphStore, teamID, nodeID)
+	writeAffectsServiceEdge(ctx, graphStore, teamID, nodeID, serviceName)
 	writeCausedByEdge(ctx, graphStore, teamID, nodeID, sanitizedCtx, analysis)
 	return nil
 }

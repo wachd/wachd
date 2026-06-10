@@ -45,10 +45,3 @@ func TestGraphServiceResponseFromNode(t *testing.T) {
 		t.Fatalf("expected description, got %q", got.Description)
 	}
 }
-
-func TestNormalizeGraphServiceName(t *testing.T) {
-	got := normalizeGraphServiceName("  Checkout-API  ")
-	if got != "checkout-api" {
-		t.Fatalf("expected checkout-api, got %q", got)
-	}
-}

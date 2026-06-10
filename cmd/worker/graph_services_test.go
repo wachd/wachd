@@ -12,6 +12,7 @@ type serviceEdgeGraphStore struct {
 	serviceNode *graph.Node
 	findErr     error
 	edge        *graph.Edge
+	externalID  string
 }
 
 func (s *serviceEdgeGraphStore) UpsertNode(ctx context.Context, teamID uuid.UUID, n *graph.Node) (*graph.Node, error) {
@@ -32,6 +33,8 @@ func (s *serviceEdgeGraphStore) FindSimilar(ctx context.Context, teamID uuid.UUI
 }
 
 func (s *serviceEdgeGraphStore) FindNodeByExternalID(ctx context.Context, teamID uuid.UUID, nodeType graph.NodeType, externalID string) (*graph.Node, error) {
+	s.externalID = externalID
+
 	if s.findErr != nil {
 		return nil, s.findErr
 	}
@@ -72,6 +75,10 @@ func TestWriteAffectsServiceEdgeCreatesEdgeForDeclaredService(t *testing.T) {
 
 	writeAffectsServiceEdge(context.Background(), store, teamID, incidentNodeID, " Checkout-API ")
 
+	if store.externalID != "checkout-api" {
+		t.Fatalf("expected normalized lookup checkout-api, got %q", store.externalID)
+	}
+
 	if store.edge == nil {
 		t.Fatal("expected affects edge to be written")
 	}
@@ -100,5 +107,19 @@ func TestWriteAffectsServiceEdgeSkipsMissingService(t *testing.T) {
 
 	if store.edge != nil {
 		t.Fatalf("expected no edge for missing service, got %+v", store.edge)
+	}
+}
+
+func TestWriteAffectsServiceEdgeSkipsEmptyServiceName(t *testing.T) {
+	store := &serviceEdgeGraphStore{}
+
+	writeAffectsServiceEdge(context.Background(), store, uuid.New(), uuid.New(), "   ")
+
+	if store.externalID != "" {
+		t.Fatalf("expected no lookup for empty service name, got lookup %q", store.externalID)
+	}
+
+	if store.edge != nil {
+		t.Fatalf("expected no edge for empty service name, got %+v", store.edge)
 	}
 }

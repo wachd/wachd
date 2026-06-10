@@ -18,22 +18,17 @@ import (
 	"context"
 	"errors"
 	"log"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/wachd/wachd/internal/graph"
 )
-
-func normalizeWorkerGraphServiceName(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
-}
 
 func writeAffectsServiceEdge(ctx context.Context, graphStore graph.Store, teamID uuid.UUID, incidentNodeID uuid.UUID, serviceName string) {
 	if graphStore == nil || teamID == uuid.Nil || incidentNodeID == uuid.Nil {
 		return
 	}
 
-	name := normalizeWorkerGraphServiceName(serviceName)
+	name := graph.NormalizeServiceName(serviceName)
 	if name == "" {
 		return
 	}
