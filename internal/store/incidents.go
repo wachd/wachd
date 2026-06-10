@@ -17,12 +17,19 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// ErrDuplicateIncident is returned by CreateIncident when a concurrent insert
+// races past the application-level dedup and hits the unique partial index.
+// Callers should treat this as a deduplicated response, not a hard failure.
+var ErrDuplicateIncident = errors.New("duplicate active incident")
 
 // CreateIncident creates a new incident in the database
 func (db *DB) CreateIncident(ctx context.Context, incident *Incident) error {
@@ -60,6 +67,10 @@ func (db *DB) CreateIncident(ctx context.Context, incident *Incident) error {
 	)
 
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrDuplicateIncident
+		}
 		return fmt.Errorf("failed to create incident: %w", err)
 	}
 

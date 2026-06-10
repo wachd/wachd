@@ -119,14 +119,14 @@ type ServiceDependency struct {
 
 // SSOIdentity is a provider-level identity (one per person, not per team)
 type SSOIdentity struct {
-	ID         uuid.UUID  `json:"id"`
-	Provider   string     `json:"provider"`    // entra | google | okta
-	ProviderID string     `json:"provider_id"` // oid claim
-	Email      string     `json:"email"`
-	Name       string     `json:"name"`
-	AvatarURL  *string    `json:"avatar_url,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID         uuid.UUID `json:"id"`
+	Provider   string    `json:"provider"`    // entra | google | okta
+	ProviderID string    `json:"provider_id"` // oid claim
+	Email      string    `json:"email"`
+	Name       string    `json:"name"`
+	AvatarURL  *string   `json:"avatar_url,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // TeamAccess links an SSO identity to a team with a role
@@ -151,22 +151,22 @@ type GroupMapping struct {
 
 // TeamConfig represents team-specific configuration
 type TeamConfig struct {
-	TeamID                uuid.UUID  `json:"team_id"`
-	SlackWebhookURL       *string    `json:"slack_webhook_url,omitempty"`
-	SlackChannel          *string    `json:"slack_channel,omitempty"`
-	SlackBotToken         *string    `json:"slack_bot_token,omitempty"`
-	GitHubTokenEncrypted  *string    `json:"github_token_encrypted,omitempty"`
-	GitHubRepos           []byte     `json:"github_repos,omitempty"` // JSONB
-	GrafanaMCPURL         *string    `json:"grafana_mcp_url,omitempty"`
-	GrafanaMCPTokenEncrypted *string `json:"grafana_mcp_token_encrypted,omitempty"`
-	PrometheusEndpoint          *string    `json:"prometheus_endpoint,omitempty"`
-	LokiEndpoint                *string    `json:"loki_endpoint,omitempty"`
-	DynatraceEndpoint           *string    `json:"dynatrace_endpoint,omitempty"`
-	DynatraceTokenEncrypted     *string    `json:"dynatrace_token_encrypted,omitempty"`
-	SplunkEndpoint              *string    `json:"splunk_endpoint,omitempty"`
-	SplunkTokenEncrypted        *string    `json:"splunk_token_encrypted,omitempty"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
+	TeamID                   uuid.UUID `json:"team_id"`
+	SlackWebhookURL          *string   `json:"slack_webhook_url,omitempty"`
+	SlackChannel             *string   `json:"slack_channel,omitempty"`
+	SlackBotToken            *string   `json:"slack_bot_token,omitempty"`
+	GitHubTokenEncrypted     *string   `json:"github_token_encrypted,omitempty"`
+	GitHubRepos              []byte    `json:"github_repos,omitempty"` // JSONB
+	GrafanaMCPURL            *string   `json:"grafana_mcp_url,omitempty"`
+	GrafanaMCPTokenEncrypted *string   `json:"grafana_mcp_token_encrypted,omitempty"`
+	PrometheusEndpoint       *string   `json:"prometheus_endpoint,omitempty"`
+	LokiEndpoint             *string   `json:"loki_endpoint,omitempty"`
+	DynatraceEndpoint        *string   `json:"dynatrace_endpoint,omitempty"`
+	DynatraceTokenEncrypted  *string   `json:"dynatrace_token_encrypted,omitempty"`
+	SplunkEndpoint           *string   `json:"splunk_endpoint,omitempty"`
+	SplunkTokenEncrypted     *string   `json:"splunk_token_encrypted,omitempty"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
 }
 
 // SystemConfig holds platform-wide settings managed by the superadmin only.
@@ -195,20 +195,20 @@ type TeamMember struct {
 
 // LocalUser is a non-SSO auth identity (includes bootstrap admin).
 type LocalUser struct {
-	ID                   uuid.UUID  `json:"id"`
-	Username             string     `json:"username"`
-	Email                string     `json:"email"`
-	Name                 string     `json:"name"`
-	Phone                *string    `json:"phone,omitempty"`
-	PasswordHash         string     `json:"-"` // never serialized
-	IsSuperAdmin         bool       `json:"is_superadmin"`
-	IsActive             bool       `json:"is_active"`
-	ForcePasswordChange  bool       `json:"force_password_change"`
-	FailedLoginAttempts  int        `json:"failed_login_attempts"`
-	LockedUntil          *time.Time `json:"locked_until,omitempty"`
-	LastLoginAt          *time.Time `json:"last_login_at,omitempty"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	ID                  uuid.UUID  `json:"id"`
+	Username            string     `json:"username"`
+	Email               string     `json:"email"`
+	Name                string     `json:"name"`
+	Phone               *string    `json:"phone,omitempty"`
+	PasswordHash        string     `json:"-"` // never serialized
+	IsSuperAdmin        bool       `json:"is_superadmin"`
+	IsActive            bool       `json:"is_active"`
+	ForcePasswordChange bool       `json:"force_password_change"`
+	FailedLoginAttempts int        `json:"failed_login_attempts"`
+	LockedUntil         *time.Time `json:"locked_until,omitempty"`
+	LastLoginAt         *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 // LocalUserUpdate holds the mutable fields for an admin user update.
@@ -230,17 +230,17 @@ type LocalGroup struct {
 // SSOProvider holds DB-stored OIDC provider configuration.
 // ClientSecretEnc is never exposed via the API — callers see ClientSecretSet instead.
 type SSOProvider struct {
-	ID               uuid.UUID `json:"id"`
-	Name             string    `json:"name"`
-	ProviderType     string    `json:"provider_type"` // "oidc"
-	IssuerURL        string    `json:"issuer_url"`
-	ClientID         string    `json:"client_id"`
-	ClientSecretEnc  string    `json:"-"` // AES-256-GCM encrypted, base64
-	Scopes           []string  `json:"scopes"`
-	Enabled          bool      `json:"enabled"`
-	AutoProvision    bool      `json:"auto_provision"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID              uuid.UUID `json:"id"`
+	Name            string    `json:"name"`
+	ProviderType    string    `json:"provider_type"` // "oidc"
+	IssuerURL       string    `json:"issuer_url"`
+	ClientID        string    `json:"client_id"`
+	ClientSecretEnc string    `json:"-"` // AES-256-GCM encrypted, base64
+	Scopes          []string  `json:"scopes"`
+	Enabled         bool      `json:"enabled"`
+	AutoProvision   bool      `json:"auto_provision"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // SSOProviderPublic is the API-safe view of an SSOProvider.
@@ -284,38 +284,38 @@ type SSOProviderUpdate struct {
 
 // PasswordPolicy is the singleton row controlling password requirements.
 type PasswordPolicy struct {
-	MinLength               int       `json:"min_length"`
-	RequireUppercase        bool      `json:"require_uppercase"`
-	RequireLowercase        bool      `json:"require_lowercase"`
-	RequireNumber           bool      `json:"require_number"`
-	RequireSpecial          bool      `json:"require_special"`
-	MaxFailedAttempts       int       `json:"max_failed_attempts"`
-	LockoutDurationMinutes  int       `json:"lockout_duration_minutes"`
-	UpdatedAt               time.Time `json:"updated_at"`
+	MinLength              int       `json:"min_length"`
+	RequireUppercase       bool      `json:"require_uppercase"`
+	RequireLowercase       bool      `json:"require_lowercase"`
+	RequireNumber          bool      `json:"require_number"`
+	RequireSpecial         bool      `json:"require_special"`
+	MaxFailedAttempts      int       `json:"max_failed_attempts"`
+	LockoutDurationMinutes int       `json:"lockout_duration_minutes"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 // PasswordPolicyUpdate holds mutable fields; nil = don't update.
 type PasswordPolicyUpdate struct {
-	MinLength               *int
-	RequireUppercase        *bool
-	RequireLowercase        *bool
-	RequireNumber           *bool
-	RequireSpecial          *bool
-	MaxFailedAttempts       *int
-	LockoutDurationMinutes  *int
+	MinLength              *int
+	RequireUppercase       *bool
+	RequireLowercase       *bool
+	RequireNumber          *bool
+	RequireSpecial         *bool
+	MaxFailedAttempts      *int
+	LockoutDurationMinutes *int
 }
 
 // APIToken is a personal access token for programmatic API access.
 // The raw token is shown once on creation; only the SHA-256 hash is stored.
 // StoredHash is populated by GetAPITokenWithUser for constant-time comparison.
 type APIToken struct {
-	ID          uuid.UUID  `json:"id"`
-	UserID      uuid.UUID  `json:"user_id"`
-	Name        string     `json:"name"`
-	StoredHash  string     `json:"-"` // populated by lookup queries; never serialised
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID         uuid.UUID  `json:"id"`
+	UserID     uuid.UUID  `json:"user_id"`
+	Name       string     `json:"name"`
+	StoredHash string     `json:"-"` // populated by lookup queries; never serialised
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 // UserNotificationRule defines how a specific user wants to be notified for a

@@ -55,6 +55,12 @@ CREATE INDEX IF NOT EXISTS idx_incidents_status      ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incidents_fired_at    ON incidents(fired_at DESC);
 CREATE INDEX IF NOT EXISTS idx_incidents_assigned_to ON incidents(assigned_to);
 CREATE INDEX IF NOT EXISTS idx_incidents_fingerprint ON incidents(team_id, fingerprint) WHERE fingerprint IS NOT NULL;
+-- Unique partial index: only one active (open/acknowledged/snoozed) incident per fingerprint per team.
+-- Prevents concurrent duplicate inserts that the application-level dedup cannot catch.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_active_fingerprint_unique
+    ON incidents(team_id, fingerprint)
+    WHERE fingerprint IS NOT NULL
+      AND status IN ('open', 'acknowledged', 'snoozed');
 
 CREATE TABLE IF NOT EXISTS schedules (
     id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),

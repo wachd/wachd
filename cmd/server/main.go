@@ -241,7 +241,8 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string, 
 	var dd DatadogWebhook
 	if err := json.Unmarshal(body, &dd); err == nil && (dd.AlertID != 0 || dd.AlertTransition != "") {
 		sev := "unknown"
-		switch dd.AlertType {
+		alertType := strings.ToLower(strings.TrimSpace(dd.AlertType))
+		switch alertType {
 		case "error":
 			sev = "critical"
 		case "warning":
@@ -259,7 +260,7 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string, 
 		if t == "" {
 			t = "Datadog alert"
 		}
-		return t, msg, sev, "datadog", dd.AlertType == "success"
+		return t, msg, sev, "datadog", alertType == "success"
 	}
 
 	// Generic fallback — handles wachd-agent payloads and any source that sets
@@ -281,7 +282,7 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string, 
 				sev = "unknown"
 			}
 			status, _ := raw["status"].(string)
-			return t, msg, sev, src, status == "resolved"
+			return t, msg, sev, src, strings.ToLower(strings.TrimSpace(status)) == "resolved"
 		}
 	}
 
@@ -292,14 +293,15 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string, 
 		if t == "" {
 			t = gf.RuleName
 		}
+		state := strings.ToLower(strings.TrimSpace(gf.State))
 		sev := "unknown"
-		switch gf.State {
+		switch state {
 		case "alerting":
 			sev = "high"
 		case "ok":
 			sev = "low"
 		}
-		return t, gf.Message, sev, "grafana", gf.State == "ok"
+		return t, gf.Message, sev, "grafana", state == "ok"
 	}
 
 	// Generic fallback — extract title/message from any JSON payload
@@ -766,7 +768,62 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce license monthly alert limit.
+	// Read webhook payload — limit to 1 MB to prevent memory exhaustion.
+	// Done before quota check so resolved/dedup webhooks are never blocked by the limit.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+	defer func() { _ = r.Body.Close() }()
+
+	// Parse webhook — auto-detects Grafana, Datadog, or generic format
+	title, message, severity, source, resolved := parseWebhookPayload(body)
+
+	fingerprint := incidentFingerprint(teamID, source, title)
+
+	// Resolve path — find and close the matching open incident, no new row created.
+	// Runs before quota check: a resolved webhook must always be able to close an
+	// existing incident, even when the team has hit their monthly create limit.
+	if resolved {
+		existing, _ := s.db.FindOpenIncidentByFingerprint(r.Context(), teamID, fingerprint)
+		if err := s.db.ResolveIncidentByFingerprint(r.Context(), teamID, fingerprint); err != nil {
+			log.Printf("warn: resolve by fingerprint team %s: %v", teamID, err)
+		} else {
+			log.Printf("→ resolved [%s] %s (team %s)", source, title, teamID)
+			if existing != nil {
+				if err := s.queue.EnqueueIncidentResolved(r.Context(), existing.ID, teamID); err != nil {
+					log.Printf("warn: enqueue resolved job for %s: %v", existing.ID, err)
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "resolved"})
+		return
+	}
+
+	// Dedup — if an open/acknowledged/snoozed incident with this fingerprint
+	// already exists, skip creating a duplicate.
+	// Runs before quota check: a duplicate webhook must not consume a quota slot.
+	existing, err := s.db.FindOpenIncidentByFingerprint(r.Context(), teamID, fingerprint)
+	if err != nil {
+		log.Printf("warn: fingerprint lookup team %s: %v", teamID, err)
+		// fail open — proceed to create so we never silently drop an alert
+	}
+	if existing != nil {
+		log.Printf("→ dedup [%s/%s] %s (open: %s)", source, severity, title, existing.ID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":      "deduplicated",
+			"incident_id": existing.ID,
+		})
+		return
+	}
+
+	// Enforce license monthly alert limit — only reached when creating a new incident.
 	alertCount, err := s.db.CountIncidentsThisMonth(r.Context())
 	if err != nil {
 		log.Printf("handleWebhook: count incidents: %v", err)
@@ -787,51 +844,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read webhook payload — limit to 1 MB to prevent memory exhaustion.
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read body", http.StatusBadRequest)
-		return
-	}
-	defer func() { _ = r.Body.Close() }()
-
-	// Parse webhook — auto-detects Grafana, Datadog, or generic format
-	title, message, severity, source, resolved := parseWebhookPayload(body)
-
-	fingerprint := incidentFingerprint(teamID, source, title)
-
-	// Resolve path — find and close the matching open incident, no new row created.
-	if resolved {
-		if err := s.db.ResolveIncidentByFingerprint(r.Context(), teamID, fingerprint); err != nil {
-			log.Printf("warn: resolve by fingerprint team %s: %v", teamID, err)
-		} else {
-			log.Printf("→ resolved [%s] %s (team %s)", source, title, teamID)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "resolved"})
-		return
-	}
-
-	// Dedup — if an open/acknowledged/snoozed incident with this fingerprint
-	// already exists, skip creating a duplicate.
-	existing, err := s.db.FindOpenIncidentByFingerprint(r.Context(), teamID, fingerprint)
-	if err != nil {
-		log.Printf("warn: fingerprint lookup team %s: %v", teamID, err)
-		// fail open — proceed to create so we never silently drop an alert
-	}
-	if existing != nil {
-		log.Printf("→ dedup [%s/%s] %s (open: %s)", source, severity, title, existing.ID)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":      "deduplicated",
-			"incident_id": existing.ID,
-		})
-		return
-	}
-
 	fp := fingerprint
 
 	// Create incident
@@ -847,6 +859,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.db.CreateIncident(r.Context(), incident); err != nil {
+		if errors.Is(err, store.ErrDuplicateIncident) {
+			// Concurrent duplicate slipped past the application-level dedup and hit
+			// the unique partial index. Look up the winner and return deduplicated.
+			if winner, lookupErr := s.db.FindOpenIncidentByFingerprint(r.Context(), teamID, fingerprint); lookupErr == nil && winner != nil {
+				log.Printf("→ dedup (race) [%s] %s (open: %s)", source, title, winner.ID)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "deduplicated", "incident_id": winner.ID})
+				return
+			}
+		}
 		log.Printf("Failed to create incident: %v", err)
 		http.Error(w, "Failed to create incident", http.StatusInternalServerError)
 		return
