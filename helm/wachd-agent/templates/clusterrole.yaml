@@ -11,3 +11,9 @@ rules:
       - workloadconfigurationscansummaries
       - vulnerabilitymanifestsummaries
     verbs: ["get", "list", "watch"]
+  # Pod and node health collector — read-only watch for failure conditions
+  - apiGroups: [""]
+    resources:
+      - pods
+      - nodes
+    verbs: ["get", "list", "watch"]

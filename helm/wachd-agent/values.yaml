@@ -10,6 +10,11 @@ wachd:
   #           (must contain key WACHD_WEBHOOK_SECRET). webhookSecret is ignored.
   webhookSecret: ""
   existingSecret: ""
+  # Optional cluster identifier — injected as a "cluster" label on every forwarded
+  # event. Set this when multiple clusters report to the same central Wachd instance
+  # so the on-call engineer knows which cluster fired.
+  # Example: "prod-us", "prod-eu", "staging"
+  cluster: ""
 
 # Kubescape collector
 kubescape:
@@ -19,6 +24,16 @@ kubescape:
   namespace: kubescape
   # Minimum severity to fire on: "high" or "critical"
   minSeverity: high
+
+# Pod and node health collector
+# Fires alerts for CrashLoopBackOff, OOMKilled, ImagePullBackOff,
+# stuck-Pending pods, and node NotReady / pressure conditions.
+# Requires no external tools — uses the Kubernetes API directly.
+k8shealth:
+  # Set to false to disable
+  enabled: true
+  # Minutes a pod must be stuck in Pending before an alert fires
+  pendingMinutes: 15
 
 image:
   repository: ghcr.io/wachd/wachd-agent

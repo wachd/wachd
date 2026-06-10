@@ -1,7 +1,11 @@
 # Testing wachd-agent with kind
 
-End-to-end guide for verifying the wachd-agent Kubescape integration locally.
+End-to-end guide for verifying the wachd-agent collectors locally.
 No real Kubernetes cluster required — everything runs in a kind cluster on your laptop.
+
+Collectors covered:
+- **Kubescape** — CVE and misconfiguration findings via CRD watch
+- **k8shealth** — pod crash/OOM/imagepull/pending and node pressure/not-ready via k8s API
 
 ---
 
@@ -25,6 +29,7 @@ Before touching a cluster, run the full test suite:
 cd /path/to/wachd
 go test ./cmd/agent/... -race -count=1 -v
 go test ./cmd/agent/collectors/kubescape/... -race -count=1 -v
+go test ./cmd/agent/collectors/k8shealth/... -race -count=1 -v
 ```
 
 Expected: all tests pass, no data races.
@@ -135,16 +140,20 @@ helm install wachd-agent ./helm/wachd-agent \
   --set wachd.webhookSecret="test-secret" \
   --set kubescape.enabled=true \
   --set kubescape.namespace=kubescape \
-  --set kubescape.minSeverity=high
+  --set kubescape.minSeverity=high \
+  --set k8shealth.enabled=true \
+  --set k8shealth.pendingMinutes=15
 
 kubectl -n wachd-agent rollout status deployment/wachd-agent
 ```
 
-Verify the agent is watching:
+Verify both collectors started:
 
 ```bash
 kubectl -n wachd-agent logs -f deploy/wachd-agent
 # Should see:
+# k8shealth collector started (pending threshold: 15m)
+# kubescape collector started (namespace: kubescape)
 # kubescape: watching vulnerabilitymanifestsummaries across all namespaces (rv=)
 # kubescape: watching workloadconfigurationscansummaries across all namespaces (rv=)
 ```
@@ -253,26 +262,235 @@ High-only findings should be silently dropped — nothing forwarded, nothing log
 
 ---
 
-## 11. Test RBAC is minimal
+---
 
-The agent ServiceAccount should only have access to Kubescape CRDs:
+## 11. Test k8shealth — CrashLoopBackOff
+
+Deploy a pod that immediately crashes:
 
 ```bash
-# Should succeed (has get/list/watch on summaries)
+kubectl create deployment crash-test \
+  --image=busybox --namespace=default \
+  -- sh -c "exit 1"
+```
+
+Within ~30 seconds the container enters `CrashLoopBackOff`. Check the agent logs:
+
+```bash
+kubectl -n wachd-agent logs -f deploy/wachd-agent
+# Expected:
+# → forwarded [k8shealth/high] CrashLoopBackOff: busybox in default/crash-test-xxx (Deployment/crash-test)
+```
+
+Check the fake Wachd server:
+
+```bash
+# Expected:
+# → POST /api/v1/webhook/test-team/test-secret
+# {"title":"CrashLoopBackOff: busybox in default/crash-test-xxx ...","severity":"high","source":"k8shealth",...}
+```
+
+Verify deduplication — agent must not re-fire while the pod stays in CrashLoopBackOff:
+
+```bash
+# Wait 60s — agent must stay silent for this pod
+sleep 60
+# No new forward lines should appear for crash-test in agent logs
+```
+
+Clean up:
+
+```bash
+kubectl delete deployment crash-test --namespace=default
+```
+
+---
+
+## 12. Test k8shealth — OOMKilled
+
+Deploy a pod that allocates more memory than its limit:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oom-test
+  namespace: default
+spec:
+  containers:
+  - name: app
+    image: polinux/stress
+    args: ["--vm", "1", "--vm-bytes", "200M", "--vm-hang", "1"]
+    resources:
+      limits:
+        memory: 64Mi
+EOF
+```
+
+The container will be OOMKilled within seconds. Check agent logs:
+
+```bash
+kubectl -n wachd-agent logs -f deploy/wachd-agent
+# Expected:
+# → forwarded [k8shealth/high] OOMKilled: app in default/oom-test (Pod/oom-test)
+```
+
+Clean up:
+
+```bash
+kubectl delete pod oom-test --namespace=default
+```
+
+---
+
+## 13. Test k8shealth — stuck Pending pod
+
+Deploy a pod with an unsatisfiable node selector so it stays Pending:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pending-test
+  namespace: default
+spec:
+  nodeSelector:
+    wachd-test/nonexistent: "true"
+  containers:
+  - name: app
+    image: nginx:alpine
+EOF
+```
+
+The pod will be `Pending` immediately. The agent polls every minute and fires after `K8SHEALTH_PENDING_MINUTES` (default 15). To test faster, reinstall with a shorter threshold:
+
+```bash
+helm upgrade wachd-agent ./helm/wachd-agent \
+  --namespace wachd-agent \
+  --set k8shealth.pendingMinutes=2 \
+  --reuse-values
+```
+
+After 2 minutes, check agent logs:
+
+```bash
+kubectl -n wachd-agent logs -f deploy/wachd-agent
+# Expected:
+# → forwarded [k8shealth/high] Pod stuck Pending 2m: default/pending-test (Pod/pending-test)
+```
+
+Clean up:
+
+```bash
+kubectl delete pod pending-test --namespace=default
+helm upgrade wachd-agent ./helm/wachd-agent \
+  --namespace wachd-agent \
+  --set k8shealth.pendingMinutes=15 \
+  --reuse-values
+```
+
+---
+
+## 14. Test k8shealth — node NotReady
+
+Simulate a node going NotReady by cordoning it and patching its condition:
+
+```bash
+NODE=$(kubectl get nodes --no-headers -o custom-columns=NAME:.metadata.name | head -1)
+
+kubectl patch node $NODE --type=json -p='[
+  {"op":"replace","path":"/status/conditions/3/status","value":"False"},
+  {"op":"replace","path":"/status/conditions/3/reason","value":"KubeletNotReady"}
+]' --subresource=status
+```
+
+Check agent logs:
+
+```bash
+kubectl -n wachd-agent logs -f deploy/wachd-agent
+# Expected:
+# → forwarded [k8shealth/critical] Node NotReady: <node-name> (KubeletNotReady)
+```
+
+Restore the node condition:
+
+```bash
+kubectl patch node $NODE --type=json -p='[
+  {"op":"replace","path":"/status/conditions/3/status","value":"True"},
+  {"op":"replace","path":"/status/conditions/3/reason","value":"KubeletReady"}
+]' --subresource=status
+```
+
+Note: condition index 3 is typically `Ready` — verify with `kubectl get node $NODE -o json | jq '.status.conditions'` first.
+
+---
+
+## 15. Test k8shealth — disabled collector
+
+Reinstall with k8shealth disabled:
+
+```bash
+helm upgrade wachd-agent ./helm/wachd-agent \
+  --namespace wachd-agent \
+  --set k8shealth.enabled=false \
+  --reuse-values
+```
+
+Deploy the crash-test pod from step 11. The agent must not forward any k8shealth events:
+
+```bash
+kubectl -n wachd-agent logs -f deploy/wachd-agent
+# Must NOT see any lines with source k8shealth
+```
+
+Re-enable before continuing:
+
+```bash
+helm upgrade wachd-agent ./helm/wachd-agent \
+  --namespace wachd-agent \
+  --set k8shealth.enabled=true \
+  --reuse-values
+```
+
+---
+
+## 16. Test RBAC is minimal
+
+The agent ServiceAccount should have read-only access to Kubescape CRDs, pods, and nodes only:
+
+```bash
+# Should succeed — Kubescape CRDs
 kubectl auth can-i list vulnerabilitymanifestsummaries \
   --as system:serviceaccount:wachd-agent:wachd-agent \
   --namespace kubescape
 # → yes
 
-# Should fail (no access to pods)
+# Should succeed — pods (k8shealth collector)
 kubectl auth can-i list pods \
+  --as system:serviceaccount:wachd-agent:wachd-agent
+# → yes
+
+# Should succeed — nodes (k8shealth collector)
+kubectl auth can-i list nodes \
+  --as system:serviceaccount:wachd-agent:wachd-agent
+# → yes
+
+# Should fail — no write access to any resource
+kubectl auth can-i delete pods \
+  --as system:serviceaccount:wachd-agent:wachd-agent
+# → no
+
+# Should fail — no access to secrets
+kubectl auth can-i list secrets \
   --as system:serviceaccount:wachd-agent:wachd-agent
 # → no
 ```
 
 ---
 
-## 12. Cleanup
+## 17. Cleanup
 
 ```bash
 helm uninstall wachd-agent -n wachd-agent
