@@ -727,7 +727,7 @@ func writeForbidden(w http.ResponseWriter) {
 // Used to deduplicate firing alerts and match resolved events to open incidents.
 func incidentFingerprint(teamID uuid.UUID, source, title string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%s", teamID.String(), source, strings.ToLower(strings.TrimSpace(title)))
+	_, _ = fmt.Fprintf(h, "%s|%s|%s", teamID.String(), source, strings.ToLower(strings.TrimSpace(title)))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
