@@ -43,6 +43,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +63,8 @@ import (
 type e2eEnv struct {
 	db                  *store.DB
 	router              *mux.Router
+	server              *Server
+	q                   *queue.Queue
 	kongTeam            *store.Team
 	kafkaTeam           *store.Team
 	kongCookie          *http.Cookie // admin session scoped to Kong team only
@@ -186,6 +189,8 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	return &e2eEnv{
 		db:                  db,
 		router:              router,
+		server:              server,
+		q:                   q,
 		kongTeam:            kongTeam,
 		kafkaTeam:           kafkaTeam,
 		kongCookie:          kongCookie,
@@ -982,4 +987,240 @@ func TestE2E_ServiceDependencies_FilterByService(t *testing.T) {
 	if len(redisDeps) != 0 {
 		t.Errorf("filter by depends_on value should return 0 results, got %d", len(redisDeps))
 	}
+}
+
+// ── webhook dedup / fingerprint tests ─────────────────────────────────────────
+
+// fireAgentWebhook POSTs a generic agent-style payload (explicit "source" field)
+// to the given team's webhook. Returns the HTTP status code and decoded body.
+// Pass status="resolved" to fire a resolved event.
+func fireAgentWebhook(t *testing.T, e *e2eEnv, team *store.Team, title, source, status string) (int, map[string]any) {
+	t.Helper()
+	payload := map[string]any{
+		"title":    title,
+		"source":   source,
+		"severity": "high",
+	}
+	if status != "" {
+		payload["status"] = status
+	}
+	body := e2eBody(t, payload)
+	req := httptest.NewRequest("POST",
+		fmt.Sprintf("/api/v1/webhook/%s/%s", team.ID, team.WebhookSecret),
+		body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := e.do(req)
+	var result map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.Code, result
+}
+
+// countIncidentsByTitle counts DB rows for a team matching the given title.
+// Used to verify no duplicate incidents were created.
+func countIncidentsByTitle(t *testing.T, e *e2eEnv, teamID, title string) int {
+	t.Helper()
+	var n int
+	err := e.db.Pool().QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM incidents WHERE team_id = $1 AND title = $2`,
+		teamID, title).Scan(&n)
+	if err != nil {
+		t.Fatalf("countIncidentsByTitle: %v", err)
+	}
+	return n
+}
+
+// TestWebhookDedup covers the five receiver-level dedup correctness cases that
+// the unit tests in webhook_parser_test.go cannot reach.
+func TestWebhookDedup(t *testing.T) {
+	env := newE2EEnv(t)
+	team := env.kongTeam
+
+	t.Run("first_fire_creates_incident_with_fingerprint", func(t *testing.T) {
+		title := fmt.Sprintf("dedup-test-first-%d", time.Now().UnixNano())
+		code, body := fireAgentWebhook(t, env, team, title, "k8shealth", "")
+
+		if code != http.StatusAccepted {
+			t.Fatalf("want 202, got %d: %v", code, body)
+		}
+		if body["status"] != "accepted" {
+			t.Errorf("want status=accepted, got %q", body["status"])
+		}
+		incidentID, ok := body["incident_id"].(string)
+		if !ok || incidentID == "" {
+			t.Fatal("incident_id missing from response")
+		}
+
+		// Verify fingerprint was stored in DB.
+		var fp *string
+		err := env.db.Pool().QueryRow(context.Background(),
+			`SELECT fingerprint FROM incidents WHERE id = $1 AND team_id = $2`,
+			incidentID, team.ID.String()).Scan(&fp)
+		if err != nil {
+			t.Fatalf("fingerprint lookup: %v", err)
+		}
+		if fp == nil || *fp == "" {
+			t.Error("fingerprint should be non-empty after first fire")
+		}
+		if len(*fp) != 64 {
+			t.Errorf("fingerprint should be 64 hex chars, got %d", len(*fp))
+		}
+	})
+
+	t.Run("duplicate_returns_deduplicated_no_second_row", func(t *testing.T) {
+		title := fmt.Sprintf("dedup-test-dup-%d", time.Now().UnixNano())
+
+		code1, body1 := fireAgentWebhook(t, env, team, title, "k8shealth", "")
+		if code1 != http.StatusAccepted || body1["status"] != "accepted" {
+			t.Fatalf("first fire: want 202/accepted, got %d/%v", code1, body1["status"])
+		}
+		id1 := body1["incident_id"].(string)
+
+		code2, body2 := fireAgentWebhook(t, env, team, title, "k8shealth", "")
+		if code2 != http.StatusAccepted {
+			t.Fatalf("duplicate: want 202, got %d: %v", code2, body2)
+		}
+		if body2["status"] != "deduplicated" {
+			t.Errorf("duplicate: want status=deduplicated, got %q", body2["status"])
+		}
+		if body2["incident_id"] != id1 {
+			t.Errorf("duplicate: want same incident_id %q, got %q", id1, body2["incident_id"])
+		}
+
+		// Exactly one row in DB for this title.
+		if n := countIncidentsByTitle(t, env, team.ID.String(), title); n != 1 {
+			t.Errorf("want 1 incident row, got %d", n)
+		}
+	})
+
+	t.Run("resolve_closes_incident_no_new_row", func(t *testing.T) {
+		title := fmt.Sprintf("dedup-test-resolve-%d", time.Now().UnixNano())
+
+		// Fire alert.
+		code, body := fireAgentWebhook(t, env, team, title, "k8shealth", "")
+		if code != http.StatusAccepted || body["status"] != "accepted" {
+			t.Fatalf("fire: want 202/accepted, got %d/%v", code, body["status"])
+		}
+		incidentID := body["incident_id"].(string)
+
+		// Fire resolved event.
+		rcode, rbody := fireAgentWebhook(t, env, team, title, "k8shealth", "resolved")
+		if rcode != http.StatusAccepted {
+			t.Fatalf("resolve: want 202, got %d: %v", rcode, rbody)
+		}
+		if rbody["status"] != "resolved" {
+			t.Errorf("resolve: want status=resolved, got %q", rbody["status"])
+		}
+
+		// Incident should be closed in DB.
+		var status string
+		err := env.db.Pool().QueryRow(context.Background(),
+			`SELECT status FROM incidents WHERE id = $1 AND team_id = $2`,
+			incidentID, team.ID.String()).Scan(&status)
+		if err != nil {
+			t.Fatalf("status lookup: %v", err)
+		}
+		if status != "resolved" {
+			t.Errorf("want status=resolved in DB, got %q", status)
+		}
+
+		// Still exactly one row — no new low-severity incident was created.
+		if n := countIncidentsByTitle(t, env, team.ID.String(), title); n != 1 {
+			t.Errorf("want 1 incident row after resolve, got %d", n)
+		}
+	})
+
+	t.Run("resolve_works_at_quota_limit", func(t *testing.T) {
+		title := fmt.Sprintf("dedup-test-quota-%d", time.Now().UnixNano())
+
+		// Fire alert via normal env to create an open incident.
+		code, body := fireAgentWebhook(t, env, team, title, "k8shealth", "")
+		if code != http.StatusAccepted || body["status"] != "accepted" {
+			t.Fatalf("fire: want 202/accepted, got %d/%v", code, body["status"])
+		}
+		incidentID := body["incident_id"].(string)
+
+		// Build a server with MaxAlertsMonth = 0 so every new-create attempt is
+		// blocked, but resolve/dedup paths (which run before the quota check) are not.
+		limitedSrv := &Server{
+			cfg:   env.db,
+			db:    env.db,
+			queue: env.q,
+			license: &license.License{
+				Tier:           license.TierOpenSource,
+				MaxAlertsMonth: 0,
+			},
+			webhookLimiter: newWebhookIPLimiter(),
+		}
+		limitedRouter := mux.NewRouter()
+		limitedRouter.HandleFunc("/api/v1/webhook/{teamId}/{secret}",
+			limitedSrv.handleWebhook).Methods("POST")
+		limitedEnv := &e2eEnv{db: env.db, router: limitedRouter}
+
+		// A new firing alert should be blocked (quota exhausted).
+		other := fmt.Sprintf("dedup-test-quota-new-%d", time.Now().UnixNano())
+		ncode, _ := fireAgentWebhook(t, limitedEnv, team, other, "k8shealth", "")
+		if ncode != http.StatusTooManyRequests {
+			t.Errorf("new alert at quota limit: want 429, got %d", ncode)
+		}
+
+		// Resolve for existing incident must still succeed.
+		rcode, rbody := fireAgentWebhook(t, limitedEnv, team, title, "k8shealth", "resolved")
+		if rcode != http.StatusAccepted {
+			t.Fatalf("resolve at quota limit: want 202, got %d: %v", rcode, rbody)
+		}
+		if rbody["status"] != "resolved" {
+			t.Errorf("resolve at quota limit: want status=resolved, got %q", rbody["status"])
+		}
+
+		// Incident closed in DB.
+		var dbStatus string
+		err := env.db.Pool().QueryRow(context.Background(),
+			`SELECT status FROM incidents WHERE id = $1 AND team_id = $2`,
+			incidentID, team.ID.String()).Scan(&dbStatus)
+		if err != nil {
+			t.Fatalf("status lookup: %v", err)
+		}
+		if dbStatus != "resolved" {
+			t.Errorf("want status=resolved in DB, got %q", dbStatus)
+		}
+	})
+
+	t.Run("concurrent_duplicates_create_one_incident", func(t *testing.T) {
+		title := fmt.Sprintf("dedup-test-concurrent-%d", time.Now().UnixNano())
+		const workers = 10
+
+		type result struct {
+			code int
+			body map[string]any
+		}
+		results := make([]result, workers)
+
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		// Start all goroutines simultaneously using a shared gate.
+		gate := make(chan struct{})
+		for i := 0; i < workers; i++ {
+			i := i
+			go func() {
+				defer wg.Done()
+				<-gate
+				code, body := fireAgentWebhook(t, env, team, title, "k8shealth", "")
+				results[i] = result{code, body}
+			}()
+		}
+		close(gate) // release all goroutines at once
+		wg.Wait()
+
+		// Every response must be 202 (accepted or deduplicated).
+		for i, r := range results {
+			if r.code != http.StatusAccepted {
+				t.Errorf("worker %d: want 202, got %d", i, r.code)
+			}
+		}
+
+		// Exactly one row in DB for this title.
+		if n := countIncidentsByTitle(t, env, team.ID.String(), title); n != 1 {
+			t.Errorf("concurrent inserts: want 1 incident row, got %d", n)
+		}
+	})
 }

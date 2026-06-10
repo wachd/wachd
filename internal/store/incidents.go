@@ -17,21 +17,28 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// ErrDuplicateIncident is returned by CreateIncident when a concurrent insert
+// races past the application-level dedup and hits the unique partial index.
+// Callers should treat this as a deduplicated response, not a hard failure.
+var ErrDuplicateIncident = errors.New("duplicate active incident")
 
 // CreateIncident creates a new incident in the database
 func (db *DB) CreateIncident(ctx context.Context, incident *Incident) error {
 	query := `
 		INSERT INTO incidents (
 			id, team_id, title, message, severity, status, source,
-			alert_payload, fired_at, created_at, updated_at
+			alert_payload, fingerprint, fired_at, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 		)
 	`
 
@@ -53,12 +60,17 @@ func (db *DB) CreateIncident(ctx context.Context, incident *Incident) error {
 		incident.Status,
 		incident.Source,
 		incident.AlertPayload,
+		incident.Fingerprint,
 		incident.FiredAt,
 		incident.CreatedAt,
 		incident.UpdatedAt,
 	)
 
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrDuplicateIncident
+		}
 		return fmt.Errorf("failed to create incident: %w", err)
 	}
 
@@ -359,4 +371,66 @@ func (db *DB) IncrementEscalationStep(ctx context.Context, teamID, incidentID uu
 		return false, fmt.Errorf("failed to increment escalation step: %w", err)
 	}
 	return res.RowsAffected() == 1, nil
+}
+
+// FindOpenIncidentByFingerprint returns the most recently fired open, acknowledged,
+// or snoozed incident with the given fingerprint for a team.
+// Returns nil (no error) when no matching incident exists.
+func (db *DB) FindOpenIncidentByFingerprint(ctx context.Context, teamID uuid.UUID, fingerprint string) (*Incident, error) {
+	query := `
+		SELECT
+			id, team_id, title, message, severity, status, source,
+			alert_payload, context, analysis,
+			fired_at, acknowledged_at, resolved_at, snoozed_until,
+			escalation_step, created_at, updated_at, assigned_to
+		FROM incidents
+		WHERE team_id = $1 AND fingerprint = $2
+		  AND status IN ('open', 'acknowledged', 'snoozed')
+		ORDER BY fired_at DESC
+		LIMIT 1
+	`
+	incident := &Incident{}
+	err := db.pool.QueryRow(ctx, query, teamID, fingerprint).Scan(
+		&incident.ID,
+		&incident.TeamID,
+		&incident.Title,
+		&incident.Message,
+		&incident.Severity,
+		&incident.Status,
+		&incident.Source,
+		&incident.AlertPayload,
+		&incident.Context,
+		&incident.Analysis,
+		&incident.FiredAt,
+		&incident.AcknowledgedAt,
+		&incident.ResolvedAt,
+		&incident.SnoozedUntil,
+		&incident.EscalationStep,
+		&incident.CreatedAt,
+		&incident.UpdatedAt,
+		&incident.AssignedTo,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find open incident by fingerprint: %w", err)
+	}
+	return incident, nil
+}
+
+// ResolveIncidentByFingerprint closes any open, acknowledged, or snoozed incident
+// matching the given fingerprint for a team. No-ops silently when no match exists.
+func (db *DB) ResolveIncidentByFingerprint(ctx context.Context, teamID uuid.UUID, fingerprint string) error {
+	now := time.Now().UTC()
+	_, err := db.pool.Exec(ctx, `
+		UPDATE incidents
+		SET status = 'resolved', resolved_at = $1, updated_at = $1
+		WHERE team_id = $2 AND fingerprint = $3
+		  AND status IN ('open', 'acknowledged', 'snoozed')
+	`, now, teamID, fingerprint)
+	if err != nil {
+		return fmt.Errorf("resolve incident by fingerprint: %w", err)
+	}
+	return nil
 }
