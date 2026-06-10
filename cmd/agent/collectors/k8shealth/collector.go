@@ -126,7 +126,26 @@ func (c *Collector) watchPods(ctx context.Context, out chan<- agent.Event) {
 }
 
 func (c *Collector) runPodWatch(ctx context.Context, out chan<- agent.Event) error {
-	watcher, err := c.client.CoreV1().Pods("").Watch(ctx, metav1.ListOptions{})
+	// Initial list — reconcile pods already in a bad state before the watch begins.
+	// The returned ResourceVersion is passed to Watch so no events are missed in
+	// the window between the list snapshot and the watch stream opening.
+	list, err := c.client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list pods: %w", err)
+	}
+	for i := range list.Items {
+		if ev, fire := c.reconcilePod(&list.Items[i]); fire {
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+	}
+
+	watcher, err := c.client.CoreV1().Pods("").Watch(ctx, metav1.ListOptions{
+		ResourceVersion: list.ResourceVersion,
+	})
 	if err != nil {
 		return fmt.Errorf("watch pods: %w", err)
 	}
@@ -226,7 +245,26 @@ func (c *Collector) watchNodes(ctx context.Context, out chan<- agent.Event) {
 }
 
 func (c *Collector) runNodeWatch(ctx context.Context, out chan<- agent.Event) error {
-	watcher, err := c.client.CoreV1().Nodes().Watch(ctx, metav1.ListOptions{})
+	// Initial list — reconcile nodes already in a bad state before the watch begins.
+	// The returned ResourceVersion is passed to Watch so no events are missed in
+	// the window between the list snapshot and the watch stream opening.
+	list, err := c.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list nodes: %w", err)
+	}
+	for i := range list.Items {
+		for _, ev := range c.reconcileNode(&list.Items[i]) {
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+	}
+
+	watcher, err := c.client.CoreV1().Nodes().Watch(ctx, metav1.ListOptions{
+		ResourceVersion: list.ResourceVersion,
+	})
 	if err != nil {
 		return fmt.Errorf("watch nodes: %w", err)
 	}

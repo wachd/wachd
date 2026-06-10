@@ -15,11 +15,13 @@
 package k8shealth
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func newCollector() *Collector {
@@ -278,5 +280,78 @@ func TestWorkloadRef_NoOwner(t *testing.T) {
 	got := workloadRef(p)
 	if got != "Pod/standalone" {
 		t.Errorf("workloadRef = %q, want Pod/standalone", got)
+	}
+}
+
+// --- Start initial-reconcile tests (list+watch gap) ---
+
+// TestStart_InitialPodReconcile verifies that a pod already in CrashLoopBackOff
+// before the collector starts fires an event during the initial List reconcile,
+// not only after a watch event arrives.
+func TestStart_InitialPodReconcile(t *testing.T) {
+	crashPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				waitingCS("app", "CrashLoopBackOff"),
+			},
+		},
+	}
+	client := fake.NewSimpleClientset(crashPod)
+	c := newWithClient(client)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ch, err := c.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Kind != "pod-crash" {
+			t.Errorf("kind = %q, want pod-crash", ev.Kind)
+		}
+		if ev.Severity != "high" {
+			t.Errorf("severity = %q, want high", ev.Severity)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout: expected initial pod reconcile event")
+	}
+}
+
+// TestStart_InitialNodeReconcile verifies that a node already NotReady before
+// the collector starts fires an event during the initial List reconcile.
+func TestStart_InitialNodeReconcile(t *testing.T) {
+	notReadyNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				nodeCondition(corev1.NodeReady, corev1.ConditionFalse, "KubeletNotReady"),
+			},
+		},
+	}
+	client := fake.NewSimpleClientset(notReadyNode)
+	c := newWithClient(client)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ch, err := c.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Kind != "node-notready" {
+			t.Errorf("kind = %q, want node-notready", ev.Kind)
+		}
+		if ev.Severity != "critical" {
+			t.Errorf("severity = %q, want critical", ev.Severity)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout: expected initial node reconcile event")
 	}
 }
