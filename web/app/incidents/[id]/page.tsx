@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
+import IncidentGraphExplorer from '@/components/incident-graph-explorer';
 import SimilarIncidentsPanel from '@/components/similar-incidents-panel';
 import IncidentTimeline from '@/components/incident-timeline';
 import { api } from '@/lib/api';
@@ -344,6 +345,10 @@ export default function IncidentDetailPage() {
 
         {primaryTeamId && (
         <SimilarIncidentsPanel teamId={primaryTeamId} incidentId={incident.id} />
+      )}
+
+      {primaryTeamId && (
+        <IncidentGraphExplorer teamId={primaryTeamId} incidentId={incident.id} />
       )}
 
       {/* Alert Payload */}

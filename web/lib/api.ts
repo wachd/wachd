@@ -145,6 +145,13 @@ export const api = {
       );
       return unwrapGraphData(response) ?? [];
     },
+    subgraph: async (teamId: string, incidentId: string): Promise<IncidentGraph> => {
+      const response = await fetchApi<GraphEnvelope<IncidentGraph> | IncidentGraph>(
+        `/api/v1/teams/${teamId}/incidents/${incidentId}/graph`
+      );
+      return unwrapGraphData(response);
+    },
+
   },
 
   // On-call schedule
