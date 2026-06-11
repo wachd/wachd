@@ -6,6 +6,52 @@ entries:
       category: Monitoring
       licenses: Apache-2.0
     apiVersion: v2
+    appVersion: 0.4.26
+    created: "2026-06-11T12:45:36.513724897Z"
+    dependencies:
+    - condition: postgres.enabled
+      name: postgresql
+      repository: https://charts.bitnami.com/bitnami
+      tags:
+      - database
+      version: 12.x.x
+    - condition: redis.enabled
+      name: redis
+      repository: https://charts.bitnami.com/bitnami
+      tags:
+      - cache
+      version: 18.x.x
+    description: Alert intelligence platform with root cause analysis — self-hosted
+      OpsGenie replacement
+    digest: 56d1e207cdb26e6baac7edb3e635cbf437653f80a9a1bb4c06cd261eb47fc24b
+    home: https://github.com/wachd/wachd
+    icon: https://wachd.io/favicon.svg
+    keywords:
+    - devops
+    - monitoring
+    - alerting
+    - incident-management
+    - sre
+    - on-call
+    - observability
+    - opsgenie
+    - pagerduty
+    - ai
+    maintainers:
+    - email: info@ntcdev.com
+      name: NTC Dev
+    name: wachd
+    sources:
+    - https://github.com/wachd/wachd
+    type: application
+    urls:
+    - https://github.com/wachd/wachd/releases/download/wachd-0.4.28/wachd-0.4.28.tgz
+    version: 0.4.28
+  - annotations:
+      artifacthub.io/prerelease: "false"
+      category: Monitoring
+      licenses: Apache-2.0
+    apiVersion: v2
     appVersion: 0.4.25
     created: "2026-06-11T08:00:39.017721269Z"
     dependencies:
@@ -744,6 +790,33 @@ entries:
       category: Security
       licenses: Apache-2.0
     apiVersion: v2
+    appVersion: 0.4.26
+    created: "2026-06-11T12:45:36.668080262Z"
+    description: Wachd agent — deploys into a customer cluster to watch security tool
+      CRDs and forward findings to central Wachd
+    digest: 14ae8ef44023ad4397e3ea682faf9ffea1b9ba0a7183ece04ab21a31dcc77175
+    home: https://github.com/wachd/wachd
+    keywords:
+    - devops
+    - monitoring
+    - alerting
+    - security
+    - kubescape
+    - on-call
+    maintainers:
+    - email: info@ntcdev.com
+      name: NTC Dev
+    name: wachd-agent
+    sources:
+    - https://github.com/wachd/wachd
+    type: application
+    urls:
+    - https://github.com/wachd/wachd/releases/download/wachd-agent-0.1.3/wachd-agent-0.1.3.tgz
+    version: 0.1.3
+  - annotations:
+      category: Security
+      licenses: Apache-2.0
+    apiVersion: v2
     appVersion: 0.4.25
     created: "2026-06-11T08:00:39.224027296Z"
     description: Wachd agent — deploys into a customer cluster to watch security tool
@@ -794,4 +867,4 @@ entries:
     urls:
     - https://github.com/wachd/wachd/releases/download/wachd-agent-0.1.1/wachd-agent-0.1.1.tgz
     version: 0.1.1
-generated: "2026-06-11T08:00:39.224199465Z"
+generated: "2026-06-11T12:45:36.668219241Z"
