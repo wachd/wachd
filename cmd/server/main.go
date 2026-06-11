@@ -286,9 +286,10 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string, 
 		}
 	}
 
-	// Try Grafana
+	// Try Grafana — require state or ruleName (Grafana-specific fields) to avoid
+	// matching generic payloads that also happen to have a title field.
 	var gf GrafanaWebhook
-	if err := json.Unmarshal(body, &gf); err == nil && (gf.Title != "" || gf.RuleName != "") {
+	if err := json.Unmarshal(body, &gf); err == nil && (gf.State != "" || gf.RuleName != "") {
 		t := gf.Title
 		if t == "" {
 			t = gf.RuleName
@@ -321,7 +322,8 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string, 
 		if sev == "" {
 			sev = "unknown"
 		}
-		return t, msg, sev, "generic", false
+		status, _ := raw["status"].(string)
+		return t, msg, sev, "generic", strings.ToLower(strings.TrimSpace(status)) == "resolved"
 	}
 
 	return "Alert", "", "unknown", "generic", false
