@@ -211,14 +211,22 @@ export default function IncidentGraphExplorer({
             }
 
             const midpoint = edgeMidpoint(from, to);
+            const dx = to.x - from.x;
+            const dy = to.y - from.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const toRadius =
+              to.type === "incident" && to.external_id === incidentId ? 42 : 34;
+            const x2 = to.x - (dx / dist) * (toRadius + 6);
+            const y2 = to.y - (dy / dist) * (toRadius + 6);
 
             return (
               <g key={edge.id}>
                 <line
+                  data-testid={`graph-edge-${edge.id}`}
                   x1={from.x}
                   y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
+                  x2={x2}
+                  y2={y2}
                   stroke="#9ca3af"
                   strokeWidth="2"
                   markerEnd="url(#incident-graph-arrow)"

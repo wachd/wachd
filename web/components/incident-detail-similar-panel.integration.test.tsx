@@ -35,6 +35,18 @@ describe("incident detail similar incidents integration", () => {
         );
       }
 
+      if (url.includes("/graph")) {
+        return Promise.resolve(
+          jsonResponse({
+            data: {
+              nodes: [],
+              edges: [],
+            },
+            error: null,
+          })
+        );
+      }
+
       if (url.includes("/similar")) {
         return Promise.resolve(
           jsonResponse({
@@ -79,7 +91,7 @@ describe("incident detail similar incidents integration", () => {
     expect(await screen.findByText("Checkout database timeout")).toBeInTheDocument();
     expect(await screen.findByText("Similar past incidents")).toBeInTheDocument();
 
-    const link = screen.getByRole("link", { name: /Payment timeout/i });
+    const link = await screen.findByRole("link", { name: /Payment timeout/i });
     expect(link).toHaveAttribute("href", "/incidents/incident-past");
   });
 });

@@ -96,6 +96,12 @@ describe("IncidentGraphExplorer", () => {
     expect(screen.getByText("checkout-api")).toBeInTheDocument();
     expect(screen.getByText("affects")).toBeInTheDocument();
     expect(screen.getByText("similar_to")).toBeInTheDocument();
+
+    const affectsLine = screen.getByTestId("graph-edge-edge-affects");
+    const y2 = Number(affectsLine.getAttribute("y2"));
+
+    expect(y2).toBeGreaterThan(65);
+    expect(y2).toBeLessThan(180);
   });
 
   it("hides itself when the graph has no edges", async () => {
