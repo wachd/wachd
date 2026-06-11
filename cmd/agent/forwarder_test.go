@@ -51,7 +51,7 @@ func TestForwarder_SendUsesCorrectURL(t *testing.T) {
 	srv := newCaptureServer(http.StatusOK)
 	defer srv.Close()
 
-	f := newForwarder(srv.URL, "team-abc", "mysecret")
+	f := newForwarder(srv.URL, "team-abc", "mysecret", "")
 	ev := agent.Event{Title: "test alert", Severity: "high", Source: "kubescape"}
 
 	if err := f.send(context.Background(), ev); err != nil {
@@ -71,7 +71,7 @@ func TestForwarder_SendSetsContentType(t *testing.T) {
 	srv := newCaptureServer(http.StatusOK)
 	defer srv.Close()
 
-	f := newForwarder(srv.URL, "t1", "s1")
+	f := newForwarder(srv.URL, "t1", "s1", "")
 	f.send(context.Background(), agent.Event{Title: "x", Severity: "high", Source: "kubescape"}) //nolint:errcheck
 
 	if !strings.Contains(srv.lastCT, "application/json") {
@@ -83,7 +83,7 @@ func TestForwarder_SendPayloadShape(t *testing.T) {
 	srv := newCaptureServer(http.StatusOK)
 	defer srv.Close()
 
-	f := newForwarder(srv.URL, "t1", "s1")
+	f := newForwarder(srv.URL, "t1", "s1", "")
 	ev := agent.Event{
 		Title:    "Kubescape: 3 vulnerability finding(s) in production/payments-api",
 		Severity: "critical",
@@ -120,7 +120,7 @@ func TestForwarder_SendErrorOnNon2xx(t *testing.T) {
 	srv := newCaptureServer(http.StatusInternalServerError)
 	defer srv.Close()
 
-	f := newForwarder(srv.URL, "t1", "s1")
+	f := newForwarder(srv.URL, "t1", "s1", "")
 	err := f.send(context.Background(), agent.Event{Title: "x", Severity: "high", Source: "kubescape"})
 	if err == nil {
 		t.Fatal("expected error for 500 status, got nil")
@@ -131,7 +131,7 @@ func TestForwarder_SendErrorOn3xx(t *testing.T) {
 	srv := newCaptureServer(http.StatusFound)
 	defer srv.Close()
 
-	f := newForwarder(srv.URL, "t1", "s1")
+	f := newForwarder(srv.URL, "t1", "s1", "")
 	err := f.send(context.Background(), agent.Event{Title: "x", Severity: "high", Source: "kubescape"})
 	if err == nil {
 		t.Fatal("expected error for 302 redirect, got nil")
@@ -140,7 +140,7 @@ func TestForwarder_SendErrorOn3xx(t *testing.T) {
 
 func TestForwarder_SendErrorOnUnreachableEndpoint(t *testing.T) {
 	// Point at a port nothing is listening on.
-	f := newForwarder("http://127.0.0.1:1", "t1", "s1")
+	f := newForwarder("http://127.0.0.1:1", "t1", "s1", "")
 	err := f.send(context.Background(), agent.Event{Title: "x", Severity: "high", Source: "kubescape"})
 	if err == nil {
 		t.Fatal("expected network error, got nil")
@@ -157,10 +157,57 @@ func TestForwarder_SendRespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled
 
-	f := newForwarder(slow.URL, "t1", "s1")
+	f := newForwarder(slow.URL, "t1", "s1", "")
 	err := f.send(ctx, agent.Event{Title: "x", Severity: "high", Source: "kubescape"})
 	if err == nil {
 		t.Fatal("expected error when context is already cancelled")
+	}
+}
+
+func TestForwarder_ClusterLabelInjected(t *testing.T) {
+	srv := newCaptureServer(http.StatusOK)
+	defer srv.Close()
+
+	f := newForwarder(srv.URL, "t1", "s1", "prod-eu")
+	ev := agent.Event{
+		Title:    "test",
+		Severity: "high",
+		Source:   "k8shealth",
+		Labels:   map[string]string{"namespace": "default"},
+	}
+	if err := f.send(context.Background(), ev); err != nil {
+		t.Fatalf("send error: %v", err)
+	}
+
+	var p webhookPayload
+	if err := json.Unmarshal(srv.lastBody, &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if p.Labels["cluster"] != "prod-eu" {
+		t.Errorf("cluster label: want prod-eu, got %q", p.Labels["cluster"])
+	}
+	// Original labels must still be present.
+	if p.Labels["namespace"] != "default" {
+		t.Errorf("namespace label lost, got %v", p.Labels)
+	}
+}
+
+func TestForwarder_ClusterLabelNotInjectedWhenEmpty(t *testing.T) {
+	srv := newCaptureServer(http.StatusOK)
+	defer srv.Close()
+
+	f := newForwarder(srv.URL, "t1", "s1", "")
+	ev := agent.Event{Title: "test", Severity: "high", Source: "k8shealth"}
+	if err := f.send(context.Background(), ev); err != nil {
+		t.Fatalf("send error: %v", err)
+	}
+
+	var p webhookPayload
+	if err := json.Unmarshal(srv.lastBody, &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := p.Labels["cluster"]; ok {
+		t.Errorf("cluster label must not be present when cluster is empty, got %v", p.Labels)
 	}
 }
 
@@ -171,7 +218,7 @@ func TestForwarder_SecretNotInLogs(t *testing.T) {
 	srv := newCaptureServer(http.StatusOK)
 	defer srv.Close()
 
-	f := newForwarder(srv.URL, "t1", "supersecret")
+	f := newForwarder(srv.URL, "t1", "supersecret", "")
 	f.send(context.Background(), agent.Event{Title: "x", Severity: "high", Source: "kubescape"}) //nolint:errcheck
 
 	if !strings.Contains(srv.lastPath, "supersecret") {

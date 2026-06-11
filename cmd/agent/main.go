@@ -23,9 +23,12 @@
 //
 // Optional:
 //
-//	KUBESCAPE_ENABLED    — set to "false" to disable the Kubescape collector (default: enabled)
-//	KUBESCAPE_NAMESPACE  — namespace where Kubescape is installed (default: "kubescape")
+//	KUBESCAPE_ENABLED      — set to "false" to disable the Kubescape collector (default: enabled)
+//	KUBESCAPE_NAMESPACE    — namespace where Kubescape is installed (default: "kubescape")
 //	KUBESCAPE_MIN_SEVERITY — minimum severity to fire on: "high" or "critical" (default: "high")
+//	K8SHEALTH_ENABLED        — set to "false" to disable the pod/node health collector (default: enabled)
+//	K8SHEALTH_PENDING_MINUTES — minutes before a stuck-Pending pod fires an alert (default: 15)
+//	WACHD_CLUSTER            — cluster identifier injected as a label on every event, e.g. "prod-eu" (default: unset)
 package main
 
 import (
@@ -35,6 +38,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/wachd/wachd/cmd/agent/collectors/k8shealth"
 	"github.com/wachd/wachd/cmd/agent/collectors/kubescape"
 	"github.com/wachd/wachd/internal/agent"
 )
@@ -46,11 +50,25 @@ func main() {
 	endpoint := mustEnv("WACHD_ENDPOINT")
 	teamID := mustEnv("WACHD_TEAM_ID")
 	secret := mustEnv("WACHD_WEBHOOK_SECRET")
+	cluster := os.Getenv("WACHD_CLUSTER") // optional — injected as "cluster" label on every event
 
-	fwd := newForwarder(endpoint, teamID, secret)
+	fwd := newForwarder(endpoint, teamID, secret, cluster)
 
 	// merged receives events from all active collectors.
 	merged := make(chan agent.Event, 64)
+
+	if os.Getenv("K8SHEALTH_ENABLED") != "false" {
+		kh, err := k8shealth.New()
+		if err != nil {
+			log.Fatalf("k8shealth collector: %v", err)
+		}
+		ch, err := kh.Start(ctx)
+		if err != nil {
+			log.Fatalf("k8shealth collector start: %v", err)
+		}
+		go fanIn(ctx, ch, merged)
+		log.Printf("k8shealth collector started (pending threshold: %dm)", kh.PendingMinutes())
+	}
 
 	if os.Getenv("KUBESCAPE_ENABLED") != "false" {
 		ks, err := kubescape.New()

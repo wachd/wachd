@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"time"
 
@@ -33,14 +34,16 @@ type Forwarder struct {
 	endpoint string // e.g. https://wachd.company.internal
 	teamID   string
 	secret   string
+	cluster  string // optional — injected into every outgoing event's labels
 	client   *http.Client
 }
 
-func newForwarder(endpoint, teamID, secret string) *Forwarder {
+func newForwarder(endpoint, teamID, secret, cluster string) *Forwarder {
 	return &Forwarder{
 		endpoint: endpoint,
 		teamID:   teamID,
 		secret:   secret,
+		cluster:  cluster,
 		client:   &http.Client{Timeout: 15 * time.Second},
 	}
 }
@@ -55,12 +58,18 @@ type webhookPayload struct {
 
 // send posts a single Event to central Wachd. Returns an error on non-2xx or network failure.
 func (f *Forwarder) send(ctx context.Context, ev agent.Event) error {
+	labels := ev.Labels
+	if f.cluster != "" {
+		labels = make(map[string]string, len(ev.Labels)+1)
+		maps.Copy(labels, ev.Labels)
+		labels["cluster"] = f.cluster
+	}
 	p := webhookPayload{
 		Title:    ev.Title,
 		Message:  ev.Details,
 		Severity: ev.Severity,
 		Source:   ev.Source,
-		Labels:   ev.Labels,
+		Labels:   labels,
 	}
 	body, err := json.Marshal(p)
 	if err != nil {

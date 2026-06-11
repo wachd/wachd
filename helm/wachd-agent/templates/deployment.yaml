@@ -40,12 +40,20 @@ spec:
                 secretKeyRef:
                   name: {{ if .Values.wachd.existingSecret }}{{ .Values.wachd.existingSecret }}{{ else }}{{ include "wachd-agent.fullname" . }}-secret{{ end }}
                   key: WACHD_WEBHOOK_SECRET
+            {{- if .Values.wachd.cluster }}
+            - name: WACHD_CLUSTER
+              value: {{ .Values.wachd.cluster | quote }}
+            {{- end }}
             - name: KUBESCAPE_ENABLED
               value: {{ .Values.kubescape.enabled | quote }}
             - name: KUBESCAPE_NAMESPACE
               value: {{ .Values.kubescape.namespace | quote }}
             - name: KUBESCAPE_MIN_SEVERITY
               value: {{ .Values.kubescape.minSeverity | quote }}
+            - name: K8SHEALTH_ENABLED
+              value: {{ .Values.k8shealth.enabled | quote }}
+            - name: K8SHEALTH_PENDING_MINUTES
+              value: {{ .Values.k8shealth.pendingMinutes | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
