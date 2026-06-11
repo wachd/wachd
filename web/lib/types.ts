@@ -170,3 +170,19 @@ export interface TimelineEvent {
   detail?: string;
   meta?: Record<string, string>;
 }
+
+
+export interface GraphService {
+  id: string;
+  name: string;
+  label: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GraphServiceInput {
+  name: string;
+  label?: string;
+  description?: string;
+}

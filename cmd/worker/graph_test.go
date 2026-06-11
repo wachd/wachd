@@ -291,7 +291,7 @@ func TestWriteIncidentEdges_WritesSimilarToEdges(t *testing.T) {
 		},
 	}
 
-	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, &correlator.Context{}, nil); err != nil {
+	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, "", &correlator.Context{}, nil); err != nil {
 		t.Fatalf("writeIncidentEdges: %v", err)
 	}
 	if !gs.upsertEdgeCalled {
@@ -322,7 +322,7 @@ func TestWriteIncidentEdges_NoEdgesWhenFindSimilarReturnsEmpty(t *testing.T) {
 	gs := &mockGraphStore{
 		findSimilarNodes: []*graph.SimilarNode{},
 	}
-	if err := writeIncidentEdges(context.Background(), gs, uuid.New(), uuid.New(), &correlator.Context{}, nil); err != nil {
+	if err := writeIncidentEdges(context.Background(), gs, uuid.New(), uuid.New(), "", &correlator.Context{}, nil); err != nil {
 		t.Fatalf("writeIncidentEdges: %v", err)
 	}
 	if gs.upsertEdgeCalled {
@@ -342,7 +342,7 @@ func TestWriteIncidentEdges_WritesCausedByEdge(t *testing.T) {
 	}
 	analysis := &ai.AnalysisResponse{IsDeploymentCause: true}
 
-	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, sanitizedCtx, analysis); err != nil {
+	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, "", sanitizedCtx, analysis); err != nil {
 		t.Fatalf("writeIncidentEdges: %v", err)
 	}
 
@@ -375,7 +375,7 @@ func TestWriteIncidentEdges_NoCausedByWhenNotDeploymentCause(t *testing.T) {
 	}
 	analysis := &ai.AnalysisResponse{IsDeploymentCause: false}
 
-	if err := writeIncidentEdges(context.Background(), gs, uuid.New(), uuid.New(), sanitizedCtx, analysis); err != nil {
+	if err := writeIncidentEdges(context.Background(), gs, uuid.New(), uuid.New(), "", sanitizedCtx, analysis); err != nil {
 		t.Fatalf("writeIncidentEdges: %v", err)
 	}
 	// No similar nodes, not a deployment cause → no edges at all.
@@ -397,7 +397,7 @@ func TestWriteIncidentEdges_FindSimilarErrorDoesNotBlockCausedBy(t *testing.T) {
 	analysis := &ai.AnalysisResponse{IsDeploymentCause: true}
 
 	// FindSimilar fails, but caused_by should still be written.
-	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, sanitizedCtx, analysis); err != nil {
+	if err := writeIncidentEdges(context.Background(), gs, teamID, nodeID, "", sanitizedCtx, analysis); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !gs.upsertEdgeCalled {

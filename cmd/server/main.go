@@ -625,11 +625,15 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/config", server.handleUpsertTeamConfig).Methods("PUT")
 	apiRouter.HandleFunc("/{teamId}/graph/config", server.handleGetGraphConfig).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/graph/config", server.handleUpsertGraphConfig).Methods("PUT")
+	apiRouter.HandleFunc("/{teamId}/graph/services", server.handleListGraphServices).Methods("GET")
+	apiRouter.HandleFunc("/{teamId}/graph/services", server.handleCreateGraphService).Methods("POST")
+	apiRouter.HandleFunc("/{teamId}/graph/services/{nodeId}", server.handleDeleteGraphService).Methods("DELETE")
 	apiRouter.HandleFunc("/{teamId}/graph/nodes", server.handleListGraphNodes).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/graph/nodes/{nodeId}", server.handleDeleteGraphNode).Methods("DELETE")
 	apiRouter.HandleFunc("/{teamId}/config/test-notification", server.handleTestNotification).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleGetEscalationPolicy).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/escalation", server.handleUpsertEscalationPolicy).Methods("PUT")
+
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/similar", server.handleGetSimilarIncidents).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/graph", server.handleGetIncidentGraph).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/promote", server.handlePromoteIncidentGraphNode).Methods("POST")
@@ -637,6 +641,13 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleListServiceDependencies).Methods("GET")
 	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleCreateServiceDependency).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/dependencies/{depId}", server.handleDeleteServiceDependency).Methods("DELETE")
+
+	apiRouter.HandleFunc("/{teamId}/incidents/{incidentId}/timeline", server.handleGetIncidentTimeline).Methods("GET")
+
+	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleListServiceDependencies).Methods("GET")
+	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleCreateServiceDependency).Methods("POST")
+	apiRouter.HandleFunc("/{teamId}/dependencies/{depId}", server.handleDeleteServiceDependency).Methods("DELETE")
+
 
 	// Wrap router with CORS middleware
 	handler := corsMiddleware(router)

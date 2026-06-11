@@ -26,6 +26,15 @@ describe("incident detail similar incidents integration", () => {
 
   beforeEach(() => {
     fetchMock = vi.fn((url: string) => {
+      if (url.includes("/timeline")) {
+        return Promise.resolve(
+          jsonResponse({
+            data: [],
+            error: null,
+          })
+        );
+      }
+
       if (url.includes("/similar")) {
         return Promise.resolve(
           jsonResponse({
