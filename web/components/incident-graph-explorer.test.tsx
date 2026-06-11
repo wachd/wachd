@@ -128,6 +128,21 @@ describe("IncidentGraphExplorer", () => {
     });
   });
 
+  it("does not navigate when the current incident node is clicked", async () => {
+    fetchMock.mockResolvedValueOnce(envelope(graph));
+
+    render(<IncidentGraphExplorer teamId="team-1" incidentId="incident-current" />);
+
+    expect(await screen.findByText("Checkout outage")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Open incident Checkout outage" })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Checkout outage"));
+
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
   it("navigates when an incident node is clicked", async () => {
     fetchMock.mockResolvedValueOnce(envelope(graph));
 

@@ -147,7 +147,7 @@ export const api = {
     },
     subgraph: async (teamId: string, incidentId: string): Promise<IncidentGraph> => {
       const response = await fetchApi<GraphEnvelope<IncidentGraph> | IncidentGraph>(
-        `/api/v1/teams/${teamId}/incidents/${incidentId}/graph`
+        `/api/v1/teams/${teamId}/incidents/${incidentId}/graph?depth=1`
       );
       return unwrapGraphData(response);
     },

@@ -231,6 +231,7 @@ export default function IncidentGraphExplorer({
                   strokeWidth="2"
                   markerEnd="url(#incident-graph-arrow)"
                 />
+                {/* TODO(graph): size this background from label length if longer edge types are added. */}
                 <rect
                   x={midpoint.x - 45}
                   y={midpoint.y - 11}
@@ -254,7 +255,10 @@ export default function IncidentGraphExplorer({
 
           {positionedNodes.map((node) => {
             const highlighted = node.type === "incident" && node.external_id === incidentId;
-            const clickable = node.type === "incident" && Boolean(node.external_id);
+            const clickable =
+              node.type === "incident" &&
+              Boolean(node.external_id) &&
+              node.external_id !== incidentId;
 
             const content = (
               <>
