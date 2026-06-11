@@ -216,8 +216,8 @@ func TestParseWebhookPayload_DatadogResolvedReturnsTrue(t *testing.T) {
 func TestIncidentFingerprint_Deterministic(t *testing.T) {
 	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 
-	a := incidentFingerprint(id, "grafana", "CPU above threshold")
-	b := incidentFingerprint(id, "grafana", "CPU above threshold")
+	a := incidentFingerprint(id, "grafana", "CPU above threshold", "")
+	b := incidentFingerprint(id, "grafana", "CPU above threshold", "")
 
 	if a != b {
 		t.Errorf("fingerprint not deterministic: %q != %q", a, b)
@@ -230,8 +230,8 @@ func TestIncidentFingerprint_Deterministic(t *testing.T) {
 func TestIncidentFingerprint_NormalizesTitle(t *testing.T) {
 	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 
-	a := incidentFingerprint(id, "grafana", "CPU Above Threshold")
-	b := incidentFingerprint(id, "grafana", "  cpu above threshold  ")
+	a := incidentFingerprint(id, "grafana", "CPU Above Threshold", "")
+	b := incidentFingerprint(id, "grafana", "  cpu above threshold  ", "")
 
 	if a != b {
 		t.Errorf("fingerprint should normalize title case and whitespace: %q != %q", a, b)
@@ -242,8 +242,8 @@ func TestIncidentFingerprint_DifferentTeamsDiffer(t *testing.T) {
 	id1 := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	id2 := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 
-	a := incidentFingerprint(id1, "grafana", "CPU above threshold")
-	b := incidentFingerprint(id2, "grafana", "CPU above threshold")
+	a := incidentFingerprint(id1, "grafana", "CPU above threshold", "")
+	b := incidentFingerprint(id2, "grafana", "CPU above threshold", "")
 
 	if a == b {
 		t.Error("fingerprints for different teams must differ")
@@ -253,10 +253,32 @@ func TestIncidentFingerprint_DifferentTeamsDiffer(t *testing.T) {
 func TestIncidentFingerprint_DifferentSourcesDiffer(t *testing.T) {
 	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 
-	a := incidentFingerprint(id, "grafana", "CPU above threshold")
-	b := incidentFingerprint(id, "datadog", "CPU above threshold")
+	a := incidentFingerprint(id, "grafana", "CPU above threshold", "")
+	b := incidentFingerprint(id, "datadog", "CPU above threshold", "")
 
 	if a == b {
 		t.Error("fingerprints for different sources must differ")
+	}
+}
+
+func TestIncidentFingerprint_DifferentServicesDiffer(t *testing.T) {
+	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+
+	a := incidentFingerprint(id, "generic", "High error rate", "checkout-api")
+	b := incidentFingerprint(id, "generic", "High error rate", "payment-service")
+
+	if a == b {
+		t.Error("same title from different services must produce different fingerprints")
+	}
+}
+
+func TestIncidentFingerprint_NormalizesService(t *testing.T) {
+	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+
+	a := incidentFingerprint(id, "generic", "High error rate", "Checkout-API")
+	b := incidentFingerprint(id, "generic", "High error rate", "  checkout-api  ")
+
+	if a != b {
+		t.Errorf("fingerprint should normalize service case and whitespace: %q != %q", a, b)
 	}
 }

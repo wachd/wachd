@@ -286,9 +286,10 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string, 
 		}
 	}
 
-	// Try Grafana
+	// Try Grafana — require state or ruleName (Grafana-specific fields) to avoid
+	// matching generic payloads that also happen to have a title field.
 	var gf GrafanaWebhook
-	if err := json.Unmarshal(body, &gf); err == nil && (gf.Title != "" || gf.RuleName != "") {
+	if err := json.Unmarshal(body, &gf); err == nil && (gf.State != "" || gf.RuleName != "") {
 		t := gf.Title
 		if t == "" {
 			t = gf.RuleName
@@ -321,7 +322,8 @@ func parseWebhookPayload(body []byte) (title, message, severity, source string, 
 		if sev == "" {
 			sev = "unknown"
 		}
-		return t, msg, sev, "generic", false
+		status, _ := raw["status"].(string)
+		return t, msg, sev, "generic", strings.ToLower(strings.TrimSpace(status)) == "resolved"
 	}
 
 	return "Alert", "", "unknown", "generic", false
@@ -736,11 +738,18 @@ func writeForbidden(w http.ResponseWriter) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
 }
 
-// incidentFingerprint returns a SHA-256 hex digest of team+source+title.
-// Used to deduplicate firing alerts and match resolved events to open incidents.
-func incidentFingerprint(teamID uuid.UUID, source, title string) string {
+// incidentFingerprint returns a SHA-256 hex digest of team+source+title+service.
+// The service component prevents same-title alerts from different services collapsing
+// into a single incident. Pass "" when the payload has no service field — the
+// separator is always included so the hash space stays consistent across versions.
+func incidentFingerprint(teamID uuid.UUID, source, title, service string) string {
 	h := sha256.New()
-	_, _ = fmt.Fprintf(h, "%s|%s|%s", teamID.String(), source, strings.ToLower(strings.TrimSpace(title)))
+	_, _ = fmt.Fprintf(h, "%s|%s|%s|%s",
+		teamID.String(),
+		source,
+		strings.ToLower(strings.TrimSpace(title)),
+		strings.ToLower(strings.TrimSpace(service)),
+	)
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -792,7 +801,15 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Parse webhook — auto-detects Grafana, Datadog, or generic format
 	title, message, severity, source, resolved := parseWebhookPayload(body)
 
-	fingerprint := incidentFingerprint(teamID, source, title)
+	// Extract top-level service field for fingerprinting.
+	// Prevents same-title alerts from different services collapsing into one incident.
+	var rawPayload map[string]any
+	fingerprintService := ""
+	if json.Unmarshal(body, &rawPayload) == nil {
+		fingerprintService, _ = rawPayload["service"].(string)
+	}
+
+	fingerprint := incidentFingerprint(teamID, source, title, fingerprintService)
 
 	// Resolve path — find and close the matching open incident, no new row created.
 	// Runs before quota check: a resolved webhook must always be able to close an

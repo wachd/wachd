@@ -521,7 +521,11 @@ func (w *Worker) extractServiceName(incident *store.Incident) string {
 			}
 			return ""
 		},
-		// 5. Kubernetes deployment label (commonLabels or alerts[0].labels)
+		// 5. Generic webhook: top-level service field
+		func() string {
+			return strVal(payload, "service")
+		},
+		// 6. Kubernetes deployment label (commonLabels or alerts[0].labels)
 		func() string {
 			for _, src := range []string{"commonLabels", "labels"} {
 				if m, ok := payload[src].(map[string]interface{}); ok {
