@@ -37,12 +37,16 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    # Start the server, wait for it to be ready, then pull the model.
+    # The ollama_data volume caches the model — subsequent starts skip the download.
+    entrypoint: ["/bin/sh", "-c", "ollama serve & until ollama list > /dev/null 2>&1; do sleep 1; done && ollama pull ${OLLAMA_MODEL:-llama3.2} && wait"]
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3:mini}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
       timeout: 10s
       retries: 3
-    # After starting, pull a model: docker exec wachd-ollama ollama pull llama3.2
 
   # ── Application services ──────────────────────────────────────────────────────
   # Started with: docker compose --profile app up -d
@@ -64,8 +68,8 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
       AI_BACKEND: ${AI_BACKEND:-ollama}
-      OLLAMA_ENDPOINT: ${OLLAMA_ENDPOINT:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_ENDPOINT: ${OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3:mini}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       LICENSE_KEY: ${LICENSE_KEY:-}
@@ -103,8 +107,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://wachd:wachd_dev_password@postgres:5432/wachd?sslmode=disable}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       AI_BACKEND: ${AI_BACKEND:-ollama}
-      OLLAMA_ENDPOINT: ${OLLAMA_ENDPOINT:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_ENDPOINT: ${OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3:mini}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}

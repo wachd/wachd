@@ -55,7 +55,7 @@ func TestHandleGetSimilarIncidents_NoGraphNodesReturnsEmptyArray(t *testing.T) {
 		t.Fatalf("CreateTeam: %v", err)
 	}
 	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
-	incident := &store.Incident{TeamID: team.ID, Title: "Payment timeout", Severity: "critical", Status: "resolved", Source: "grafana", FiredAt: time.Now().UTC()}
+	incident := &store.Incident{TeamID: team.ID, Title: "Payment timeout", Severity: "critical", Status: "resolved", Source: "grafana", FiredAt: time.Now().UTC(), AlertPayload: []byte("{}")}
 	if err := db.CreateIncident(ctx, incident); err != nil {
 		t.Fatalf("CreateIncident: %v", err)
 	}
