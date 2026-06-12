@@ -2,8 +2,8 @@ apiVersion: v2
 name: wachd-agent
 description: Wachd agent — deploys into a customer cluster to watch security tool CRDs and forward findings to central Wachd
 type: application
-version: 0.1.3
-appVersion: "0.4.26"
+version: 0.1.4
+appVersion: "0.4.27"
 keywords:
   - devops
   - monitoring
