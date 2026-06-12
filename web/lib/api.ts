@@ -145,6 +145,13 @@ export const api = {
       );
       return unwrapGraphData(response) ?? [];
     },
+    subgraph: async (teamId: string, incidentId: string): Promise<IncidentGraph> => {
+      const response = await fetchApi<GraphEnvelope<IncidentGraph> | IncidentGraph>(
+        `/api/v1/teams/${teamId}/incidents/${incidentId}/graph?depth=1`
+      );
+      return unwrapGraphData(response);
+    },
+
   },
 
   // On-call schedule
@@ -370,12 +377,7 @@ export const api = {
       );
       return unwrapGraphData(response) ?? [];
     },
-    getIncidentGraph: async (teamId: string, incidentId: string): Promise<IncidentGraph> => {
-      const response = await fetchApi<GraphEnvelope<IncidentGraph> | IncidentGraph>(
-        `/api/v1/teams/${teamId}/incidents/${incidentId}/graph`
-      );
-      return unwrapGraphData(response);
-    },
+
     getConfig: async (teamId: string): Promise<GraphConfig> => {
       const response = await fetchApi<GraphEnvelope<GraphConfig> | GraphConfig>(
         `/api/v1/teams/${teamId}/graph/config`
