@@ -368,7 +368,7 @@ The server **automatically creates all database tables on first startup** — no
 ║  Webhook secret: <secret>                            ║
 ╠══════════════════════════════════════════════════════╣
 ║  Send alerts to:                                     ║
-║  POST /api/v1/webhook/<uuid>/                        ║
+║  POST /api/v1/webhook/<uuid>/<secret>                ║
 ╚══════════════════════════════════════════════════════╝
 ```
 

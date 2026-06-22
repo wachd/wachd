@@ -3063,8 +3063,7 @@ func bootstrapFirstTeam(db *store.DB) error {
 	log.Printf("║  Webhook secret: %-35s  ║", secret)
 	log.Println("╠══════════════════════════════════════════════════════╣")
 	log.Println("║  Send alerts to:                                     ║")
-	log.Printf("║  POST /api/v1/webhook/%s/  ║", team.ID)
-	log.Printf("║  Header or path secret: %-28s  ║", secret)
+	log.Printf("║  POST /api/v1/webhook/%s/%s  ║", team.ID, secret)
 	log.Println("╚══════════════════════════════════════════════════════╝")
 
 	return nil
