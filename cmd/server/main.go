@@ -2899,6 +2899,8 @@ func migrateLegacyEntraConfig(ctx context.Context, db *store.DB, enc *auth.Encry
 // bootstrapAdmin creates the initial superadmin local user on first run.
 // It only runs when the local_users table is empty and prints the generated
 // password to stdout ONCE — it is never stored in plaintext again.
+// If WACHD_INITIAL_ADMIN_PASSWORD is set and passes policy, it is used directly
+// and forcePasswordChange is skipped (useful for automated provisioning).
 func bootstrapAdmin(ctx context.Context, db *store.DB) error {
 	count, err := db.CountLocalUsers(ctx)
 	if err != nil {
@@ -2908,9 +2910,20 @@ func bootstrapAdmin(ctx context.Context, db *store.DB) error {
 		return nil // already bootstrapped
 	}
 
-	password, err := generateAdminPassword()
-	if err != nil {
-		return fmt.Errorf("generate admin password: %w", err)
+	var password string
+	forcePasswordChange := true
+
+	if injected := os.Getenv("WACHD_INITIAL_ADMIN_PASSWORD"); injected != "" {
+		if err := validateDefaultPolicy(injected); err != nil {
+			return fmt.Errorf("WACHD_INITIAL_ADMIN_PASSWORD does not meet policy: %w", err)
+		}
+		password = injected
+		forcePasswordChange = false
+	} else {
+		password, err = generateAdminPassword()
+		if err != nil {
+			return fmt.Errorf("generate admin password: %w", err)
+		}
 	}
 
 	hash, err := auth.HashPassword(password)
@@ -2923,8 +2936,8 @@ func bootstrapAdmin(ctx context.Context, db *store.DB) error {
 		"admin@wachd.local",
 		"Wachd Admin",
 		hash,
-		true, // isSuperAdmin
-		true, // forcePasswordChange — must change on first login
+		true,                // isSuperAdmin
+		forcePasswordChange, // false when injected via env var
 	)
 	if err != nil {
 		return fmt.Errorf("create bootstrap admin: %w", err)
@@ -2934,10 +2947,14 @@ func bootstrapAdmin(ctx context.Context, db *store.DB) error {
 	log.Println("║      WACHD — BOOTSTRAP ADMIN CREATED          ║")
 	log.Println("╠════════════════════════════════════════════════╣")
 	log.Printf("║  Username: %-35s║", "wachd_admin")
-	log.Printf("║  Password: %-35s║", password)
-	log.Println("╠════════════════════════════════════════════════╣")
-	log.Println("║  ⚠  Change this password immediately!         ║")
-	log.Println("║  POST /auth/local/login  (then /change-password)║")
+	if forcePasswordChange {
+		log.Printf("║  Password: %-35s║", password)
+		log.Println("╠════════════════════════════════════════════════╣")
+		log.Println("║  ⚠  Change this password immediately!         ║")
+		log.Println("║  POST /auth/local/login  (then /change-password)║")
+	} else {
+		log.Println("║  Password: (set via WACHD_INITIAL_ADMIN_PASSWORD) ║")
+	}
 	log.Println("╚════════════════════════════════════════════════╝")
 
 	return nil
@@ -2988,6 +3005,40 @@ func generateAdminPassword() (string, error) {
 	}
 
 	return string(buf), nil
+}
+
+// validateDefaultPolicy checks that pw meets the built-in minimum complexity:
+// at least 12 characters containing upper, lower, digit, and special character.
+func validateDefaultPolicy(pw string) error {
+	if len(pw) < 12 {
+		return fmt.Errorf("must be at least 12 characters")
+	}
+	var hasUpper, hasLower, hasDigit, hasSpecial bool
+	for _, c := range pw {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		case c >= 'a' && c <= 'z':
+			hasLower = true
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+	if !hasUpper {
+		return fmt.Errorf("must contain at least one uppercase letter")
+	}
+	if !hasLower {
+		return fmt.Errorf("must contain at least one lowercase letter")
+	}
+	if !hasDigit {
+		return fmt.Errorf("must contain at least one digit")
+	}
+	if !hasSpecial {
+		return fmt.Errorf("must contain at least one special character")
+	}
+	return nil
 }
 
 // bootstrapGroupMappings seeds group mappings from numbered env vars written by the Helm configmap.
