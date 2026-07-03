@@ -518,6 +518,8 @@ func main() {
 		profileRouter.HandleFunc("/notification-rules", server.handleCreateNotificationRule).Methods("POST")
 		profileRouter.HandleFunc("/notification-rules/{id}", server.handleUpdateNotificationRule).Methods("PUT")
 		profileRouter.HandleFunc("/notification-rules/{id}", server.handleDeleteNotificationRule).Methods("DELETE")
+		profileRouter.HandleFunc("/push-tokens", server.handleRegisterPushToken).Methods("POST")
+		profileRouter.HandleFunc("/push-tokens/{token}", server.handleDeregisterPushToken).Methods("DELETE")
 
 		// Superadmin-only routes
 		superRouter := router.PathPrefix("/api/v1/admin").Subrouter()
@@ -3171,13 +3173,13 @@ func (s *Server) handleCreateNotificationRule(w http.ResponseWriter, r *http.Req
 		return
 	}
 	validEvents := map[string]bool{"new_alert": true, "ack": true, "resolve": true}
-	validChannels := map[string]bool{"email": true, "sms": true, "voice": true, "slack": true}
+	validChannels := map[string]bool{"email": true, "sms": true, "voice": true, "slack": true, "push": true}
 	if !validEvents[req.EventType] {
 		http.Error(w, "event_type must be one of: new_alert, ack, resolve", http.StatusBadRequest)
 		return
 	}
 	if !validChannels[req.Channel] {
-		http.Error(w, "channel must be one of: email, sms, voice, slack", http.StatusBadRequest)
+		http.Error(w, "channel must be one of: email, sms, voice, slack, push", http.StatusBadRequest)
 		return
 	}
 	if req.DelayMinutes < 0 || req.DelayMinutes > 1440 {
@@ -3292,6 +3294,71 @@ func (s *Server) handleDeleteNotificationRule(w http.ResponseWriter, r *http.Req
 
 	if err := s.db.DeleteUserNotificationRule(r.Context(), ruleID, userID, userSource); err != nil {
 		http.Error(w, "Rule not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── APNs push token registration ─────────────────────────────────────────────
+
+func (s *Server) handleRegisterPushToken(w http.ResponseWriter, r *http.Request) {
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, userSource := sessionIdentity(sess)
+
+	var req struct {
+		Token    string    `json:"token"`
+		Platform string    `json:"platform"`
+		TeamID   uuid.UUID `json:"team_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Token == "" {
+		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+	if req.Platform != "ios" && req.Platform != "android" {
+		http.Error(w, "platform must be ios or android", http.StatusBadRequest)
+		return
+	}
+	if req.TeamID == uuid.Nil {
+		http.Error(w, "team_id is required", http.StatusBadRequest)
+		return
+	}
+
+	pt, err := s.db.SavePushToken(r.Context(), userID, userSource, req.Token, req.Platform, req.TeamID)
+	if err != nil {
+		log.Printf("save push token: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": pt})
+}
+
+func (s *Server) handleDeregisterPushToken(w http.ResponseWriter, r *http.Request) {
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, userSource := sessionIdentity(sess)
+
+	token := mux.Vars(r)["token"]
+	if token == "" {
+		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.DeletePushToken(r.Context(), userID, userSource, token); err != nil {
+		// Token not found or not owned by this user — return 204 (idempotent delete)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -318,6 +318,18 @@ type APIToken struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
+// UserPushToken is an APNs/FCM device token registered by the mobile app.
+// A user may register multiple devices; all are notified on incident creation.
+type UserPushToken struct {
+	ID         uuid.UUID `json:"id"`
+	UserID     uuid.UUID `json:"user_id"`
+	UserSource string    `json:"user_source"`
+	Token      string    `json:"token"`
+	Platform   string    `json:"platform"` // "ios" | "android"
+	TeamID     uuid.UUID `json:"team_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // UserNotificationRule defines how a specific user wants to be notified for a
 // given event type and channel. Delay of 0 means fire immediately; > 0 means
 // queue for later (only sent if the incident is still open/unacked).

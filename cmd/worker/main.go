@@ -47,6 +47,8 @@ type Worker struct {
 	emailNotifier *notify.EmailNotifier
 	smsNotifier   *notify.SMSNotifier
 	voiceNotifier *notify.VoiceNotifier
+	apnsNotifier  *notify.APNsNotifier
+	fcmNotifier   *notify.FCMNotifier
 	sanitiser     *sanitiser.Sanitiser
 	correlator    *correlator.Correlator
 	graphStore    graph.Store
@@ -130,6 +132,18 @@ func main() {
 	if twilioSID != "" && twilioToken != "" && twilioFrom != "" && twimlURL != "" {
 		voiceNotifier = notify.NewVoiceNotifier(twilioSID, twilioToken, twilioFrom, twimlURL)
 		log.Println("✓ Voice call notifier configured (Twilio)")
+	}
+
+	// APNs push notifier (iOS mobile)
+	apnsNotifier := notify.NewAPNsNotifier()
+	if apnsNotifier != nil {
+		log.Println("✓ APNs push notifier configured")
+	}
+
+	// FCM push notifier (Android mobile)
+	fcmNotifier := notify.NewFCMNotifier()
+	if fcmNotifier != nil {
+		log.Println("✓ FCM push notifier configured")
 	}
 
 	// PII sanitiser + correlator
@@ -247,6 +261,8 @@ func main() {
 		emailNotifier: emailNotifier,
 		smsNotifier:   smsNotifier,
 		voiceNotifier: voiceNotifier,
+		apnsNotifier:  apnsNotifier,
+		fcmNotifier:   fcmNotifier,
 		sanitiser:     san,
 		correlator:    cor,
 		graphStore:    graph.NewPostgresStore(db.Pool()),
@@ -546,6 +562,36 @@ func (w *Worker) fireChannel(ctx context.Context, channel string, incident *stor
 			} else {
 				log.Printf("  ✓ Voice call initiated")
 			}
+		}
+	case "push":
+		tokens, err := w.db.GetPushTokensByUserID(ctx, user.ID, user.Source)
+		if err != nil {
+			log.Printf("push: failed to load tokens: %v", err)
+			break
+		}
+		if len(tokens) == 0 {
+			break
+		}
+		body := incident.Title
+		if incident.Severity != "" && incident.Severity != "unknown" {
+			body = "[" + incident.Severity + "] " + incident.Title
+		}
+		var iosTokens, androidTokens []string
+		for _, t := range tokens {
+			switch t.Platform {
+			case "ios":
+				iosTokens = append(iosTokens, t.Token)
+			case "android":
+				androidTokens = append(androidTokens, t.Token)
+			}
+		}
+		if len(iosTokens) > 0 && w.apnsNotifier != nil {
+			failed := w.apnsNotifier.SendIncidentPush(ctx, iosTokens, incident.ID, "New Incident", body)
+			log.Printf("  ✓ APNs push: %d/%d devices", len(iosTokens)-len(failed), len(iosTokens))
+		}
+		if len(androidTokens) > 0 && w.fcmNotifier != nil {
+			failed := w.fcmNotifier.SendIncidentPush(ctx, androidTokens, incident.ID, "New Incident", body)
+			log.Printf("  ✓ FCM push: %d/%d devices", len(androidTokens)-len(failed), len(androidTokens))
 		}
 	default:
 		log.Printf("warn: unknown notification channel %q — skipping", channel)
