@@ -139,7 +139,7 @@ func (n *APNsNotifier) send(ctx context.Context, jwtToken, deviceToken string, p
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		var apnsErr struct {

@@ -148,7 +148,7 @@ func (n *FCMNotifier) send(ctx context.Context, accessToken, deviceToken string,
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		var fcmErr struct {
@@ -207,7 +207,7 @@ func (n *FCMNotifier) accessToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("FCM token exchange: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
