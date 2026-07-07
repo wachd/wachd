@@ -97,6 +97,11 @@ function LoginForm() {
           >
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
+
+          <p className="text-xs text-center text-gray-500 mt-2">
+            Using the Wachd demo?{' '}
+            <span className="text-gray-400">Check your email for login credentials.</span>
+          </p>
         </form>
 
         {/* SSO divider + button */}
