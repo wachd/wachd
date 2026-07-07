@@ -30,11 +30,11 @@ func (db *DB) SavePushToken(ctx context.Context, userID uuid.UUID, userSource, t
 		INSERT INTO user_push_tokens (id, user_id, user_source, token, platform, team_id, created_at)
 		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, now())
 		ON CONFLICT (token)
-		DO UPDATE SET user_id     = EXCLUDED.user_id,
-		              user_source = EXCLUDED.user_source,
+		DO UPDATE SET user_source = EXCLUDED.user_source,
 		              platform    = EXCLUDED.platform,
 		              team_id     = EXCLUDED.team_id,
 		              created_at  = now()
+		WHERE user_push_tokens.user_id = EXCLUDED.user_id
 		RETURNING id, user_id, user_source, token, platform, team_id, created_at
 	`, userID, userSource, token, platform, teamID,
 	).Scan(&pt.ID, &pt.UserID, &pt.UserSource, &pt.Token, &pt.Platform, &pt.TeamID, &pt.CreatedAt)

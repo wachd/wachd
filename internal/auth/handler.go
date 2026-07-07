@@ -330,60 +330,47 @@ func (h *Handlers) HandleDeleteGroupMapping(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// HandleLocalLogin authenticates a local (non-SSO) user with username + password.
-// On success it creates a session and sets the wachd_session cookie.
-// Returns 403 with error "password_change_required" when force_password_change is set.
-func (h *Handlers) HandleLocalLogin(w http.ResponseWriter, r *http.Request) {
+// localLoginResult holds the outcome of a successful local authentication.
+type localLoginResult struct {
+	Token               string
+	ExpiresAt           time.Time
+	ForcePasswordChange bool
+	IsSuperAdmin        bool
+}
+
+// authenticateLocal validates credentials and creates a session.
+// On failure it writes the error response to w and returns nil — callers must return immediately.
+// On success it returns the result without writing any response.
+func (h *Handlers) authenticateLocal(w http.ResponseWriter, r *http.Request, username, password string) *localLoginResult {
 	ctx := r.Context()
 
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-	if req.Username == "" || req.Password == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
-		return
-	}
-
-	user, err := h.db.GetLocalUserByUsername(ctx, req.Username)
+	user, err := h.db.GetLocalUserByUsername(ctx, username)
 	if err != nil {
 		log.Printf("auth: local login lookup: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
+		return nil
 	}
 
-	// Fetch password policy before the credential checks so lockout config is always
-	// applied from the DB. Fail hard if the policy cannot be read — a degraded policy
-	// could allow weaker security guarantees during an outage.
 	policy, err := h.db.GetPasswordPolicy(ctx)
 	if err != nil {
 		log.Printf("auth: get password policy: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
+		return nil
 	}
 
-	// Perform a dummy bcrypt comparison when the user is not found so that the
-	// response time is indistinguishable from a wrong-password attempt.
-	// This prevents username enumeration via timing.
+	// Timing-safe: dummy bcrypt prevents username enumeration via response time.
 	if user == nil || !user.IsActive {
-		_ = CheckPassword("$2a$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", req.Password)
+		_ = CheckPassword("$2a$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", password)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
-		return
+		return nil
 	}
 
-	// Check account lockout
 	if user.LockedUntil != nil && user.LockedUntil.After(time.Now()) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "account temporarily locked"})
-		return
+		return nil
 	}
 
-	// Verify password
-	if err := CheckPassword(user.PasswordHash, req.Password); err != nil {
-		// Increment failed attempts, lock if threshold reached
+	if err := CheckPassword(user.PasswordHash, password); err != nil {
 		var lockUntil *time.Time
 		newCount := user.FailedLoginAttempts + 1
 		if policy.MaxFailedAttempts > 0 && newCount >= policy.MaxFailedAttempts {
@@ -395,14 +382,12 @@ func (h *Handlers) HandleLocalLogin(w http.ResponseWriter, r *http.Request) {
 			log.Printf("auth: increment failed attempts for %s: %v", user.Username, lockErr)
 		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
-		return
+		return nil
 	}
 
-	// Credentials valid — reset failed attempts and record login
 	_ = h.db.ResetFailedAttempts(ctx, user.ID)
 	_ = h.db.RecordLocalLogin(ctx, user.ID)
 
-	// Fetch team access from local groups
 	teamAccess, err := h.db.GetLocalUserTeams(ctx, user.ID)
 	if err != nil {
 		log.Printf("auth: get local user teams: %v", err)
@@ -430,19 +415,79 @@ func (h *Handlers) HandleLocalLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("auth: create session: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
+		return nil
 	}
 
-	http.SetCookie(w, sessionCookie(token, sess.ExpiresAt, isSecureRequest(r)))
 	log.Printf("auth: local login %s (superadmin=%v force_change=%v)",
 		user.Username, user.IsSuperAdmin, user.ForcePasswordChange)
 
+	return &localLoginResult{
+		Token:               token,
+		ExpiresAt:           sess.ExpiresAt,
+		ForcePasswordChange: user.ForcePasswordChange,
+		IsSuperAdmin:        user.IsSuperAdmin,
+	}
+}
+
+// HandleLocalLogin authenticates a local (non-SSO) user with username + password.
+// On success it sets an HttpOnly session cookie. Token is NOT returned in the response
+// body — use HandleMobileLogin for clients that cannot use cookies.
+func (h *Handlers) HandleLocalLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
+		return
+	}
+
+	result := h.authenticateLocal(w, r, req.Username, req.Password)
+	if result == nil {
+		return
+	}
+
+	http.SetCookie(w, sessionCookie(result.Token, result.ExpiresAt, isSecureRequest(r)))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"token":                 token,
-		"expires_at":            sess.ExpiresAt,
-		"force_password_change": user.ForcePasswordChange,
-		"is_superadmin":         user.IsSuperAdmin,
+		"force_password_change": result.ForcePasswordChange,
+		"is_superadmin":         result.IsSuperAdmin,
+	})
+}
+
+// HandleMobileLogin authenticates a local user and returns the session token in the
+// response body. Intended for native mobile clients that cannot read HttpOnly cookies.
+// This endpoint must never be used by web clients — it intentionally bypasses the
+// HttpOnly cookie protection that guards against XSS token theft.
+func (h *Handlers) HandleMobileLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
+		return
+	}
+
+	result := h.authenticateLocal(w, r, req.Username, req.Password)
+	if result == nil {
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"token":                 result.Token,
+		"expires_at":            result.ExpiresAt,
+		"force_password_change": result.ForcePasswordChange,
+		"is_superadmin":         result.IsSuperAdmin,
 	})
 }
 

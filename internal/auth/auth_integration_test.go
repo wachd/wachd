@@ -548,7 +548,120 @@ func TestHandleLocalLogin_Success(t *testing.T) {
 	}
 }
 
-func TestHandleLocalLogin_ForcePasswordChange(t *testing.T) {
+func TestHandleLocalLogin_TokenNotInBody(t *testing.T) {
+	db := requireAuthDB(t)
+	sessions := requireAuthSessions(t)
+	ctx := context.Background()
+	h := makeHandlers(db, sessions)
+
+	password := "TestPass123!"
+	hash := lowCostHash(password)
+	user, err := db.CreateLocalUser(ctx, uniqueAuth("notokeninbody"), uniqueAuth("ntib")+"@test.example", "NTIB", hash, false, false)
+	if err != nil {
+		t.Fatalf("CreateLocalUser: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteLocalUser(ctx, user.ID) })
+
+	body, _ := json.Marshal(map[string]string{"username": user.Username, "password": password})
+	req := httptest.NewRequest(http.MethodPost, "/auth/local/login", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.HandleLocalLogin(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if _, ok := resp["token"]; ok {
+		t.Error("HandleLocalLogin must not include token in response body (XSS risk — use /auth/mobile-login for mobile clients)")
+	}
+	if _, ok := resp["expires_at"]; ok {
+		t.Error("HandleLocalLogin must not include expires_at in response body")
+	}
+
+	// Session cookie must still be set
+	var found bool
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == cookieName {
+			found = true
+			t.Cleanup(func() { _ = sessions.Delete(context.Background(), c.Value) })
+		}
+	}
+	if !found {
+		t.Error("expected HttpOnly session cookie to be set")
+	}
+}
+
+// ── HandleMobileLogin ─────────────────────────────────────────────────────────
+
+func TestHandleMobileLogin_Success(t *testing.T) {
+	db := requireAuthDB(t)
+	sessions := requireAuthSessions(t)
+	ctx := context.Background()
+	h := makeHandlers(db, sessions)
+
+	password := "TestPass123!"
+	hash := lowCostHash(password)
+	user, err := db.CreateLocalUser(ctx, uniqueAuth("mobilelogin"), uniqueAuth("ml")+"@test.example", "ML", hash, false, false)
+	if err != nil {
+		t.Fatalf("CreateLocalUser: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteLocalUser(ctx, user.ID) })
+
+	body, _ := json.Marshal(map[string]string{"username": user.Username, "password": password})
+	req := httptest.NewRequest(http.MethodPost, "/auth/mobile-login", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.HandleMobileLogin(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+
+	tok, ok := resp["token"].(string)
+	if !ok || tok == "" {
+		t.Error("HandleMobileLogin must return token in response body")
+	} else {
+		t.Cleanup(func() { _ = sessions.Delete(context.Background(), tok) })
+	}
+	if _, ok := resp["expires_at"]; !ok {
+		t.Error("HandleMobileLogin must return expires_at in response body")
+	}
+
+	// Must NOT set an HttpOnly cookie — mobile clients use the token directly
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == cookieName {
+			t.Error("HandleMobileLogin must not set a session cookie")
+		}
+	}
+}
+
+func TestHandleMobileLogin_WrongPassword(t *testing.T) {
+	db := requireAuthDB(t)
+	sessions := requireAuthSessions(t)
+	ctx := context.Background()
+	h := makeHandlers(db, sessions)
+
+	password := "TestPass123!"
+	hash := lowCostHash(password)
+	user, err := db.CreateLocalUser(ctx, uniqueAuth("mobileloginbad"), uniqueAuth("mlb")+"@test.example", "MLB", hash, false, false)
+	if err != nil {
+		t.Fatalf("CreateLocalUser: %v", err)
+	}
+	t.Cleanup(func() { _ = db.DeleteLocalUser(ctx, user.ID) })
+
+	body, _ := json.Marshal(map[string]string{"username": user.Username, "password": "wrong"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/mobile-login", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.HandleMobileLogin(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rr.Code)
+	}
+}
 	db := requireAuthDB(t)
 	sessions := requireAuthSessions(t)
 	ctx := context.Background()

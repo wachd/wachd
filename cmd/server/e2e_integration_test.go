@@ -186,6 +186,12 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	api.HandleFunc("/{teamId}/schedule/overrides", server.handleCreateOverride).Methods("POST")
 	api.HandleFunc("/{teamId}/members/{userId}", server.handleUpdateMember).Methods("PUT")
 
+	// Profile endpoints (push-token registration)
+	profileAPI := router.PathPrefix("/api/v1/profile").Subrouter()
+	profileAPI.Use(authMW)
+	profileAPI.HandleFunc("/push-tokens", server.handleRegisterPushToken).Methods("POST")
+	profileAPI.HandleFunc("/push-tokens/{token}", server.handleDeregisterPushToken).Methods("DELETE")
+
 	return &e2eEnv{
 		db:                  db,
 		router:              router,
@@ -1295,4 +1301,43 @@ func TestWebhookDedup(t *testing.T) {
 			t.Errorf("concurrent inserts: want 1 incident row, got %d", n)
 		}
 	})
+}
+
+// ── Push token BOLA test ──────────────────────────────────────────────────────
+
+// TestE2E_RegisterPushToken_ForbiddenNonMember verifies that a user authenticated
+// against Team A (kafka) cannot register a push token scoped to Team B (kong).
+// This guards against BOLA: a caller must have access to the team they register for.
+func TestE2E_RegisterPushToken_ForbiddenNonMember(t *testing.T) {
+	env := newE2EEnv(t)
+
+	body := e2eBody(t, map[string]any{
+		"token":    "device-token-bola-test",
+		"platform": "ios",
+		"team_id":  env.kongTeam.ID.String(), // kong team — kafkaCookie has no access here
+	})
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/profile/push-tokens", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(env.kafkaCookie) // authenticated as kafka team member only
+
+	w := env.do(req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("BOLA: want 403 Forbidden, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// The token must not have been persisted in the DB.
+	rows, err := env.db.Pool().Query(
+		context.Background(),
+		`SELECT id FROM user_push_tokens WHERE token = $1 AND team_id = $2`,
+		"device-token-bola-test", env.kongTeam.ID,
+	)
+	if err != nil {
+		t.Fatalf("DB check: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Error("BOLA: token was persisted despite 403 — authorization not enforced at DB level")
+	}
 }

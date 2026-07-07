@@ -16,6 +16,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -52,37 +53,71 @@ func TestDB_SavePushToken(t *testing.T) {
 	}
 }
 
-func TestDB_SavePushToken_Upsert_ReassignsOwner(t *testing.T) {
+func TestDB_SavePushToken_Upsert_SameUserUpdates(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+
+	team := createTestTeamForPush(t, db, ctx)
+	userID := uuid.New()
+	token := unique("apns-token")
+
+	// First registration — iOS
+	pt1, err := db.SavePushToken(ctx, userID, "local", token, "ios", team.ID)
+	if err != nil {
+		t.Fatalf("first SavePushToken: %v", err)
+	}
+
+	// Same user, same token — platform changes (e.g. token reused after reinstall)
+	pt2, err := db.SavePushToken(ctx, userID, "local", token, "android", team.ID)
+	if err != nil {
+		t.Fatalf("second SavePushToken (same user): %v", err)
+	}
+
+	if pt1.ID != pt2.ID {
+		t.Error("upsert should preserve the original row ID")
+	}
+	if pt2.Platform != "android" {
+		t.Errorf("platform should update on same-user conflict: want android, got %s", pt2.Platform)
+	}
+}
+
+func TestDB_SavePushToken_Upsert_DifferentUserCannotTakeOwnership(t *testing.T) {
 	db := requireDB(t)
 	ctx := context.Background()
 
 	team := createTestTeamForPush(t, db, ctx)
 	userA := uuid.New()
 	userB := uuid.New()
-
 	token := unique("apns-token")
 
-	// Register under userA
+	// userA registers the token
 	ptA, err := db.SavePushToken(ctx, userA, "local", token, "ios", team.ID)
 	if err != nil {
-		t.Fatalf("first SavePushToken: %v", err)
+		t.Fatalf("SavePushToken (userA): %v", err)
 	}
 
-	// Same token, different user (app reinstall scenario)
-	ptB, err := db.SavePushToken(ctx, userB, "local", token, "android", team.ID)
+	// userB attempts to claim the same token — must fail with ErrNoRows
+	_, err = db.SavePushToken(ctx, userB, "local", token, "ios", team.ID)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("expected pgx.ErrNoRows when different user tries to claim token, got %v", err)
+	}
+
+	// Original row must be unchanged — still owned by userA
+	tokens, err := db.GetPushTokensByUserID(ctx, userA, "local")
 	if err != nil {
-		t.Fatalf("second SavePushToken: %v", err)
+		t.Fatalf("GetPushTokensByUserID: %v", err)
 	}
-
-	// ID should be the same (same row), but user and platform updated
-	if ptA.ID != ptB.ID {
-		t.Error("upsert should preserve the original row ID")
+	found := false
+	for _, tok := range tokens {
+		if tok.ID == ptA.ID {
+			found = true
+			if tok.UserID != userA {
+				t.Errorf("token user_id must remain userA, got %s", tok.UserID)
+			}
+		}
 	}
-	if ptB.UserID != userB {
-		t.Errorf("user_id should be reassigned to userB")
-	}
-	if ptB.Platform != "android" {
-		t.Errorf("platform should update on conflict: want android, got %s", ptB.Platform)
+	if !found {
+		t.Error("original token row missing after failed cross-user upsert")
 	}
 }
 

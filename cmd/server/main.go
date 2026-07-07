@@ -40,6 +40,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 	"github.com/wachd/wachd/internal/auth"
@@ -494,6 +495,7 @@ func main() {
 
 		// Local auth routes — always available
 		router.HandleFunc("/auth/local/login", authHandlers.HandleLocalLogin).Methods("POST")
+		router.HandleFunc("/auth/mobile-login", authHandlers.HandleMobileLogin).Methods("POST")
 		router.Handle("/auth/local/change-password",
 			auth.BearerOrCookie(sessions, db)(http.HandlerFunc(authHandlers.HandleChangePassword)),
 		).Methods("POST")
@@ -3330,6 +3332,10 @@ func (s *Server) handleRegisterPushToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "team_id is required", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTeamAccess(r, req.TeamID) {
+		writeForbidden(w)
+		return
+	}
 
 	pt, err := s.db.SavePushToken(r.Context(), userID, userSource, req.Token, req.Platform, req.TeamID)
 	if err != nil {
@@ -3357,9 +3363,12 @@ func (s *Server) handleDeregisterPushToken(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := s.db.DeletePushToken(r.Context(), userID, userSource, token); err != nil {
-		// Token not found or not owned by this user — return 204 (idempotent delete)
-		w.WriteHeader(http.StatusNoContent)
-		return
+		if !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("delete push token: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		// ErrNoRows = token not found or not owned by this user — idempotent
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
