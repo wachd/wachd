@@ -662,6 +662,8 @@ func TestHandleMobileLogin_WrongPassword(t *testing.T) {
 		t.Errorf("expected 401, got %d", rr.Code)
 	}
 }
+
+func TestHandleLocalLogin_ForcePasswordChange(t *testing.T) {
 	db := requireAuthDB(t)
 	sessions := requireAuthSessions(t)
 	ctx := context.Background()
