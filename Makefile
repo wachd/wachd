@@ -6,7 +6,7 @@ help:
 	@echo ""
 	@echo "Setup:"
 	@echo "  make deps         - Install Go + npm dependencies"
-	@echo "  make docker-up    - Start Postgres + Redis + Ollama (local dev)"
+	@echo "  make docker-up    - Start Postgres + Redis (Ollama runs locally)"
 	@echo "  make docker-down  - Stop infrastructure services"
 	@echo "  make compose-up   - Start full Wachd stack (self-hosted deployment)"
 	@echo "  make compose-down - Stop full Wachd stack"
@@ -44,11 +44,11 @@ deps:
 # Start Docker services (infrastructure only — Postgres + Redis + Ollama)
 # For local development with 'make dev'. Does not start the app containers.
 docker-up:
-	@echo "🐳 Starting Postgres + Redis + Ollama..."
-	docker-compose up -d
+	@echo "🐳 Starting Postgres + Redis..."
+	docker-compose up -d postgres redis
 	@echo "⏳ Waiting for services to be ready..."
 	@sleep 5
-	@echo "✓ Services ready!"
+	@echo "✓ Services ready! (Ollama: http://localhost:11434)"
 
 # Stop Docker services
 docker-down:
@@ -90,13 +90,11 @@ clean:
 # Run server
 server:
 	@echo "🚀 Starting server..."
-	@if [ ! -f .env ]; then cp .env.example .env; fi
 	@set -a; source .env; set +a; go run ./cmd/server
 
 # Run worker
 worker:
 	@echo "🔄 Starting worker..."
-	@if [ ! -f .env ]; then cp .env.example .env; fi
 	@set -a; source .env; set +a; go run ./cmd/worker
 
 # Run web frontend
@@ -107,7 +105,6 @@ web:
 # Run server + worker + web
 dev: docker-up
 	@echo "🚀 Starting development environment..."
-	@if [ ! -f .env ]; then cp .env.example .env; fi
 	@echo ""
 	@echo "Starting server, worker, and web frontend..."
 	@echo "  - Server: http://localhost:8080"

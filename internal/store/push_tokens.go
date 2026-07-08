@@ -1,0 +1,87 @@
+// Copyright 2025 NTC Dev
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package store
+
+import (
+	"context"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+// SavePushToken upserts a device token for a user.
+// If the token already exists for the same user it is updated in place
+// (handles app reinstalls where the same token reappears under a new session).
+// If a different user owns the token the upsert is a no-op and pgx.ErrNoRows
+// is returned — the caller should respond with 409 Conflict.
+func (db *DB) SavePushToken(ctx context.Context, userID uuid.UUID, userSource, token, platform string) (*UserPushToken, error) {
+	pt := &UserPushToken{}
+	err := db.pool.QueryRow(ctx, `
+		INSERT INTO user_push_tokens (id, user_id, user_source, token, platform, created_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, now())
+		ON CONFLICT (token)
+		DO UPDATE SET user_source = EXCLUDED.user_source,
+		              platform    = EXCLUDED.platform,
+		              created_at  = now()
+		WHERE user_push_tokens.user_id    = EXCLUDED.user_id
+		  AND user_push_tokens.user_source = EXCLUDED.user_source
+		RETURNING id, user_id, user_source, token, platform, created_at
+	`, userID, userSource, token, platform,
+	).Scan(&pt.ID, &pt.UserID, &pt.UserSource, &pt.Token, &pt.Platform, &pt.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return pt, nil
+}
+
+// DeletePushToken removes a specific device token. Only deletes if the token
+// belongs to the requesting user to prevent cross-user token deletion.
+func (db *DB) DeletePushToken(ctx context.Context, userID uuid.UUID, userSource, token string) error {
+	tag, err := db.pool.Exec(ctx, `
+		DELETE FROM user_push_tokens
+		WHERE token = $1 AND user_id = $2 AND user_source = $3
+	`, token, userID, userSource)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// GetPushTokensByUserID returns all registered device tokens for a user across all platforms.
+func (db *DB) GetPushTokensByUserID(ctx context.Context, userID uuid.UUID, userSource string) ([]*UserPushToken, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT id, user_id, user_source, token, platform, created_at
+		FROM user_push_tokens
+		WHERE user_id = $1 AND user_source = $2
+		ORDER BY created_at DESC
+	`, userID, userSource)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tokens []*UserPushToken
+	for rows.Next() {
+		pt := &UserPushToken{}
+		if err := rows.Scan(&pt.ID, &pt.UserID, &pt.UserSource, &pt.Token, &pt.Platform, &pt.CreatedAt); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, pt)
+	}
+	return tokens, rows.Err()
+}

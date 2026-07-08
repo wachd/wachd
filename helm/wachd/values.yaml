@@ -532,6 +532,33 @@ config:
       fromNumber: ""   # e.g. "+15551234567"
       twimlURL: ""     # URL returning TwiML for voice alerts
 
+    apns:
+      enabled: false
+      # APNs token-based auth credentials stored in a Kubernetes Secret:
+      #   kubectl create secret generic wachd-apns-creds \
+      #     --namespace wachd \
+      #     --from-literal=key-id=<YOUR_KEY_ID> \
+      #     --from-literal=team-id=<YOUR_TEAM_ID> \
+      #     --from-file=private-key=AuthKey_XXXXXXXXXX.p8
+      keyIdSecret: wachd-apns-creds
+      keyIdKey: key-id
+      teamIdSecret: wachd-apns-creds
+      teamIdKey: team-id
+      privateKeySecret: wachd-apns-creds
+      privateKeyKey: private-key
+      # Non-sensitive:
+      bundleId: ""         # e.g. io.wachd.app
+      production: false    # set true for App Store / TestFlight builds
+
+    fcm:
+      enabled: false
+      # Firebase service account JSON stored in a Kubernetes Secret:
+      #   kubectl create secret generic wachd-fcm-creds \
+      #     --namespace wachd \
+      #     --from-file=service-account-json=serviceAccountKey.json
+      serviceAccountSecret: wachd-fcm-creds
+      serviceAccountKey: service-account-json
+
   # Data Sources
   dataSources:
     github:

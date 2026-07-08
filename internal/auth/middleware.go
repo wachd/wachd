@@ -173,6 +173,12 @@ func BearerOrCookie(sessions *SessionStore, db *store.DB) func(http.Handler) htt
 					return
 				}
 				if tok == nil || user == nil {
+					// Not a PAT — try as a session token (mobile clients use Bearer with session tokens).
+					if sess, sessErr := sessions.Get(r.Context(), raw); sessErr == nil && sess != nil {
+						ctx := context.WithValue(r.Context(), sessionContextKey, sess)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
 					writeUnauthorized(w)
 					return
 				}

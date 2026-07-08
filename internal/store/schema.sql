@@ -353,6 +353,25 @@ CREATE INDEX IF NOT EXISTS idx_pending_notif_fire ON pending_notifications(sched
     WHERE sent_at IS NULL AND cancelled_at IS NULL;
 
 -- ============================================================
+-- APNs push token registry
+-- Stores device tokens registered by the iOS mobile app.
+-- A user may have multiple devices; all are notified.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS user_push_tokens (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL,
+    user_source TEXT NOT NULL,
+    token       TEXT NOT NULL,
+    platform    TEXT NOT NULL DEFAULT 'ios',  -- 'ios' | 'android'
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Drop team_id if it exists from an earlier version of this table.
+-- Push tokens are user-scoped; routing is handled by notification rules.
+ALTER TABLE user_push_tokens DROP COLUMN IF EXISTS team_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_push_tokens_token ON user_push_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_user_push_tokens_user ON user_push_tokens(user_id, user_source);
+
+-- ============================================================
 -- Team graph configuration
 -- Controls whether resolved incidents are written to the knowledge graph and
 -- what minimum similarity score should be used for retrieval.

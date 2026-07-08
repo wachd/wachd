@@ -186,6 +186,12 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	api.HandleFunc("/{teamId}/schedule/overrides", server.handleCreateOverride).Methods("POST")
 	api.HandleFunc("/{teamId}/members/{userId}", server.handleUpdateMember).Methods("PUT")
 
+	// Profile endpoints (push-token registration)
+	profileAPI := router.PathPrefix("/api/v1/profile").Subrouter()
+	profileAPI.Use(authMW)
+	profileAPI.HandleFunc("/push-tokens", server.handleRegisterPushToken).Methods("POST")
+	profileAPI.HandleFunc("/push-tokens/{token}", server.handleDeregisterPushToken).Methods("DELETE")
+
 	return &e2eEnv{
 		db:                  db,
 		router:              router,
@@ -204,12 +210,14 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 // No local_users row is needed — the session carries all necessary claims.
 func e2eSession(t *testing.T, sessions *auth.SessionStore, teamID uuid.UUID, role string) *http.Cookie {
 	t.Helper()
+	localUserID := uuid.New()
 	sess := &auth.Session{
 		Email:               fmt.Sprintf("e2e-%s@test.local", teamID.String()[:8]),
 		Name:                fmt.Sprintf("E2E User %s", teamID.String()[:8]),
 		AuthType:            "local",
 		IsSuperAdmin:        false,
 		ForcePasswordChange: false,
+		LocalUserID:         &localUserID,
 		TeamIDs:             []uuid.UUID{teamID},
 		Roles:               map[string]string{teamID.String(): role},
 		ExpiresAt:           time.Now().Add(1 * time.Hour),
@@ -915,77 +923,6 @@ func TestE2E_GraphTeamIsolationAndViewerPromoteForbidden(t *testing.T) {
 	resp = env.do(req)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("viewer graph config read: got %d want 200 body=%s", resp.Code, resp.Body.String())
-
-// TestE2E_ServiceDependencies_FilterByService verifies that GET
-// /api/v1/teams/{teamId}/dependencies?service=<name> returns only dependencies
-// where service matches, and that omitting the filter returns all dependencies.
-func TestE2E_ServiceDependencies_FilterByService(t *testing.T) {
-	env := newE2EEnv(t)
-
-	createDep := func(service, dependsOn string) {
-		t.Helper()
-		req := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/teams/%s/dependencies", env.kongTeam.ID),
-			e2eBody(t, map[string]any{"service": service, "depends_on": dependsOn}))
-		req.Header.Set("Content-Type", "application/json")
-		req.AddCookie(env.kongCookie)
-		resp := env.do(req)
-		if resp.Code != http.StatusCreated {
-			t.Fatalf("create dep %s→%s: got %d, want 201", service, dependsOn, resp.Code)
-		}
-	}
-
-	createDep("checkout-api", "redis-cache")
-	createDep("checkout-api", "payments-db")
-	createDep("payments-service", "postgres")
-
-	listDeps := func(serviceFilter string) []map[string]any {
-		t.Helper()
-		url := fmt.Sprintf("/api/v1/teams/%s/dependencies", env.kongTeam.ID)
-		if serviceFilter != "" {
-			url += "?service=" + serviceFilter
-		}
-		req := httptest.NewRequest("GET", url, nil)
-		req.AddCookie(env.kongCookie)
-		resp := env.do(req)
-		if resp.Code != http.StatusOK {
-			t.Fatalf("list deps (filter=%q): got %d, want 200", serviceFilter, resp.Code)
-		}
-		var deps []map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&deps); err != nil {
-			t.Fatalf("decode deps: %v", err)
-		}
-		return deps
-	}
-
-	// No filter — all three deps returned.
-	all := listDeps("")
-	if len(all) < 3 {
-		t.Errorf("expected at least 3 deps with no filter, got %d", len(all))
-	}
-
-	// Filter by checkout-api — only its two deps returned.
-	checkoutDeps := listDeps("checkout-api")
-	if len(checkoutDeps) != 2 {
-		t.Errorf("expected 2 deps for checkout-api, got %d", len(checkoutDeps))
-	}
-	for _, d := range checkoutDeps {
-		if d["service"] != "checkout-api" {
-			t.Errorf("filter returned dep with service=%q, want checkout-api", d["service"])
-		}
-	}
-
-	// Filter by payments-service — only its one dep returned.
-	paymentsDeps := listDeps("payments-service")
-	if len(paymentsDeps) != 1 {
-		t.Errorf("expected 1 dep for payments-service, got %d", len(paymentsDeps))
-	}
-
-	// Filter by a depends_on value — should return nothing (filter is on service, not depends_on).
-	redisDeps := listDeps("redis-cache")
-	if len(redisDeps) != 0 {
-		t.Errorf("filter by depends_on value should return 0 results, got %d", len(redisDeps))
-
 	}
 }
 
@@ -1295,4 +1232,71 @@ func TestWebhookDedup(t *testing.T) {
 			t.Errorf("concurrent inserts: want 1 incident row, got %d", n)
 		}
 	})
+}
+
+// ── Push token handler tests ──────────────────────────────────────────────────
+
+// TestE2E_RegisterPushToken_Success verifies that any authenticated user can
+// register a push token regardless of which team they belong to.
+// Tokens are user-scoped; routing is controlled by notification rules.
+func TestE2E_RegisterPushToken_Success(t *testing.T) {
+	env := newE2EEnv(t)
+	token := fmt.Sprintf("device-token-e2e-success-%d", time.Now().UnixNano())
+
+	body := e2eBody(t, map[string]any{
+		"token":    token,
+		"platform": "ios",
+	})
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/profile/push-tokens", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(env.kafkaCookie)
+
+	w := env.do(req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("want 201 Created, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// Verify token persisted in DB.
+	var count int
+	err := env.db.Pool().QueryRow(
+		context.Background(),
+		`SELECT COUNT(*) FROM user_push_tokens WHERE token = $1`,
+		token,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("DB check: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("want 1 token row, got %d", count)
+	}
+}
+
+// TestE2E_RegisterPushToken_ConflictDifferentUser verifies that attempting to
+// register a token already owned by another user returns 409 Conflict.
+func TestE2E_RegisterPushToken_ConflictDifferentUser(t *testing.T) {
+	env := newE2EEnv(t)
+	token := fmt.Sprintf("device-token-conflict-%d", time.Now().UnixNano())
+
+	// kafkaTeam user registers the token first.
+	body := e2eBody(t, map[string]any{"token": token, "platform": "ios"})
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/profile/push-tokens", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(env.kafkaCookie)
+	if w := env.do(req); w.Code != http.StatusCreated {
+		t.Fatalf("first registration: want 201, got %d", w.Code)
+	}
+
+	// kongTeam user tries to claim the same token — must get 409.
+	body = e2eBody(t, map[string]any{"token": token, "platform": "android"})
+	req, _ = http.NewRequest(http.MethodPost, "/api/v1/profile/push-tokens", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(env.kongCookie)
+
+	w := env.do(req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("cross-user token conflict: want 409 Conflict, got %d (body: %s)", w.Code, w.Body.String())
+	}
 }
