@@ -28,19 +28,18 @@ import (
 func TestDB_SavePushToken(t *testing.T) {
 	db := requireDB(t)
 	ctx := context.Background()
-
-	team := createTestTeamForPush(t, db, ctx)
 	userID := uuid.New()
+	token := unique("test-device-token")
 
-	pt, err := db.SavePushToken(ctx, userID, "local", "test-device-token-1", "ios", team.ID)
+	pt, err := db.SavePushToken(ctx, userID, "local", token, "ios")
 	if err != nil {
 		t.Fatalf("SavePushToken: %v", err)
 	}
 	if pt.ID == uuid.Nil {
 		t.Error("expected non-nil ID")
 	}
-	if pt.Token != "test-device-token-1" {
-		t.Errorf("token: want %q, got %q", "test-device-token-1", pt.Token)
+	if pt.Token != token {
+		t.Errorf("token: want %q, got %q", token, pt.Token)
 	}
 	if pt.Platform != "ios" {
 		t.Errorf("platform: want %q, got %q", "ios", pt.Platform)
@@ -48,27 +47,22 @@ func TestDB_SavePushToken(t *testing.T) {
 	if pt.UserID != userID {
 		t.Errorf("user_id mismatch")
 	}
-	if pt.TeamID != team.ID {
-		t.Errorf("team_id mismatch")
-	}
 }
 
 func TestDB_SavePushToken_Upsert_SameUserUpdates(t *testing.T) {
 	db := requireDB(t)
 	ctx := context.Background()
-
-	team := createTestTeamForPush(t, db, ctx)
 	userID := uuid.New()
 	token := unique("apns-token")
 
 	// First registration — iOS
-	pt1, err := db.SavePushToken(ctx, userID, "local", token, "ios", team.ID)
+	pt1, err := db.SavePushToken(ctx, userID, "local", token, "ios")
 	if err != nil {
 		t.Fatalf("first SavePushToken: %v", err)
 	}
 
 	// Same user, same token — platform changes (e.g. token reused after reinstall)
-	pt2, err := db.SavePushToken(ctx, userID, "local", token, "android", team.ID)
+	pt2, err := db.SavePushToken(ctx, userID, "local", token, "android")
 	if err != nil {
 		t.Fatalf("second SavePushToken (same user): %v", err)
 	}
@@ -84,20 +78,18 @@ func TestDB_SavePushToken_Upsert_SameUserUpdates(t *testing.T) {
 func TestDB_SavePushToken_Upsert_DifferentUserCannotTakeOwnership(t *testing.T) {
 	db := requireDB(t)
 	ctx := context.Background()
-
-	team := createTestTeamForPush(t, db, ctx)
 	userA := uuid.New()
 	userB := uuid.New()
 	token := unique("apns-token")
 
 	// userA registers the token
-	ptA, err := db.SavePushToken(ctx, userA, "local", token, "ios", team.ID)
+	ptA, err := db.SavePushToken(ctx, userA, "local", token, "ios")
 	if err != nil {
 		t.Fatalf("SavePushToken (userA): %v", err)
 	}
 
 	// userB attempts to claim the same token — must fail with ErrNoRows
-	_, err = db.SavePushToken(ctx, userB, "local", token, "ios", team.ID)
+	_, err = db.SavePushToken(ctx, userB, "local", token, "ios")
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("expected pgx.ErrNoRows when different user tries to claim token, got %v", err)
 	}
@@ -121,20 +113,37 @@ func TestDB_SavePushToken_Upsert_DifferentUserCannotTakeOwnership(t *testing.T) 
 	}
 }
 
+func TestDB_SavePushToken_Upsert_DifferentSourceCannotTakeOwnership(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+	userID := uuid.New()
+	token := unique("apns-token")
+
+	// Register under "local" source
+	_, err := db.SavePushToken(ctx, userID, "local", token, "ios")
+	if err != nil {
+		t.Fatalf("SavePushToken (local): %v", err)
+	}
+
+	// Same UUID but different source — must not overwrite
+	_, err = db.SavePushToken(ctx, userID, "oidc", token, "ios")
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("expected pgx.ErrNoRows for same user_id but different user_source, got %v", err)
+	}
+}
+
 func TestDB_GetPushTokensByUserID_MultiPlatform(t *testing.T) {
 	db := requireDB(t)
 	ctx := context.Background()
-
-	team := createTestTeamForPush(t, db, ctx)
 	userID := uuid.New()
 
 	iosToken := unique("ios-tok")
 	androidToken := unique("android-tok")
 
-	if _, err := db.SavePushToken(ctx, userID, "local", iosToken, "ios", team.ID); err != nil {
+	if _, err := db.SavePushToken(ctx, userID, "local", iosToken, "ios"); err != nil {
 		t.Fatalf("save iOS token: %v", err)
 	}
-	if _, err := db.SavePushToken(ctx, userID, "local", androidToken, "android", team.ID); err != nil {
+	if _, err := db.SavePushToken(ctx, userID, "local", androidToken, "android"); err != nil {
 		t.Fatalf("save Android token: %v", err)
 	}
 
@@ -165,12 +174,10 @@ func TestDB_GetPushTokensByUserID_MultiPlatform(t *testing.T) {
 func TestDB_GetPushTokensByUserID_OtherUserIsolation(t *testing.T) {
 	db := requireDB(t)
 	ctx := context.Background()
-
-	team := createTestTeamForPush(t, db, ctx)
 	userA := uuid.New()
 	userB := uuid.New()
 
-	if _, err := db.SavePushToken(ctx, userA, "local", unique("tok-a"), "ios", team.ID); err != nil {
+	if _, err := db.SavePushToken(ctx, userA, "local", unique("tok-a"), "ios"); err != nil {
 		t.Fatalf("save userA token: %v", err)
 	}
 
@@ -189,12 +196,10 @@ func TestDB_GetPushTokensByUserID_OtherUserIsolation(t *testing.T) {
 func TestDB_DeletePushToken(t *testing.T) {
 	db := requireDB(t)
 	ctx := context.Background()
-
-	team := createTestTeamForPush(t, db, ctx)
 	userID := uuid.New()
 	token := unique("del-tok")
 
-	if _, err := db.SavePushToken(ctx, userID, "local", token, "ios", team.ID); err != nil {
+	if _, err := db.SavePushToken(ctx, userID, "local", token, "ios"); err != nil {
 		t.Fatalf("SavePushToken: %v", err)
 	}
 
@@ -212,13 +217,11 @@ func TestDB_DeletePushToken(t *testing.T) {
 func TestDB_DeletePushToken_EnforcesOwnership(t *testing.T) {
 	db := requireDB(t)
 	ctx := context.Background()
-
-	team := createTestTeamForPush(t, db, ctx)
 	owner := uuid.New()
 	attacker := uuid.New()
 	token := unique("owned-tok")
 
-	if _, err := db.SavePushToken(ctx, owner, "local", token, "ios", team.ID); err != nil {
+	if _, err := db.SavePushToken(ctx, owner, "local", token, "ios"); err != nil {
 		t.Fatalf("SavePushToken: %v", err)
 	}
 
@@ -242,15 +245,4 @@ func TestDB_DeletePushToken_EnforcesOwnership(t *testing.T) {
 	if !found {
 		t.Error("token was deleted by the wrong user — ownership not enforced")
 	}
-}
-
-// createTestTeamForPush creates a throwaway team and registers cleanup.
-func createTestTeamForPush(t *testing.T, db *DB, ctx context.Context) *Team {
-	t.Helper()
-	team, err := db.CreateTeam(ctx, unique("push-team"), unique("push-secret"))
-	if err != nil {
-		t.Fatalf("CreateTeam for push test: %v", err)
-	}
-	t.Cleanup(func() { _ = db.DeleteTeam(ctx, team.ID) })
-	return team
 }

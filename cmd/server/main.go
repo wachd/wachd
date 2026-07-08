@@ -3312,9 +3312,8 @@ func (s *Server) handleRegisterPushToken(w http.ResponseWriter, r *http.Request)
 	userID, userSource := sessionIdentity(sess)
 
 	var req struct {
-		Token    string    `json:"token"`
-		Platform string    `json:"platform"`
-		TeamID   uuid.UUID `json:"team_id"`
+		Token    string `json:"token"`
+		Platform string `json:"platform"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -3328,17 +3327,13 @@ func (s *Server) handleRegisterPushToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "platform must be ios or android", http.StatusBadRequest)
 		return
 	}
-	if req.TeamID == uuid.Nil {
-		http.Error(w, "team_id is required", http.StatusBadRequest)
-		return
-	}
-	if !s.requireTeamAccess(r, req.TeamID) {
-		writeForbidden(w)
-		return
-	}
 
-	pt, err := s.db.SavePushToken(r.Context(), userID, userSource, req.Token, req.Platform, req.TeamID)
+	pt, err := s.db.SavePushToken(r.Context(), userID, userSource, req.Token, req.Platform)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "Push token is already registered to another user", http.StatusConflict)
+			return
+		}
 		log.Printf("save push token: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return

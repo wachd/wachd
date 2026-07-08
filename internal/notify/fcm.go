@@ -42,8 +42,9 @@ import (
 //
 // Required env vars:
 //
-//	FCM_SERVICE_ACCOUNT_JSON — full contents of the Firebase service account JSON key file
-//	FCM_PROJECT_ID           — Firebase project ID (also present in the JSON, but explicit here)
+//	FCM_SERVICE_ACCOUNT_JSON — full contents of the Firebase service account JSON key file.
+//	                           The project ID, client email, private key, and token URI are
+//	                           all read from this JSON; no separate FCM_PROJECT_ID is needed.
 type FCMNotifier struct {
 	projectID   string
 	clientEmail string

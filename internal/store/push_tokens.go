@@ -22,22 +22,24 @@ import (
 )
 
 // SavePushToken upserts a device token for a user.
-// If the token already exists it is reassigned to the current user + team
+// If the token already exists for the same user it is updated in place
 // (handles app reinstalls where the same token reappears under a new session).
-func (db *DB) SavePushToken(ctx context.Context, userID uuid.UUID, userSource, token, platform string, teamID uuid.UUID) (*UserPushToken, error) {
+// If a different user owns the token the upsert is a no-op and pgx.ErrNoRows
+// is returned — the caller should respond with 409 Conflict.
+func (db *DB) SavePushToken(ctx context.Context, userID uuid.UUID, userSource, token, platform string) (*UserPushToken, error) {
 	pt := &UserPushToken{}
 	err := db.pool.QueryRow(ctx, `
-		INSERT INTO user_push_tokens (id, user_id, user_source, token, platform, team_id, created_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, now())
+		INSERT INTO user_push_tokens (id, user_id, user_source, token, platform, created_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, now())
 		ON CONFLICT (token)
 		DO UPDATE SET user_source = EXCLUDED.user_source,
 		              platform    = EXCLUDED.platform,
-		              team_id     = EXCLUDED.team_id,
 		              created_at  = now()
-		WHERE user_push_tokens.user_id = EXCLUDED.user_id
-		RETURNING id, user_id, user_source, token, platform, team_id, created_at
-	`, userID, userSource, token, platform, teamID,
-	).Scan(&pt.ID, &pt.UserID, &pt.UserSource, &pt.Token, &pt.Platform, &pt.TeamID, &pt.CreatedAt)
+		WHERE user_push_tokens.user_id    = EXCLUDED.user_id
+		  AND user_push_tokens.user_source = EXCLUDED.user_source
+		RETURNING id, user_id, user_source, token, platform, created_at
+	`, userID, userSource, token, platform,
+	).Scan(&pt.ID, &pt.UserID, &pt.UserSource, &pt.Token, &pt.Platform, &pt.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +65,7 @@ func (db *DB) DeletePushToken(ctx context.Context, userID uuid.UUID, userSource,
 // GetPushTokensByUserID returns all registered device tokens for a user across all platforms.
 func (db *DB) GetPushTokensByUserID(ctx context.Context, userID uuid.UUID, userSource string) ([]*UserPushToken, error) {
 	rows, err := db.pool.Query(ctx, `
-		SELECT id, user_id, user_source, token, platform, team_id, created_at
+		SELECT id, user_id, user_source, token, platform, created_at
 		FROM user_push_tokens
 		WHERE user_id = $1 AND user_source = $2
 		ORDER BY created_at DESC
@@ -76,7 +78,7 @@ func (db *DB) GetPushTokensByUserID(ctx context.Context, userID uuid.UUID, userS
 	var tokens []*UserPushToken
 	for rows.Next() {
 		pt := &UserPushToken{}
-		if err := rows.Scan(&pt.ID, &pt.UserID, &pt.UserSource, &pt.Token, &pt.Platform, &pt.TeamID, &pt.CreatedAt); err != nil {
+		if err := rows.Scan(&pt.ID, &pt.UserID, &pt.UserSource, &pt.Token, &pt.Platform, &pt.CreatedAt); err != nil {
 			return nil, err
 		}
 		tokens = append(tokens, pt)

@@ -326,7 +326,6 @@ type UserPushToken struct {
 	UserSource string    `json:"user_source"`
 	Token      string    `json:"token"`
 	Platform   string    `json:"platform"` // "ios" | "android"
-	TeamID     uuid.UUID `json:"team_id"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 

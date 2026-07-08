@@ -363,9 +363,11 @@ CREATE TABLE IF NOT EXISTS user_push_tokens (
     user_source TEXT NOT NULL,
     token       TEXT NOT NULL,
     platform    TEXT NOT NULL DEFAULT 'ios',  -- 'ios' | 'android'
-    team_id     UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Drop team_id if it exists from an earlier version of this table.
+-- Push tokens are user-scoped; routing is handled by notification rules.
+ALTER TABLE user_push_tokens DROP COLUMN IF EXISTS team_id;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_push_tokens_token ON user_push_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_user_push_tokens_user ON user_push_tokens(user_id, user_source);
 
