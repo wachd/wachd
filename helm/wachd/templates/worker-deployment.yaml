@@ -116,6 +116,34 @@ spec:
               name: {{ .Values.config.notifications.twilio.authTokenSecret }}
               key: {{ .Values.config.notifications.twilio.authTokenKey }}
         {{- end }}
+        {{- if .Values.config.notifications.apns.enabled }}
+        - name: APNS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.apns.keyIdSecret }}
+              key: {{ .Values.config.notifications.apns.keyIdKey }}
+        - name: APNS_TEAM_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.apns.teamIdSecret }}
+              key: {{ .Values.config.notifications.apns.teamIdKey }}
+        - name: APNS_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.apns.privateKeySecret }}
+              key: {{ .Values.config.notifications.apns.privateKeyKey }}
+        - name: APNS_BUNDLE_ID
+          value: {{ .Values.config.notifications.apns.bundleId | quote }}
+        - name: APNS_PRODUCTION
+          value: {{ .Values.config.notifications.apns.production | quote }}
+        {{- end }}
+        {{- if .Values.config.notifications.fcm.enabled }}
+        - name: FCM_SERVICE_ACCOUNT_JSON
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.fcm.serviceAccountSecret }}
+              key: {{ .Values.config.notifications.fcm.serviceAccountKey }}
+        {{- end }}
         envFrom:
         - configMapRef:
             name: {{ include "wachd.fullname" . }}-config
