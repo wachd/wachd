@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -194,6 +195,8 @@ func (n *APNsNotifier) token() (string, error) {
 }
 
 func parseAPNsKey(pemData string) (*ecdsa.PrivateKey, error) {
+	// Allow \n literals (common when storing PEM keys in env vars).
+	pemData = strings.ReplaceAll(pemData, `\n`, "\n")
 	block, _ := pem.Decode([]byte(pemData))
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block from APNS_PRIVATE_KEY")

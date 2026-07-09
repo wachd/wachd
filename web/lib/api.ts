@@ -86,7 +86,7 @@ export interface UserNotificationRule {
   user_id: string;
   user_source: string;
   event_type: 'new_alert' | 'ack' | 'resolve';
-  channel: 'email' | 'sms' | 'voice' | 'slack';
+  channel: 'email' | 'sms' | 'voice' | 'slack' | 'push';
   delay_minutes: number;
   enabled: boolean;
   created_at: string;
@@ -95,7 +95,7 @@ export interface UserNotificationRule {
 
 export interface CreateNotificationRuleInput {
   event_type: 'new_alert' | 'ack' | 'resolve';
-  channel: 'email' | 'sms' | 'voice' | 'slack';
+  channel: 'email' | 'sms' | 'voice' | 'slack' | 'push';
   delay_minutes: number;
   enabled?: boolean;
 }

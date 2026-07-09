@@ -1532,9 +1532,10 @@ func (s *Server) handleSnoozeIncident(w http.ResponseWriter, r *http.Request) {
 
 // teamConfigPublic is the API-safe view of TeamConfig.
 // It never exposes encrypted token values — only whether they are set.
-// WebhookSecret is intentionally omitted; use the rotate-secret endpoint to manage it.
+// WebhookSecret is included so team admins can configure their monitoring tools.
 type teamConfigPublic struct {
 	TeamID             string   `json:"team_id"`
+	WebhookSecret      string   `json:"webhook_secret"`
 	SlackWebhookURL    *string  `json:"slack_webhook_url,omitempty"`
 	SlackChannel       *string  `json:"slack_channel,omitempty"`
 	GitHubTokenSet     bool     `json:"github_token_set"`
@@ -1576,6 +1577,9 @@ func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pub := teamConfigPublic{TeamID: teamID.String()}
+	if team, err := s.db.GetTeam(r.Context(), teamID); err == nil && team != nil {
+		pub.WebhookSecret = team.WebhookSecret
+	}
 	if cfg != nil {
 		pub.SlackWebhookURL = cfg.SlackWebhookURL
 		pub.SlackChannel = cfg.SlackChannel
