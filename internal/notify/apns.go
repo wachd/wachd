@@ -105,7 +105,6 @@ func (n *APNsNotifier) SendIncidentPush(ctx context.Context, deviceTokens []stri
 				"body":  body,
 			},
 			"sound":    "default",
-			"badge":    1,
 			"category": "INCIDENT",
 		},
 		"incident_id": incidentID.String(),
