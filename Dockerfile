@@ -52,8 +52,9 @@ RUN npm run build
 #   web     → command: ["node", "server.js"]  workingDir: /web
 FROM node:22-alpine
 
-# Upgrade OS packages to pick up fixed CVEs in the base image
-RUN apk upgrade --no-cache
+# Upgrade OS packages and npm to pick up fixed CVEs in the base image.
+# npm 11+ ships sigstore 4.x; node:22-alpine bundles npm 10 which has sigstore 3.x (HIGH CVE).
+RUN apk upgrade --no-cache && npm install -g npm@latest
 
 # Timezone data and CA certificates from the Go builder
 COPY --from=go-builder /usr/share/zoneinfo /usr/share/zoneinfo
