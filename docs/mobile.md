@@ -2,56 +2,49 @@
 
 > **Coming soon.** The iOS app is in active development. The server-side push notification infrastructure is complete and production-ready.
 
-## How Push Notifications Work for Self-Hosted Deployments
+## How Push Notifications Work
 
-APNs (Apple's push service) requires the sender to own the app's bundle ID. Because the Wachd iOS app is published under `io.wachd.app`, only the Wachd team can send push notifications to it — self-hosted customers cannot supply their own APNs credentials.
-
-To solve this, Wachd provides a **hosted push relay** at `push.wachd.io`.
+Wachd sends push notifications directly to Apple APNs using token-based authentication (ES256 JWT). You need an Apple Developer account and an APNs auth key to enable this.
 
 ```
-Your Wachd server  →  push.wachd.io  →  Apple APNs  →  iPhone
+Your Wachd server  →  Apple APNs  →  iPhone
 ```
 
-The relay holds the APNs key. Your server authenticates with a relay token. No Apple Developer account or APNs setup is required on your side.
+## Configuration
 
-## Getting a Relay Token
+Set the following environment variables on your Wachd server (or in your Helm `values.yaml` via a Kubernetes Secret):
 
-1. Go to **push.wachd.io/register** and enter your email
-2. You receive a relay token (`wpr_...`) immediately
-3. Add it to your Wachd deployment
+| Variable | Description |
+|---|---|
+| `APNS_KEY_ID` | 10-character key ID from the Apple Developer portal |
+| `APNS_TEAM_ID` | 10-character Apple Team ID |
+| `APNS_BUNDLE_ID` | App bundle identifier — use `io.wachd.app` for the published app |
+| `APNS_PRIVATE_KEY` | PEM-encoded ES256 private key (contents of the `.p8` file) |
+| `APNS_PRODUCTION` | Set to `"true"` for the production APNs gateway; omit for sandbox |
 
-```yaml
-# Helm values.yaml
-push:
-  relayURL: https://push.wachd.io
-  relayToken: wpr_xxxxxxxxxxxx
-```
-
-Or via environment variables:
+**Storing the PEM key in an env var:** the key contains spaces in the header/footer lines. Quote the value and use `\n` for newlines:
 
 ```
-WACHD_PUSH_RELAY_URL=https://push.wachd.io
-WACHD_PUSH_RELAY_TOKEN=wpr_xxxxxxxxxxxx
+APNS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIGTAgEA...\n-----END PRIVATE KEY-----"
 ```
 
-That is all the configuration required. No APNs keys, no Apple Developer account.
+If any variable is missing, APNs is disabled and the server falls back to other notification channels (Slack, email, SMS). No crash, no partial state.
 
 ## Push Notification Flow
 
-When an alert fires and the on-call engineer has a mobile push rule configured:
+When an alert fires and the on-call engineer has a registered device token:
 
-1. Wachd worker looks up the user's registered device tokens
-2. Sends the notification payload to `push.wachd.io/send` with the relay token
-3. The relay validates the token, forwards to Apple APNs
-4. The iOS device receives the push notification
+1. Worker looks up the user's APNs device tokens
+2. Signs a JWT using the ES256 key and sends the notification to APNs
+3. APNs delivers the push to the iOS device
 
-The push payload includes the incident title, severity, and incident ID so the app can deep-link directly to the incident.
+The payload includes the incident title, severity, and incident ID so the app deep-links directly to the incident. A notification action button lets the on-call engineer acknowledge the incident without opening the app.
 
 ## iOS App
 
 The native iOS app handles:
 
-- QR code onboarding — scan the code shown in your Wachd dashboard Settings page to connect your instance
+- QR code onboarding — scan the code shown in your Wachd dashboard Settings page to connect to your instance
 - Secure session authentication (HTTPS required)
 - APNs device token registration on first login
 - Incident push notifications with title and severity
@@ -62,8 +55,4 @@ The native iOS app handles:
 
 ## Android App
 
-Coming after iOS. The server-side FCM integration is already built. The relay will support Android via FCM using the same token model.
-
-## Relay Service — Self-Hosting (Advanced)
-
-If you want full control, the relay is open-source and can be self-hosted. You would need your own Apple Developer account and APNs key, and would set `APNS_*` env vars directly on your Wachd server instead of using a relay token.
+Coming after iOS. The server-side FCM integration is already built and uses the same pattern — set `FCM_*` env vars to enable Android push.

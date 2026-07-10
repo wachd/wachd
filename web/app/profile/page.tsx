@@ -168,8 +168,10 @@ export default function ProfilePage() {
                             <span className={`text-sm ${rule.enabled ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
                               Notify me via{' '}
                               <strong>{CHANNEL_LABELS[rule.channel as Channel]}</strong>{' '}
-                              {session?.email ? (
-                                <>at <strong>{session.email}</strong>{' '}</>
+                              {rule.channel === 'email' ? (
+                                session?.email ? <>at <strong>{session.email}</strong>{' '}</> : null
+                              ) : rule.channel === 'push' ? (
+                                <>on registered mobile devices{' '}</>
                               ) : null}
                               <span className="text-blue-600 font-medium">{delayLabel(rule.delay_minutes)}</span>
                             </span>

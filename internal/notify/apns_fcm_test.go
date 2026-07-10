@@ -36,6 +36,24 @@ import (
 
 // ── APNs notifier tests ───────────────────────────────────────────────────────
 
+// TestNewAPNsNotifier_AcceptsEscapedNewlinesInPrivateKey is a regression test
+// for the bug where APNS_PRIVATE_KEY stored in an env var with literal \n
+// sequences (common in CI and .env files) caused pem.Decode to return nil,
+// silently disabling push notifications.
+func TestNewAPNsNotifier_AcceptsEscapedNewlinesInPrivateKey(t *testing.T) {
+	keyPEM := generateTestECKeyPEM(t)
+	escaped := strings.ReplaceAll(keyPEM, "\n", `\n`)
+
+	t.Setenv("APNS_KEY_ID", "TESTKEY0001")
+	t.Setenv("APNS_TEAM_ID", "TESTTEAM001")
+	t.Setenv("APNS_BUNDLE_ID", "io.wachd.test")
+	t.Setenv("APNS_PRIVATE_KEY", escaped)
+
+	if n := NewAPNsNotifier(); n == nil {
+		t.Fatal("NewAPNsNotifier returned nil with escaped-newline PEM key")
+	}
+}
+
 func TestNewAPNsNotifier_NilOnMissingEnv(t *testing.T) {
 	// All env vars absent — should return nil without panicking.
 	t.Setenv("APNS_KEY_ID", "")

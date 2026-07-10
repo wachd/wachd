@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -72,6 +73,7 @@ func NewAPNsNotifier() *APNsNotifier {
 
 	privateKey, err := parseAPNsKey(rawKey)
 	if err != nil {
+		log.Printf("APNs push notifier disabled: %v", err)
 		return nil
 	}
 
