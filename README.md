@@ -528,6 +528,7 @@ The following scenarios have been validated end-to-end by the maintainers:
 | Grafana webhook → AI analysis → Email notification | ✅ Tested |
 | On-call escalation with voice call via Twilio | ✅ Tested |
 | Per-user notification rules (email now, voice after N min) | ✅ Tested |
+| iOS mobile push notifications via APNs | ✅ Tested |
 | Microsoft Entra SSO + group mappings | ✅ Tested |
 | GKE | 🔲 Not yet tested |
 | Datadog webhook (parser implemented) | 🔲 Not yet tested |

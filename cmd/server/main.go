@@ -1532,9 +1532,10 @@ func (s *Server) handleSnoozeIncident(w http.ResponseWriter, r *http.Request) {
 
 // teamConfigPublic is the API-safe view of TeamConfig.
 // It never exposes encrypted token values — only whether they are set.
-// WebhookSecret is intentionally omitted; use the rotate-secret endpoint to manage it.
+// WebhookSecret is included so team admins can configure their monitoring tools.
 type teamConfigPublic struct {
 	TeamID             string   `json:"team_id"`
+	WebhookSecret      string   `json:"webhook_secret"`
 	SlackWebhookURL    *string  `json:"slack_webhook_url,omitempty"`
 	SlackChannel       *string  `json:"slack_channel,omitempty"`
 	GitHubTokenSet     bool     `json:"github_token_set"`
@@ -1557,6 +1558,37 @@ type teamConfigInput struct {
 	LokiEndpoint       *string  `json:"loki_endpoint"`
 }
 
+// buildTeamConfigPublic assembles the API-safe config view for a team.
+// It always fetches WebhookSecret from the teams row so both GET and PUT
+// return a consistent response — callers must not build teamConfigPublic inline.
+func (s *Server) buildTeamConfigPublic(ctx context.Context, teamID uuid.UUID, cfg *store.TeamConfig) (teamConfigPublic, error) {
+	team, err := s.db.GetTeam(ctx, teamID)
+	if err != nil {
+		return teamConfigPublic{}, fmt.Errorf("load team: %w", err)
+	}
+	if team == nil {
+		return teamConfigPublic{}, fmt.Errorf("team not found")
+	}
+
+	pub := teamConfigPublic{
+		TeamID:        teamID.String(),
+		WebhookSecret: team.WebhookSecret,
+	}
+	if cfg != nil {
+		pub.SlackWebhookURL = cfg.SlackWebhookURL
+		pub.SlackChannel = cfg.SlackChannel
+		pub.GitHubTokenSet = cfg.GitHubTokenEncrypted != nil && *cfg.GitHubTokenEncrypted != ""
+		pub.GrafanaMCPURL = cfg.GrafanaMCPURL
+		pub.GrafanaMCPTokenSet = cfg.GrafanaMCPTokenEncrypted != nil && *cfg.GrafanaMCPTokenEncrypted != ""
+		pub.PrometheusEndpoint = cfg.PrometheusEndpoint
+		pub.LokiEndpoint = cfg.LokiEndpoint
+		if cfg.GitHubRepos != nil {
+			_ = json.Unmarshal(cfg.GitHubRepos, &pub.GitHubRepos)
+		}
+	}
+	return pub, nil
+}
+
 func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	teamID, err := uuid.Parse(vars["teamId"])
@@ -1575,18 +1607,10 @@ func (s *Server) handleGetTeamConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pub := teamConfigPublic{TeamID: teamID.String()}
-	if cfg != nil {
-		pub.SlackWebhookURL = cfg.SlackWebhookURL
-		pub.SlackChannel = cfg.SlackChannel
-		pub.GitHubTokenSet = cfg.GitHubTokenEncrypted != nil && *cfg.GitHubTokenEncrypted != ""
-		pub.GrafanaMCPURL = cfg.GrafanaMCPURL
-		pub.GrafanaMCPTokenSet = cfg.GrafanaMCPTokenEncrypted != nil && *cfg.GrafanaMCPTokenEncrypted != ""
-		pub.PrometheusEndpoint = cfg.PrometheusEndpoint
-		pub.LokiEndpoint = cfg.LokiEndpoint
-		if cfg.GitHubRepos != nil {
-			_ = json.Unmarshal(cfg.GitHubRepos, &pub.GitHubRepos)
-		}
+	pub, err := s.buildTeamConfigPublic(r.Context(), teamID, cfg)
+	if err != nil {
+		http.Error(w, "failed to load team", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1712,19 +1736,10 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Return the same safe public view
-	pub := teamConfigPublic{
-		TeamID:             teamID.String(),
-		SlackWebhookURL:    tc.SlackWebhookURL,
-		SlackChannel:       tc.SlackChannel,
-		GitHubTokenSet:     tc.GitHubTokenEncrypted != nil && *tc.GitHubTokenEncrypted != "",
-		GrafanaMCPURL:      tc.GrafanaMCPURL,
-		GrafanaMCPTokenSet: tc.GrafanaMCPTokenEncrypted != nil && *tc.GrafanaMCPTokenEncrypted != "",
-		PrometheusEndpoint: tc.PrometheusEndpoint,
-		LokiEndpoint:       tc.LokiEndpoint,
-	}
-	if tc.GitHubRepos != nil {
-		_ = json.Unmarshal(tc.GitHubRepos, &pub.GitHubRepos)
+	pub, err := s.buildTeamConfigPublic(r.Context(), teamID, tc)
+	if err != nil {
+		http.Error(w, "failed to load team", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

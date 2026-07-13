@@ -331,6 +331,10 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 		log.Printf("Failed to get incident %s: %v", job.IncidentID, err)
 		return err
 	}
+	if incident == nil {
+		log.Printf("Incident %s not found (may have been deleted), skipping", job.IncidentID)
+		return nil
+	}
 
 	log.Printf("✓ Incident: [%s] %s (team: %s)", incident.Severity, incident.Title, incident.TeamID)
 
@@ -430,6 +434,10 @@ func (w *Worker) processResolvedIncidentJob(ctx context.Context, job *queue.Job)
 	incident, err := w.db.GetIncident(ctx, job.TeamID, job.IncidentID)
 	if err != nil {
 		log.Printf("warn: resolved graph write skipped, incident lookup failed for %s: %v", job.IncidentID, err)
+		return nil
+	}
+	if incident == nil {
+		log.Printf("Incident %s not found (may have been deleted), skipping", job.IncidentID)
 		return nil
 	}
 	if incident.Status != "resolved" {

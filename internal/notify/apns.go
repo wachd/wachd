@@ -25,9 +25,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -71,6 +73,7 @@ func NewAPNsNotifier() *APNsNotifier {
 
 	privateKey, err := parseAPNsKey(rawKey)
 	if err != nil {
+		log.Printf("APNs push notifier disabled: %v", err)
 		return nil
 	}
 
@@ -104,7 +107,6 @@ func (n *APNsNotifier) SendIncidentPush(ctx context.Context, deviceTokens []stri
 				"body":  body,
 			},
 			"sound":    "default",
-			"badge":    1,
 			"category": "INCIDENT",
 		},
 		"incident_id": incidentID.String(),
@@ -194,6 +196,8 @@ func (n *APNsNotifier) token() (string, error) {
 }
 
 func parseAPNsKey(pemData string) (*ecdsa.PrivateKey, error) {
+	// Allow \n literals (common when storing PEM keys in env vars).
+	pemData = strings.ReplaceAll(pemData, `\n`, "\n")
 	block, _ := pem.Decode([]byte(pemData))
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block from APNS_PRIVATE_KEY")
