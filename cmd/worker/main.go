@@ -47,6 +47,7 @@ type Worker struct {
 	emailNotifier *notify.EmailNotifier
 	smsNotifier   *notify.SMSNotifier
 	voiceNotifier *notify.VoiceNotifier
+	relayNotifier *notify.RelayNotifier
 	apnsNotifier  *notify.APNsNotifier
 	fcmNotifier   *notify.FCMNotifier
 	sanitiser     *sanitiser.Sanitiser
@@ -134,16 +135,24 @@ func main() {
 		log.Println("✓ Voice call notifier configured (Twilio)")
 	}
 
-	// APNs push notifier (iOS mobile)
-	apnsNotifier := notify.NewAPNsNotifier()
-	if apnsNotifier != nil {
-		log.Println("✓ APNs push notifier configured")
+	// Push notifiers — relay takes priority over direct APNs/FCM.
+	// Relay: self-hosted deployments that cannot hold APNs/FCM credentials directly.
+	// Direct: cloud-managed Wachd where credentials are available.
+	relayNotifier := notify.NewRelayNotifier()
+	if relayNotifier != nil {
+		log.Println("✓ Push relay notifier configured (push.wachd.io)")
 	}
 
-	// FCM push notifier (Android mobile)
+	// APNs push notifier (iOS) — used only when relay is not configured.
+	apnsNotifier := notify.NewAPNsNotifier()
+	if apnsNotifier != nil && relayNotifier == nil {
+		log.Println("✓ APNs push notifier configured (direct)")
+	}
+
+	// FCM push notifier (Android) — used only when relay is not configured.
 	fcmNotifier := notify.NewFCMNotifier()
-	if fcmNotifier != nil {
-		log.Println("✓ FCM push notifier configured")
+	if fcmNotifier != nil && relayNotifier == nil {
+		log.Println("✓ FCM push notifier configured (direct)")
 	}
 
 	// PII sanitiser + correlator
@@ -261,6 +270,7 @@ func main() {
 		emailNotifier: emailNotifier,
 		smsNotifier:   smsNotifier,
 		voiceNotifier: voiceNotifier,
+		relayNotifier: relayNotifier,
 		apnsNotifier:  apnsNotifier,
 		fcmNotifier:   fcmNotifier,
 		sanitiser:     san,
@@ -580,10 +590,6 @@ func (w *Worker) fireChannel(ctx context.Context, channel string, incident *stor
 		if len(tokens) == 0 {
 			break
 		}
-		body := incident.Title
-		if incident.Severity != "" && incident.Severity != "unknown" {
-			body = "[" + incident.Severity + "] " + incident.Title
-		}
 		var iosTokens, androidTokens []string
 		for _, t := range tokens {
 			switch t.Platform {
@@ -593,13 +599,32 @@ func (w *Worker) fireChannel(ctx context.Context, channel string, incident *stor
 				androidTokens = append(androidTokens, t.Token)
 			}
 		}
-		if len(iosTokens) > 0 && w.apnsNotifier != nil {
-			failed := w.apnsNotifier.SendIncidentPush(ctx, iosTokens, incident.ID, "New Incident", body)
-			log.Printf("  ✓ APNs push: %d/%d devices", len(iosTokens)-len(failed), len(iosTokens))
-		}
-		if len(androidTokens) > 0 && w.fcmNotifier != nil {
-			failed := w.fcmNotifier.SendIncidentPush(ctx, androidTokens, incident.ID, "New Incident", body)
-			log.Printf("  ✓ FCM push: %d/%d devices", len(androidTokens)-len(failed), len(androidTokens))
+		incidentID := incident.ID.String()
+		if w.relayNotifier != nil {
+			// Relay mode — zero incident content sent; app fetches details from customer server.
+			if len(iosTokens) > 0 {
+				failed := w.relayNotifier.SendPush(ctx, "ios", iosTokens, incidentID)
+				log.Printf("  ✓ push relay (ios): %d/%d devices", len(iosTokens)-len(failed), len(iosTokens))
+			}
+			if len(androidTokens) > 0 {
+				failed := w.relayNotifier.SendPush(ctx, "android", androidTokens, incidentID)
+				log.Printf("  ✓ push relay (android): %d/%d devices", len(androidTokens)-len(failed), len(androidTokens))
+			}
+		} else {
+			// Direct mode — cloud-managed Wachd with APNs/FCM credentials.
+			// Include severity prefix in body since the payload is delivered as-is.
+			body := incident.Title
+			if incident.Severity != "" && incident.Severity != "unknown" {
+				body = "[" + incident.Severity + "] " + incident.Title
+			}
+			if len(iosTokens) > 0 && w.apnsNotifier != nil {
+				failed := w.apnsNotifier.SendIncidentPush(ctx, iosTokens, incident.ID, "New Incident", body)
+				log.Printf("  ✓ APNs push: %d/%d devices", len(iosTokens)-len(failed), len(iosTokens))
+			}
+			if len(androidTokens) > 0 && w.fcmNotifier != nil {
+				failed := w.fcmNotifier.SendIncidentPush(ctx, androidTokens, incident.ID, "New Incident", body)
+				log.Printf("  ✓ FCM push: %d/%d devices", len(androidTokens)-len(failed), len(androidTokens))
+			}
 		}
 	default:
 		log.Printf("warn: unknown notification channel %q — skipping", channel)
