@@ -39,19 +39,36 @@ type RelayNotifier struct {
 }
 
 // NewRelayNotifier creates a RelayNotifier from environment variables.
-// Returns nil if any required variable is missing so the worker can treat nil
-// as "relay not configured" without extra nil checks.
-func NewRelayNotifier() *RelayNotifier {
+//
+// Return values:
+//   - nil, nil  — no relay env vars set; relay intentionally not configured
+//   - nil, err  — some or all vars set but invalid; operator must fix config
+//   - notifier, nil — fully configured and ready
+func NewRelayNotifier() (*RelayNotifier, error) {
 	relayURL := os.Getenv("WACHD_PUSH_RELAY_URL")
 	deploymentID := os.Getenv("WACHD_PUSH_RELAY_DEPLOYMENT_ID")
 	rawKey := os.Getenv("WACHD_PUSH_RELAY_PRIVATE_KEY")
-	if relayURL == "" || deploymentID == "" || rawKey == "" {
-		return nil
+
+	// Count how many of the three vars are set.
+	set := 0
+	for _, v := range []string{relayURL, deploymentID, rawKey} {
+		if v != "" {
+			set++
+		}
+	}
+	if set == 0 {
+		return nil, nil // relay not configured — normal for direct-mode deployments
+	}
+	if set < 3 {
+		return nil, fmt.Errorf(
+			"incomplete push relay config: set all three or none of "+
+				"WACHD_PUSH_RELAY_URL, WACHD_PUSH_RELAY_DEPLOYMENT_ID, WACHD_PUSH_RELAY_PRIVATE_KEY "+
+				"(%d/3 set)", set)
 	}
 
 	privateKey, err := parseRelayKey(rawKey)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	return &RelayNotifier{
@@ -59,7 +76,7 @@ func NewRelayNotifier() *RelayNotifier {
 		deploymentID: deploymentID,
 		privateKey:   privateKey,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
-	}
+	}, nil
 }
 
 type relayPayload struct {
@@ -113,7 +130,7 @@ func (n *RelayNotifier) SendPush(ctx context.Context, platform string, deviceTok
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil
+		return deviceTokens
 	}
 	return result.Data.FailedTokens
 }

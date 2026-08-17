@@ -138,7 +138,10 @@ func main() {
 	// Push notifiers — relay takes priority over direct APNs/FCM.
 	// Relay: self-hosted deployments that cannot hold APNs/FCM credentials directly.
 	// Direct: cloud-managed Wachd where credentials are available.
-	relayNotifier := notify.NewRelayNotifier()
+	relayNotifier, err := notify.NewRelayNotifier()
+	if err != nil {
+		log.Fatalf("push relay config error: %v", err)
+	}
 	if relayNotifier != nil {
 		log.Println("✓ Push relay notifier configured (push.wachd.io)")
 	}

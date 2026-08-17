@@ -144,6 +144,17 @@ spec:
               name: {{ .Values.config.notifications.fcm.serviceAccountSecret }}
               key: {{ .Values.config.notifications.fcm.serviceAccountKey }}
         {{- end }}
+        {{- if .Values.config.notifications.pushRelay.enabled }}
+        - name: WACHD_PUSH_RELAY_URL
+          value: {{ .Values.config.notifications.pushRelay.relayURL | quote }}
+        - name: WACHD_PUSH_RELAY_DEPLOYMENT_ID
+          value: {{ required "config.notifications.pushRelay.deploymentID is required when pushRelay is enabled" .Values.config.notifications.pushRelay.deploymentID | quote }}
+        - name: WACHD_PUSH_RELAY_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.config.notifications.pushRelay.privateKeySecret }}
+              key: {{ .Values.config.notifications.pushRelay.privateKeyKey }}
+        {{- end }}
         envFrom:
         - configMapRef:
             name: {{ include "wachd.fullname" . }}-config

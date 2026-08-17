@@ -106,28 +106,22 @@ kubectl create secret generic wachd-push-relay \
   --from-file=WACHD_PUSH_RELAY_PRIVATE_KEY=wachd-push-private.pem
 ```
 
-Reference the secret in your Helm values:
-
-```yaml
-extraEnvFrom:
-  - secretRef:
-      name: wachd-push-relay
-```
-
 ### Step 4 — Set Helm values
 
 ```yaml
 config:
   notifications:
-    push:
+    pushRelay:
+      enabled: true
       relayURL: "https://push.wachd.io"
       deploymentID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # from Step 2
-      # relayPrivateKey injected from k8s Secret (WACHD_PUSH_RELAY_PRIVATE_KEY)
+      privateKeySecret: wachd-push-relay                    # Secret created in Step 3
+      privateKeyKey: WACHD_PUSH_RELAY_PRIVATE_KEY
 ```
 
-The worker reads `WACHD_PUSH_RELAY_URL`, `WACHD_PUSH_RELAY_DEPLOYMENT_ID`, and
-`WACHD_PUSH_RELAY_PRIVATE_KEY`. When all three are set, it uses the relay instead of
-direct APNs/FCM.
+The chart injects `WACHD_PUSH_RELAY_URL`, `WACHD_PUSH_RELAY_DEPLOYMENT_ID`, and
+`WACHD_PUSH_RELAY_PRIVATE_KEY` into the worker pod automatically when `enabled: true`.
+The private key is never stored in Helm values — it is read from the Kubernetes Secret.
 
 ### Revoking a deployment
 
