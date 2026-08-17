@@ -55,10 +55,11 @@ func newTestNotifier(t *testing.T, serverURL string) (*RelayNotifier, ed25519.Pu
 func checkSignature(t *testing.T, r *http.Request, body []byte, pub ed25519.PublicKey) bool {
 	t.Helper()
 	timestampStr := r.Header.Get("X-Wachd-Timestamp")
+	nonce := r.Header.Get("X-Wachd-Nonce")
 	sigB64 := r.Header.Get("X-Wachd-Signature")
 
 	bodyHash := sha256.Sum256(body)
-	expectedMsg := "send:" + timestampStr + ":" + hex.EncodeToString(bodyHash[:])
+	expectedMsg := "send:" + timestampStr + ":" + nonce + ":" + hex.EncodeToString(bodyHash[:])
 
 	sig, err := base64.StdEncoding.DecodeString(sigB64)
 	if err != nil {
@@ -199,7 +200,7 @@ func TestSendPush_RequestFormat(t *testing.T) {
 		}
 
 		// Required auth headers
-		for _, h := range []string{"X-Wachd-Deployment-ID", "X-Wachd-Timestamp", "X-Wachd-Signature"} {
+		for _, h := range []string{"X-Wachd-Deployment-ID", "X-Wachd-Timestamp", "X-Wachd-Nonce", "X-Wachd-Signature"} {
 			if r.Header.Get(h) == "" {
 				t.Errorf("missing required header: %s", h)
 				http.Error(w, "missing header "+h, http.StatusBadRequest)

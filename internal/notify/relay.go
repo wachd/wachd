@@ -11,11 +11,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // RelayNotifier sends push notifications via the wachd.notify hosted relay
@@ -99,7 +102,8 @@ func (n *RelayNotifier) SendPush(ctx context.Context, platform string, deviceTok
 	}
 
 	timestamp := time.Now().Unix()
-	sig, err := n.sign(timestamp, body)
+	nonce := uuid.NewString()
+	sig, err := n.sign(timestamp, nonce, body)
 	if err != nil {
 		return deviceTokens
 	}
@@ -112,15 +116,18 @@ func (n *RelayNotifier) SendPush(ctx context.Context, platform string, deviceTok
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Wachd-Deployment-ID", n.deploymentID)
 	req.Header.Set("X-Wachd-Timestamp", strconv.FormatInt(timestamp, 10))
+	req.Header.Set("X-Wachd-Nonce", nonce)
 	req.Header.Set("X-Wachd-Signature", sig)
 
 	resp, err := n.httpClient.Do(req)
 	if err != nil {
+		log.Printf("push relay: transport error for incident %s: %v", incidentID, err)
 		return deviceTokens
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("push relay: unexpected status %d for incident %s", resp.StatusCode, incidentID)
 		return deviceTokens
 	}
 
@@ -130,16 +137,17 @@ func (n *RelayNotifier) SendPush(ctx context.Context, platform string, deviceTok
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("push relay: failed to decode response for incident %s: %v", incidentID, err)
 		return deviceTokens
 	}
 	return result.Data.FailedTokens
 }
 
 // sign produces the Ed25519 signature for a /v1/send request.
-// Message: "send:<unix_timestamp>:<hex(sha256(body))>"
-func (n *RelayNotifier) sign(timestamp int64, body []byte) (string, error) {
+// Message: "send:<unix_timestamp>:<nonce>:<hex(sha256(body))>"
+func (n *RelayNotifier) sign(timestamp int64, nonce string, body []byte) (string, error) {
 	bodyHash := sha256.Sum256(body)
-	msg := "send:" + strconv.FormatInt(timestamp, 10) + ":" + hex.EncodeToString(bodyHash[:])
+	msg := "send:" + strconv.FormatInt(timestamp, 10) + ":" + nonce + ":" + hex.EncodeToString(bodyHash[:])
 	sig := ed25519.Sign(n.privateKey, []byte(msg))
 	return base64.StdEncoding.EncodeToString(sig), nil
 }
