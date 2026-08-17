@@ -78,7 +78,7 @@ func okResponse(w http.ResponseWriter, failedTokens []string) {
 		failedTokens = []string{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"failed_tokens": failedTokens}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"failed_tokens": failedTokens}})
 }
 
 // --- NewRelayNotifier configuration tests ---
@@ -254,7 +254,7 @@ func TestSendPush_RequestFormat(t *testing.T) {
 
 func TestSendPush_AllSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		okResponse(w, nil)
 	}))
 	defer srv.Close()
@@ -268,7 +268,7 @@ func TestSendPush_AllSuccess(t *testing.T) {
 
 func TestSendPush_PartialFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		okResponse(w, []string{"tok2"})
 	}))
 	defer srv.Close()
@@ -282,7 +282,7 @@ func TestSendPush_PartialFailure(t *testing.T) {
 
 func TestSendPush_Empty200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK) // empty body — cannot be decoded
 	}))
 	defer srv.Close()
@@ -297,9 +297,9 @@ func TestSendPush_Empty200(t *testing.T) {
 
 func TestSendPush_Malformed200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`this is not valid json {{{`))
+		_, _ = w.Write([]byte(`this is not valid json {{{`))
 	}))
 	defer srv.Close()
 
@@ -313,7 +313,7 @@ func TestSendPush_Malformed200(t *testing.T) {
 
 func TestSendPush_Non200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		http.Error(w, "server error", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
