@@ -559,6 +559,21 @@ config:
       serviceAccountSecret: wachd-fcm-creds
       serviceAccountKey: service-account-json
 
+    # Push relay — self-hosted deployments that cannot hold APNs/FCM credentials
+    # directly (e.g. io.wachd.app signed under the Wachd Apple Developer account).
+    # When all three values are set, the relay is used instead of direct APNs/FCM.
+    # See docs/mobile.md — Mode B for setup instructions.
+    pushRelay:
+      enabled: false
+      relayURL: "https://push.wachd.io"
+      deploymentID: ""  # UUID returned by POST /v1/register on push.wachd.io
+      # Ed25519 private key stored in a Kubernetes Secret:
+      #   kubectl create secret generic wachd-push-relay \
+      #     --namespace wachd \
+      #     --from-file=WACHD_PUSH_RELAY_PRIVATE_KEY=wachd-push-private.pem
+      privateKeySecret: wachd-push-relay
+      privateKeyKey: WACHD_PUSH_RELAY_PRIVATE_KEY
+
   # Data Sources
   dataSources:
     github:
