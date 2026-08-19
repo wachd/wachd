@@ -213,7 +213,7 @@ func TestSendPush_RequestFormat(t *testing.T) {
 			return
 		}
 
-		// Ed25519 signature: exact message format send:<timestamp>:<hex(sha256(body))>
+		// Ed25519 signature: exact message format send:<timestamp>:<nonce>:<hex(sha256(body))>
 		if !checkSignature(t, r, body, pub) {
 			http.Error(w, "signature invalid", http.StatusUnauthorized)
 			return
