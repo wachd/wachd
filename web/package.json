@@ -10,9 +10,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "next": "^16.2.6",
+    "next": "^16.2.11",
     "react": "19.2.4",
     "react-dom": "19.2.4"
+  },
+  "overrides": {
+    "sharp": ">=0.35.0",
+    "postcss": ">=8.5.23",
+    "nanoid": ">=3.3.18"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -22,7 +27,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.6",
+    "eslint-config-next": "^16.2.11",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4",
     "typescript": "^5",
