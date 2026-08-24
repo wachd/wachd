@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { IncidentsView } from './incidents-view';
 
 export default function IncidentsPage() {

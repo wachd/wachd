@@ -52,9 +52,10 @@ RUN npm run build
 #   web     → command: ["node", "server.js"]  workingDir: /web
 FROM node:22-alpine
 
-# Upgrade OS packages and npm to pick up fixed CVEs in the base image.
-# npm 11+ ships sigstore 4.x; node:22-alpine bundles npm 10 which has sigstore 3.x (HIGH CVE).
-RUN apk upgrade --no-cache && npm install -g npm@latest
+# Upgrade OS packages. npm is unused at runtime (node runs the Next.js standalone
+# server; Go binaries handle everything else). Removing npm eliminates the entire
+# surface of npm-bundled CVEs (sigstore, brace-expansion, ip-address, etc.).
+RUN apk upgrade --no-cache && npm uninstall -g npm
 
 # Timezone data and CA certificates from the Go builder
 COPY --from=go-builder /usr/share/zoneinfo /usr/share/zoneinfo
