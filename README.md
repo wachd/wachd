@@ -9,10 +9,13 @@ Wachd receives alerts from your monitoring tools (Grafana, Datadog, Prometheus) 
 [![Go Report Card](https://goreportcard.com/badge/github.com/wachd/wachd)](https://goreportcard.com/report/github.com/wachd/wachd)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/zV86KNgkcJ)
 [![GitHub Stars](https://img.shields.io/github/stars/wachd/wachd?style=social)](https://github.com/wachd/wachd)
+[![Live Demo](https://img.shields.io/badge/demo-try%20it%20live-00ADD8)](https://demo.wachd.io)
 
 If Wachd is useful to you, a ⭐ on GitHub helps other engineers find it.
 
-![Wachd demo — on-call check, alert fire, AI root cause analysis](docs/demo.gif)
+**[Try the live demo →](https://demo.wachd.io)** — no install, no cluster, sandbox from just an email.
+
+[![Wachd demo — on-call check, alert fire, AI root cause analysis](docs/demo.gif)](https://demo.wachd.io)
 
 > **Founders Program — 10 lifetime SMB licenses**
 > We're giving 10 engineering teams a lifetime Wachd SMB license at no cost. Deploy it, use it seriously, tell us what's broken. [Claim a slot on Discord](https://discord.gg/zV86KNgkcJ) or email sales@wachd.io.
@@ -549,6 +552,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 Questions, feedback, or just want to follow the build?
 
+- **Live demo:** [demo.wachd.io](https://demo.wachd.io)
 - **Discord:** [discord.gg/zV86KNgkcJ](https://discord.gg/zV86KNgkcJ)
 - **GitHub Issues:** [github.com/wachd/wachd/issues](https://github.com/wachd/wachd/issues)
 - **X:** [@Wachd_io](https://x.com/Wachd_io)
