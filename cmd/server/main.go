@@ -855,26 +855,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce license monthly alert limit — only reached when creating a new incident.
-	alertCount, err := s.db.CountIncidentsThisMonth(r.Context())
-	if err != nil {
-		log.Printf("handleWebhook: count incidents: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	if alertCount >= s.license.MaxAlertsMonth {
-		log.Printf("handleWebhook: monthly alert limit reached (%d/%d) tier=%s",
-			alertCount, s.license.MaxAlertsMonth, s.license.Tier)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error":       "monthly alert limit reached",
-			"limit":       s.license.MaxAlertsMonth,
-			"tier":        string(s.license.Tier),
-			"upgrade_url": "https://wachd.io/pricing",
-		})
-		return
-	}
 
 	fp := fingerprint
 

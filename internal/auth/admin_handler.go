@@ -79,22 +79,6 @@ func (h *AdminHandlers) HandleCreateUser(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Enforce license user limit.
-	userCount, err := h.db.CountLocalUsers(ctx)
-	if err != nil {
-		log.Printf("admin: count users: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
-	}
-	if userCount >= h.license.MaxUsers {
-		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error": "user limit reached",
-			"limit": h.license.MaxUsers,
-			"tier":  string(h.license.Tier),
-			"upgrade_url": "https://wachd.io/pricing",
-		})
-		return
-	}
 
 	policy, err := h.db.GetPasswordPolicy(ctx)
 	if err != nil {
@@ -670,22 +654,6 @@ func (h *AdminHandlers) HandleCreateTeam(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Enforce license team limit.
-	teamCount, err := h.db.CountTeams(r.Context())
-	if err != nil {
-		log.Printf("admin: count teams: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
-	}
-	if teamCount >= h.license.MaxTeams {
-		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error": "team limit reached",
-			"limit": h.license.MaxTeams,
-			"tier":  string(h.license.Tier),
-			"upgrade_url": "https://wachd.io/pricing",
-		})
-		return
-	}
 
 	// Generate a random webhook secret
 	secret, err := randomHex(16)

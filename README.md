@@ -508,17 +508,6 @@ What is preserved for analysis: error type, stack trace structure, service name,
 
 ---
 
-## Open Source Limits
-
-The open-source tier is suitable for evaluation and small teams. Limits enforced in code:
-
-- 1 team
-- 5 users
-- 1,000 alerts per month
-- Local analysis backend only (Ollama)
-
----
-
 ## Tested Deployments
 
 The following scenarios have been validated end-to-end by the maintainers:
