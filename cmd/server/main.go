@@ -412,27 +412,27 @@ func main() {
 
 	sessions := auth.NewSessionStore(redisClient)
 
-	// Load license key — falls back to OSS limits if unset or invalid.
+	// Load license key — falls back to the open-source tier if unset or invalid.
+	// Wachd is fully open source: no usage limits are enforced on any tier.
 	lic, licErr := license.Load(os.Getenv("WACHD_LICENSE_KEY"))
 	if licErr != nil {
-		log.Printf("⚠ License key rejected (%v) — running under OSS limits (1 team, 5 users)", licErr)
+		log.Printf("⚠ License key rejected (%v) — running open source", licErr)
 	} else if lic.IsPaid() {
 		log.Printf("✓ License: %s tier — customer: %s", lic.Tier, lic.CustomerName)
 		if lic.IsGracePeriod {
 			log.Printf("⚠ License is in grace period — expires %s — renew at wachd.io", lic.ExpiresAt.Format("2006-01-02"))
 		}
 		// Revocation check — fails open on network errors so air-gapped deployments
-		// are never blocked. Only drops to OSS when the endpoint explicitly revokes
-		// this JTI with a valid Ed25519 signature.
+		// are never blocked. Only drops to open source when the endpoint explicitly
+		// revokes this JTI with a valid Ed25519 signature.
 		if revErr := license.CheckRevocation(context.Background(), lic.JTI); errors.Is(revErr, license.ErrRevoked) {
-			log.Printf("⚠ License revoked — running under OSS limits: %v", revErr)
+			log.Printf("⚠ License revoked — running open source: %v", revErr)
 			lic = license.OSS()
 		} else if revErr != nil {
 			log.Printf("⚠ Revocation check inconclusive (%v) — proceeding with existing license", revErr)
 		}
 	} else {
-		log.Printf("✓ License: open-source tier (maxTeams=%d maxUsers=%d maxAlerts/month=%d)",
-			lic.MaxTeams, lic.MaxUsers, lic.MaxAlertsMonth)
+		log.Printf("✓ License: open-source tier — no usage limits")
 	}
 
 	// Initialize on-call manager
