@@ -43,6 +43,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -106,11 +107,15 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	sessions := auth.NewSessionStore(rc)
 
 	// Redis-backed queue for alert jobs
-	q, err := queue.NewQueue(redisURL)
+	queueKey := "wachd:test:cmd-server:" + uuid.NewString() + ":alerts"
+	q, err := queue.NewQueueWithKey(redisURL, queueKey)
 	if err != nil {
 		t.Skipf("skip: cannot connect to Redis queue (%v) — set TEST_REDIS_URL", err)
 	}
-	t.Cleanup(func() { _ = q.Close() })
+	t.Cleanup(func() {
+		_ = rc.Del(context.Background(), queueKey).Err()
+		_ = q.Close()
+	})
 
 	// Fixed test encryption key (not secret — tests only)
 	enc, err := auth.NewEncryptor("0000000000000000000000000000000000000000000000000000000000000001")
@@ -183,6 +188,9 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	api.HandleFunc("/{teamId}/incidents/{incidentId}/similar", server.handleGetSimilarIncidents).Methods("GET")
 	api.HandleFunc("/{teamId}/incidents/{incidentId}/graph", server.handleGetIncidentGraph).Methods("GET")
 	api.HandleFunc("/{teamId}/incidents/{incidentId}/promote", server.handlePromoteIncidentGraphNode).Methods("POST")
+	api.HandleFunc("/{teamId}/dependencies", server.handleListServiceDependencies).Methods("GET")
+	api.HandleFunc("/{teamId}/dependencies", server.handleCreateServiceDependency).Methods("POST")
+	api.HandleFunc("/{teamId}/dependencies/{depId}", server.handleDeleteServiceDependency).Methods("DELETE")
 	api.HandleFunc("/{teamId}/schedule/overrides", server.handleCreateOverride).Methods("POST")
 	api.HandleFunc("/{teamId}/members/{userId}", server.handleUpdateMember).Methods("PUT")
 
@@ -509,10 +517,35 @@ func TestE2E_TwoTeams_ConfigIsolation(t *testing.T) {
 	if cfg["slack_channel"] != "#kong-alerts" {
 		t.Errorf("kong config slack_channel: got %v, want #kong-alerts", cfg["slack_channel"])
 	}
-	// webhook_secret must NOT be present in the config response — it is
-	// sensitive and returned only via the dedicated rotate-secret endpoint.
-	if cfg["webhook_secret"] != nil && cfg["webhook_secret"] != "" {
-		t.Error("kong config response must not include webhook_secret")
+	// Team admins need the secret to configure monitoring integrations. Never
+	// include its value in test failures or logs.
+	secret, ok := cfg["webhook_secret"].(string)
+	if !ok || secret == "" || secret != env.kongTeam.WebhookSecret {
+		t.Error("own-team admin config response must include the team's webhook secret")
+	}
+
+	// A same-team viewer cannot retrieve admin config or its webhook secret.
+	req = httptest.NewRequest("GET",
+		fmt.Sprintf("/api/v1/teams/%s/config", env.kongTeam.ID), nil)
+	req.AddCookie(env.kongViewerCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Errorf("viewer reading kong config: got %d, want 403", resp.Code)
+	}
+	if strings.Contains(resp.Body.String(), env.kongTeam.WebhookSecret) {
+		t.Error("viewer config response exposed webhook secret")
+	}
+
+	// An administrator from another team cannot retrieve Kong's config.
+	req = httptest.NewRequest("GET",
+		fmt.Sprintf("/api/v1/teams/%s/config", env.kongTeam.ID), nil)
+	req.AddCookie(env.kafkaCookie)
+	resp = env.do(req)
+	if resp.Code != http.StatusForbidden {
+		t.Errorf("cross-team admin reading kong config: got %d, want 403", resp.Code)
+	}
+	if strings.Contains(resp.Body.String(), env.kongTeam.WebhookSecret) {
+		t.Error("cross-team config response exposed webhook secret")
 	}
 
 	// Kafka admin cannot modify Kong's config
@@ -817,14 +850,13 @@ func TestE2E_UpdateMember_UserMustBeTeamMember(t *testing.T) {
 	}
 }
 
-
 func TestE2E_GraphSimilarAndDeleteNode(t *testing.T) {
 	env := newE2EEnv(t)
 	ctx := context.Background()
 	gs := graph.NewPostgresStore(env.db.Pool())
 
-	incA := &store.Incident{TeamID: env.kongTeam.ID, Title: "Checkout timeout", Severity: "critical", Status: "resolved", Source: "grafana", FiredAt: time.Now().UTC().Add(-2 * time.Hour)}
-	incB := &store.Incident{TeamID: env.kongTeam.ID, Title: "Checkout payment timeout", Severity: "critical", Status: "resolved", Source: "grafana", FiredAt: time.Now().UTC().Add(-90 * time.Minute)}
+	incA := &store.Incident{TeamID: env.kongTeam.ID, Title: "Checkout timeout", Severity: "critical", Status: "resolved", Source: "grafana", AlertPayload: []byte(`{}`), FiredAt: time.Now().UTC().Add(-2 * time.Hour)}
+	incB := &store.Incident{TeamID: env.kongTeam.ID, Title: "Checkout payment timeout", Severity: "critical", Status: "resolved", Source: "grafana", AlertPayload: []byte(`{}`), FiredAt: time.Now().UTC().Add(-90 * time.Minute)}
 	if err := env.db.CreateIncident(ctx, incA); err != nil {
 		t.Fatalf("CreateIncident A: %v", err)
 	}
@@ -880,7 +912,7 @@ func TestE2E_GraphTeamIsolationAndViewerPromoteForbidden(t *testing.T) {
 	ctx := context.Background()
 	gs := graph.NewPostgresStore(env.db.Pool())
 
-	inc := &store.Incident{TeamID: env.kafkaTeam.ID, Title: "Kafka timeout", Severity: "critical", Status: "resolved", Source: "grafana", FiredAt: time.Now().UTC()}
+	inc := &store.Incident{TeamID: env.kafkaTeam.ID, Title: "Kafka timeout", Severity: "critical", Status: "resolved", Source: "grafana", AlertPayload: []byte(`{}`), FiredAt: time.Now().UTC()}
 	if err := env.db.CreateIncident(ctx, inc); err != nil {
 		t.Fatalf("CreateIncident: %v", err)
 	}
@@ -1138,7 +1170,7 @@ func TestWebhookDedup(t *testing.T) {
 		}
 	})
 
-	t.Run("resolve_works_at_quota_limit", func(t *testing.T) {
+	t.Run("open_source_has_no_alert_quota_and_resolve_still_works", func(t *testing.T) {
 		title := fmt.Sprintf("dedup-test-quota-%d", time.Now().UnixNano())
 
 		// Fire alert via normal env to create an open incident.
@@ -1148,9 +1180,9 @@ func TestWebhookDedup(t *testing.T) {
 		}
 		incidentID := body["incident_id"].(string)
 
-		// Build a server with MaxAlertsMonth = 0 so every new-create attempt is
-		// blocked, but resolve/dedup paths (which run before the quota check) are not.
-		limitedSrv := &Server{
+		// Legacy license limit fields are intentionally not enforced now that Wachd
+		// is fully open source. Keep zero here as a regression guard.
+		openSourceSrv := &Server{
 			cfg:   env.db,
 			db:    env.db,
 			queue: env.q,
@@ -1160,25 +1192,25 @@ func TestWebhookDedup(t *testing.T) {
 			},
 			webhookLimiter: newWebhookIPLimiter(),
 		}
-		limitedRouter := mux.NewRouter()
-		limitedRouter.HandleFunc("/api/v1/webhook/{teamId}/{secret}",
-			limitedSrv.handleWebhook).Methods("POST")
-		limitedEnv := &e2eEnv{db: env.db, router: limitedRouter}
+		openSourceRouter := mux.NewRouter()
+		openSourceRouter.HandleFunc("/api/v1/webhook/{teamId}/{secret}",
+			openSourceSrv.handleWebhook).Methods("POST")
+		openSourceEnv := &e2eEnv{db: env.db, router: openSourceRouter}
 
-		// A new firing alert should be blocked (quota exhausted).
+		// New alerts remain accepted even when a legacy limit field is zero.
 		other := fmt.Sprintf("dedup-test-quota-new-%d", time.Now().UnixNano())
-		ncode, _ := fireAgentWebhook(t, limitedEnv, team, other, "k8shealth", "")
-		if ncode != http.StatusTooManyRequests {
-			t.Errorf("new alert at quota limit: want 429, got %d", ncode)
+		ncode, nbody := fireAgentWebhook(t, openSourceEnv, team, other, "k8shealth", "")
+		if ncode != http.StatusAccepted || nbody["status"] != "accepted" {
+			t.Errorf("new open-source alert: want 202/accepted, got %d/%v", ncode, nbody["status"])
 		}
 
-		// Resolve for existing incident must still succeed.
-		rcode, rbody := fireAgentWebhook(t, limitedEnv, team, title, "k8shealth", "resolved")
+		// Resolve for the existing incident must still succeed.
+		rcode, rbody := fireAgentWebhook(t, openSourceEnv, team, title, "k8shealth", "resolved")
 		if rcode != http.StatusAccepted {
-			t.Fatalf("resolve at quota limit: want 202, got %d: %v", rcode, rbody)
+			t.Fatalf("resolve in open-source mode: want 202, got %d: %v", rcode, rbody)
 		}
 		if rbody["status"] != "resolved" {
-			t.Errorf("resolve at quota limit: want status=resolved, got %q", rbody["status"])
+			t.Errorf("resolve in open-source mode: want status=resolved, got %q", rbody["status"])
 		}
 
 		// Incident closed in DB.
