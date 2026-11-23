@@ -349,6 +349,25 @@ CREATE TABLE IF NOT EXISTS pending_notifications (
     cancelled_at TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Durable handoff between incident acceptance and notification preparation.
+-- Rows are created in the same transaction as the incident and are consumed
+-- independently of Redis/investigation processing.
+CREATE TABLE IF NOT EXISTS incident_notification_preparations (
+    incident_id UUID PRIMARY KEY REFERENCES incidents(id) ON DELETE CASCADE,
+    team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT 'pending',
+    attempt_count INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    claimed_at TIMESTAMPTZ,
+    processed_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE incident_notification_preparations ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+UPDATE incident_notification_preparations SET next_attempt_at = COALESCE(next_attempt_at, created_at) WHERE next_attempt_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_notification_preparations_due
+    ON incident_notification_preparations(state, next_attempt_at, claimed_at, created_at);
 -- Durable delivery state. Existing delayed rows remain valid and are upgraded
 -- in place without deleting or rewriting their identity.
 ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS event_type TEXT NOT NULL DEFAULT 'new_alert';

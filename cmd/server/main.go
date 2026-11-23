@@ -871,7 +871,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		Fingerprint:  &fp,
 	}
 
-	if err := s.db.CreateIncident(r.Context(), incident); err != nil {
+	if err := s.db.CreateIncidentWithNotificationPreparation(r.Context(), incident); err != nil {
 		if errors.Is(err, store.ErrDuplicateIncident) {
 			// Concurrent duplicate slipped past the application-level dedup and hit
 			// the unique partial index. Look up the winner and return deduplicated.

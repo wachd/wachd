@@ -194,3 +194,56 @@ func TestNotificationClaimsAreExclusiveAcrossWorkers(t *testing.T) {
 		t.Fatalf("concurrent workers claimed %d notifications, want 2", total)
 	}
 }
+
+func TestIncidentNotificationPreparationIsDurable(t *testing.T) {
+	db := requireDB(t)
+	ctx := context.Background()
+	team, err := db.CreateTeam(ctx, unique("prep-team"), unique("prep-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := "atomic preparation"
+	inc := &Incident{TeamID: team.ID, Title: unique("prep"), Message: &msg, Severity: "high", Status: "open", Source: "test", AlertPayload: []byte(`{"alerts":[]}`)}
+	if err := db.CreateIncidentWithNotificationPreparation(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM incident_notification_preparations WHERE incident_id=$1 AND processed_at IS NULL`, inc.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one pending preparation, got %d", count)
+	}
+	claimed, err := db.ClaimNotificationPreparations(ctx, 10, time.Minute)
+	if err != nil || !containsPreparation(claimed, inc.ID) {
+		t.Fatalf("claim preparation: %v len=%d", err, len(claimed))
+	}
+	if err := db.MarkNotificationPreparationFailed(ctx, inc.ID, "no on-call assignment"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool().Exec(ctx, `UPDATE incident_notification_preparations SET next_attempt_at=now() WHERE incident_id=$1`, inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = db.ClaimNotificationPreparations(ctx, 10, time.Minute)
+	if err != nil || !containsPreparation(claimed, inc.ID) {
+		t.Fatalf("reclaim preparation: %v len=%d", err, len(claimed))
+	}
+	if err := db.MarkNotificationPreparationProcessed(ctx, inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool().QueryRow(ctx, `SELECT count(*) FROM incident_notification_preparations WHERE incident_id=$1 AND processed_at IS NOT NULL`, inc.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected processed preparation, got %d", count)
+	}
+}
+
+func containsPreparation(items []NotificationPreparation, id uuid.UUID) bool {
+	for _, item := range items {
+		if item.IncidentID == id {
+			return true
+		}
+	}
+	return false
+}

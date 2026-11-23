@@ -64,6 +64,20 @@ type Incident struct {
 	AssignedTo     *uuid.UUID `json:"assigned_to,omitempty"`
 }
 
+// NotificationPreparation is the durable, pre-investigation handoff for an
+// accepted incident. It is inserted atomically with the incident row.
+type NotificationPreparation struct {
+	IncidentID    uuid.UUID
+	TeamID        uuid.UUID
+	State         string
+	AttemptCount  int
+	NextAttemptAt time.Time
+	ClaimedAt     *time.Time
+	ProcessedAt   *time.Time
+	LastError     *string
+	CreatedAt     time.Time
+}
+
 // Schedule represents an on-call schedule
 type Schedule struct {
 	ID             uuid.UUID `json:"id"`

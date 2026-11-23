@@ -305,3 +305,54 @@ func (db *DB) CancelPendingNotificationsForIncident(ctx context.Context, inciden
 	`, incidentID)
 	return err
 }
+
+// ClaimNotificationPreparations leases accepted incidents whose initial
+// notification intents have not yet been expanded. Claims are short-lived so a
+// crashed preparer is retried without touching historical incidents.
+func (db *DB) ClaimNotificationPreparations(ctx context.Context, limit int, claimTTL time.Duration) ([]NotificationPreparation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if claimTTL <= 0 {
+		claimTTL = 2 * time.Minute
+	}
+	rows, err := db.pool.Query(ctx, `
+		WITH due AS (
+			SELECT incident_id FROM incident_notification_preparations
+			WHERE processed_at IS NULL AND state IN ('pending','processing')
+			  AND next_attempt_at <= now()
+			  AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => $1::double precision))
+			ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED
+		)
+		UPDATE incident_notification_preparations p
+		SET state='processing', claimed_at=now(), attempt_count=p.attempt_count+1
+		FROM due WHERE p.incident_id=due.incident_id
+		RETURNING p.incident_id,p.team_id,p.state,p.attempt_count,p.next_attempt_at,p.claimed_at,p.processed_at,p.last_error,p.created_at`, claimTTL.Seconds(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NotificationPreparation
+	for rows.Next() {
+		var p NotificationPreparation
+		if err := rows.Scan(&p.IncidentID, &p.TeamID, &p.State, &p.AttemptCount, &p.NextAttemptAt, &p.ClaimedAt, &p.ProcessedAt, &p.LastError, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) MarkNotificationPreparationProcessed(ctx context.Context, incidentID uuid.UUID) error {
+	_, err := db.pool.Exec(ctx, `UPDATE incident_notification_preparations SET state='processed', processed_at=now(), claimed_at=NULL, last_error=NULL WHERE incident_id=$1`, incidentID)
+	return err
+}
+
+func (db *DB) MarkNotificationPreparationFailed(ctx context.Context, incidentID uuid.UUID, failure string) error {
+	_, err := db.pool.Exec(ctx, `UPDATE incident_notification_preparations
+		SET state='pending', claimed_at=NULL, last_error=$2,
+			next_attempt_at = now() + make_interval(secs => LEAST(300.0,
+			5.0 * power(2.0, GREATEST(attempt_count - 1, 0))) * (0.8 + random() * 0.4))
+		WHERE incident_id=$1 AND processed_at IS NULL`, incidentID, failure)
+	return err
+}
