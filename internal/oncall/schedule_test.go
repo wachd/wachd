@@ -125,18 +125,6 @@ func (m *mockConfigStore) UpdateUserNotificationRule(_ context.Context, _ uuid.U
 func (m *mockConfigStore) DeleteUserNotificationRule(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ string) error {
 	return nil
 }
-func (m *mockConfigStore) QueuePendingNotification(_ context.Context, _ *store.PendingNotification) error {
-	return nil
-}
-func (m *mockConfigStore) GetDuePendingNotifications(_ context.Context) ([]*store.PendingNotification, error) {
-	return nil, nil
-}
-func (m *mockConfigStore) MarkPendingNotificationSent(_ context.Context, _ uuid.UUID) error {
-	return nil
-}
-func (m *mockConfigStore) CancelPendingNotificationsForIncident(_ context.Context, _ uuid.UUID) error {
-	return nil
-}
 
 // ── resolveWeekly ─────────────────────────────────────────────────────────────
 

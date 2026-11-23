@@ -349,8 +349,30 @@ CREATE TABLE IF NOT EXISTS pending_notifications (
     cancelled_at TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Durable delivery state. Existing delayed rows remain valid and are upgraded
+-- in place without deleting or rewriting their identity.
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS event_type TEXT NOT NULL DEFAULT 'new_alert';
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS phase TEXT NOT NULL DEFAULT 'initial';
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS idempotency_key CHAR(64);
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS payload JSONB;
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS attempt_count INT NOT NULL DEFAULT 0;
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS max_attempts INT NOT NULL DEFAULT 5;
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS claim_token UUID;
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;
+ALTER TABLE pending_notifications ADD COLUMN IF NOT EXISTS last_error TEXT;
+UPDATE pending_notifications SET next_attempt_at = scheduled_at WHERE next_attempt_at IS NULL;
+UPDATE pending_notifications SET state = 'delivered' WHERE sent_at IS NOT NULL AND state = 'pending';
+UPDATE pending_notifications SET state = 'cancelled' WHERE cancelled_at IS NOT NULL AND state = 'pending';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_notif_idempotency
+    ON pending_notifications(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_pending_notif_fire ON pending_notifications(scheduled_at)
     WHERE sent_at IS NULL AND cancelled_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_pending_notif_delivery
+    ON pending_notifications(next_attempt_at, claimed_at)
+    WHERE sent_at IS NULL AND cancelled_at IS NULL AND state IN ('pending', 'retrying', 'processing');
 
 -- ============================================================
 -- APNs push token registry
