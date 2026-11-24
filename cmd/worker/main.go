@@ -635,7 +635,7 @@ func (w *Worker) queueTeamSlack(ctx context.Context, incident *store.Incident, o
 func (w *Worker) fireTeamSlack(ctx context.Context, incident *store.Incident, onCallUser *store.TeamMember, analysis *ai.AnalysisResponse, similar *notify.SimilarIncident) error {
 	slackNotifier := w.teamSlackNotifier(ctx, incident.TeamID)
 	if slackNotifier == nil {
-		return errors.New("Slack notifier not configured")
+		return errors.New("slack notifier not configured")
 	}
 	if err := slackNotifier.SendIncidentAlertWithSimilar(ctx, incident, onCallUser, analysis, similar); err != nil {
 		return err
@@ -670,14 +670,6 @@ func (w *Worker) fireAllChannels(ctx context.Context, incident *store.Incident, 
 		} else {
 			log.Printf("  ✓ Voice call initiated")
 		}
-	}
-}
-
-// fireChannel sends a single notification channel for a user.
-// Slack is not handled here — it fires once at incident creation via fireTeamSlack.
-func (w *Worker) fireChannel(ctx context.Context, channel string, incident *store.Incident, user *store.TeamMember, analysis *ai.AnalysisResponse, similar *notify.SimilarIncident) {
-	if err := w.deliverChannel(ctx, channel, incident, user, analysis, similar); err != nil {
-		log.Printf("%s notification failed: %v", channel, err)
 	}
 }
 
