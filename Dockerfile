@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # ── Stage 1: Go binaries ──────────────────────────────────────────────────────
-FROM golang:1.25-alpine AS go-builder
+FROM golang:1.27-alpine AS go-builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
