@@ -16,7 +16,7 @@
 # watches security tool CRDs and forwards findings to central Wachd.
 # No Node.js, no web assets — final image is ~25MB.
 
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
