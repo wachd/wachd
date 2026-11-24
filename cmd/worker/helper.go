@@ -132,6 +132,10 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 					result.Metrics = metrics
 					log.Printf("  ✓ %d metric points from Prometheus", len(metrics))
 				}
+				// Pool metrics are optional and must not mask the generic error rate.
+				if poolMetrics, poolErr := mc.FetchPoolMetrics(ctx, serviceName, 30*time.Minute); poolErr == nil {
+					result.Metrics = append(result.Metrics, poolMetrics...)
+				}
 			}
 		}
 	}
@@ -424,6 +428,10 @@ func (w *Worker) sanitizeContext(ctx *correlator.Context) *correlator.Context {
 		sanitized.Commits[i] = c
 		sanitized.Commits[i].Message = w.sanitiser.Sanitise(c.Message)
 		sanitized.Commits[i].Author = w.sanitiser.Sanitise(c.Author)
+		for j := range sanitized.Commits[i].Changes {
+			sanitized.Commits[i].Changes[j].Filename = w.sanitiser.Sanitise(sanitized.Commits[i].Changes[j].Filename)
+			sanitized.Commits[i].Changes[j].Patch = w.sanitiser.Sanitise(sanitized.Commits[i].Changes[j].Patch)
+		}
 	}
 	for i, l := range ctx.Logs {
 		sanitized.Logs[i] = l

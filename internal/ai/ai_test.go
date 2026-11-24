@@ -63,6 +63,19 @@ func TestBuildPrompt_MinimalRequest(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_RequiresConservativeEvidenceClassification(t *testing.T) {
+	prompt := BuildPrompt(&AnalysisRequest{
+		Commits:        []string{"FILE deploy/checkout-api.env\n-DB_POOL_MAX=50\n+DB_POOL_MAX=5"},
+		ErrorLogs:      []string{"db_connection_timeout"},
+		MetricsSummary: "db_pool_wait_count increased; http_errors_total increased",
+	})
+	for _, want := range []string{"DB_POOL_MAX=50", "DB_POOL_MAX=5", "db_pool_wait_count", "CONFIRMED_ROOT_CAUSE", "Never invent"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+}
+
 func TestBuildPrompt_WithAllFields(t *testing.T) {
 	req := &AnalysisRequest{
 		IncidentTitle:   "Database timeout",

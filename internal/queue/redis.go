@@ -26,7 +26,8 @@ import (
 
 // Queue wraps Redis operations for job queue
 type Queue struct {
-	client *redis.Client
+	client   *redis.Client
+	queueKey string
 }
 
 // Job represents a job in the queue
@@ -47,6 +48,17 @@ const (
 
 // NewQueue creates a new queue client
 func NewQueue(redisURL string) (*Queue, error) {
+	return NewQueueWithKey(redisURL, alertQueueKey)
+}
+
+// NewQueueWithKey creates a queue backed by an explicit Redis key.
+// NewQueue should be used by production callers; this constructor exists for
+// isolated tests and other callers that own the full lifecycle of their key.
+func NewQueueWithKey(redisURL, queueKey string) (*Queue, error) {
+	if queueKey == "" {
+		return nil, fmt.Errorf("queue key is required")
+	}
+
 	opt, err := redis.ParseURL(redisURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Redis URL: %w", err)
@@ -62,7 +74,7 @@ func NewQueue(redisURL string) (*Queue, error) {
 		return nil, fmt.Errorf("failed to ping Redis: %w", err)
 	}
 
-	return &Queue{client: client}, nil
+	return &Queue{client: client, queueKey: queueKey}, nil
 }
 
 // Close closes the Redis connection
@@ -95,7 +107,7 @@ func (q *Queue) enqueueJob(ctx context.Context, jobType string, incidentID, team
 		return fmt.Errorf("failed to marshal job: %w", err)
 	}
 
-	if err := q.client.RPush(ctx, alertQueueKey, data).Err(); err != nil {
+	if err := q.client.RPush(ctx, q.queueKey, data).Err(); err != nil {
 		return fmt.Errorf("failed to enqueue job: %w", err)
 	}
 
@@ -104,7 +116,7 @@ func (q *Queue) enqueueJob(ctx context.Context, jobType string, incidentID, team
 
 // DequeueAlert dequeues an alert processing job (blocking)
 func (q *Queue) DequeueAlert(ctx context.Context, timeout time.Duration) (*Job, error) {
-	result, err := q.client.BLPop(ctx, timeout, alertQueueKey).Result()
+	result, err := q.client.BLPop(ctx, timeout, q.queueKey).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil // No job available
@@ -126,5 +138,5 @@ func (q *Queue) DequeueAlert(ctx context.Context, timeout time.Duration) (*Job, 
 
 // GetQueueLength returns the number of jobs in the alert queue
 func (q *Queue) GetQueueLength(ctx context.Context) (int64, error) {
-	return q.client.LLen(ctx, alertQueueKey).Result()
+	return q.client.LLen(ctx, q.queueKey).Result()
 }

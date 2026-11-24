@@ -150,3 +150,25 @@ func (m *MetricsCollector) FetchErrorRate(ctx context.Context, service string, d
 
 	return m.FetchMetricHistory(ctx, query, since, until, step)
 }
+
+// FetchPoolMetrics returns optional database/sql pool telemetry. Each query is
+// independent so a missing metric does not prevent other evidence collection.
+func (m *MetricsCollector) FetchPoolMetrics(ctx context.Context, service string, duration time.Duration) ([]MetricPoint, error) {
+	queries := []string{
+		`db_pool_in_use{service="%s"}`,
+		`db_pool_open_connections{service="%s"}`,
+		`rate(db_pool_wait_count{service="%s"}[5m])`,
+		`rate(db_pool_wait_duration_seconds{service="%s"}[5m])`,
+	}
+	var out []MetricPoint
+	until := time.Now()
+	since := until.Add(-duration)
+	for _, q := range queries {
+		points, err := m.FetchMetricHistory(ctx, fmt.Sprintf(q, service), since, until, duration/60)
+		if err != nil {
+			continue
+		}
+		out = append(out, points...)
+	}
+	return out, nil
+}

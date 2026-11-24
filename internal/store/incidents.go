@@ -77,6 +77,42 @@ func (db *DB) CreateIncident(ctx context.Context, incident *Incident) error {
 	return nil
 }
 
+// CreateIncidentWithNotificationPreparation atomically persists an incident
+// and its notification-preparation handoff. Redis availability and worker
+// execution are intentionally outside this transaction.
+func (db *DB) CreateIncidentWithNotificationPreparation(ctx context.Context, incident *Incident) error {
+	now := time.Now().UTC()
+	incident.ID = uuid.New()
+	incident.CreatedAt = now
+	incident.UpdatedAt = now
+	if incident.FiredAt.IsZero() {
+		incident.FiredAt = now
+	}
+	tx, err := db.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `INSERT INTO incidents
+		(id, team_id, title, message, severity, status, source, alert_payload, fingerprint, fired_at, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		incident.ID, incident.TeamID, incident.Title, incident.Message, incident.Severity,
+		incident.Status, incident.Source, incident.AlertPayload, incident.Fingerprint,
+		incident.FiredAt, incident.CreatedAt, incident.UpdatedAt)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrDuplicateIncident
+		}
+		return fmt.Errorf("failed to create incident: %w", err)
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO incident_notification_preparations (incident_id, team_id) VALUES ($1,$2)`, incident.ID, incident.TeamID)
+	if err != nil {
+		return fmt.Errorf("failed to create notification preparation: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
 // GetIncident retrieves an incident by ID
 func (db *DB) GetIncident(ctx context.Context, teamID, incidentID uuid.UUID) (*Incident, error) {
 	query := `

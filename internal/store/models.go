@@ -64,6 +64,20 @@ type Incident struct {
 	AssignedTo     *uuid.UUID `json:"assigned_to,omitempty"`
 }
 
+// NotificationPreparation is the durable, pre-investigation handoff for an
+// accepted incident. It is inserted atomically with the incident row.
+type NotificationPreparation struct {
+	IncidentID    uuid.UUID
+	TeamID        uuid.UUID
+	State         string
+	AttemptCount  int
+	NextAttemptAt time.Time
+	ClaimedAt     *time.Time
+	ProcessedAt   *time.Time
+	LastError     *string
+	CreatedAt     time.Time
+}
+
 // Schedule represents an on-call schedule
 type Schedule struct {
 	ID             uuid.UUID `json:"id"`
@@ -344,17 +358,29 @@ type UserNotificationRule struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// PendingNotification is a delayed channel send queued when a user's notification
-// rule has delay_minutes > 0. Cancelled automatically when the incident is acked.
+// PendingNotification is a durable notification delivery intent. Delivery is
+// at-least-once: an expired claim may be retried after a worker crash.
 type PendingNotification struct {
-	ID          uuid.UUID  `json:"id"`
-	IncidentID  uuid.UUID  `json:"incident_id"`
-	TeamID      uuid.UUID  `json:"team_id"`
-	UserID      uuid.UUID  `json:"user_id"`
-	UserSource  string     `json:"user_source"`
-	Channel     string     `json:"channel"`
-	ScheduledAt time.Time  `json:"scheduled_at"`
-	SentAt      *time.Time `json:"sent_at,omitempty"`
-	CancelledAt *time.Time `json:"cancelled_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID             uuid.UUID  `json:"id"`
+	IncidentID     uuid.UUID  `json:"incident_id"`
+	TeamID         uuid.UUID  `json:"team_id"`
+	UserID         uuid.UUID  `json:"user_id"`
+	UserSource     string     `json:"user_source"`
+	Channel        string     `json:"channel"`
+	EventType      string     `json:"event_type"`
+	Phase          string     `json:"phase"`
+	State          string     `json:"state"`
+	IdempotencyKey string     `json:"idempotency_key"`
+	Payload        []byte     `json:"payload,omitempty"`
+	ScheduledAt    time.Time  `json:"scheduled_at"`
+	NextAttemptAt  time.Time  `json:"next_attempt_at"`
+	AttemptCount   int        `json:"attempt_count"`
+	MaxAttempts    int        `json:"max_attempts"`
+	ClaimedAt      *time.Time `json:"claimed_at,omitempty"`
+	ClaimToken     *uuid.UUID `json:"claim_token,omitempty"`
+	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
+	LastError      *string    `json:"last_error,omitempty"`
+	SentAt         *time.Time `json:"sent_at,omitempty"`
+	CancelledAt    *time.Time `json:"cancelled_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }

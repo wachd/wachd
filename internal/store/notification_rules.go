@@ -16,6 +16,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -131,22 +135,86 @@ func (db *DB) DeleteUserNotificationRule(ctx context.Context, id, userID uuid.UU
 	return nil
 }
 
-// QueuePendingNotification inserts a delayed notification into the queue.
+// ErrNotificationClaimLost means another worker owns the delivery claim, or the
+// notification has already reached a terminal state.
+var ErrNotificationClaimLost = errors.New("notification delivery claim lost")
+
+const pendingNotificationColumns = `id, incident_id, team_id, user_id, user_source, channel,
+	event_type, phase, state, idempotency_key, payload, scheduled_at, next_attempt_at,
+	attempt_count, max_attempts, claimed_at, claim_token, last_attempt_at, last_error,
+	sent_at, cancelled_at, created_at`
+
+const pendingNotificationReturningColumns = `p.id, p.incident_id, p.team_id, p.user_id, p.user_source, p.channel,
+	p.event_type, p.phase, p.state, p.idempotency_key, p.payload, p.scheduled_at, p.next_attempt_at,
+	p.attempt_count, p.max_attempts, p.claimed_at, p.claim_token, p.last_attempt_at, p.last_error,
+	p.sent_at, p.cancelled_at, p.created_at`
+
+func scanPendingNotification(row pgx.Row) (*PendingNotification, error) {
+	p := &PendingNotification{}
+	err := row.Scan(&p.ID, &p.IncidentID, &p.TeamID, &p.UserID, &p.UserSource, &p.Channel,
+		&p.EventType, &p.Phase, &p.State, &p.IdempotencyKey, &p.Payload, &p.ScheduledAt,
+		&p.NextAttemptAt, &p.AttemptCount, &p.MaxAttempts, &p.ClaimedAt, &p.ClaimToken,
+		&p.LastAttemptAt, &p.LastError, &p.SentAt, &p.CancelledAt, &p.CreatedAt)
+	return p, err
+}
+
+func notificationIdempotencyKey(p *PendingNotification) string {
+	scope := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s", p.IncidentID, p.UserID, p.Channel, p.EventType, p.Phase)
+	sum := sha256.Sum256([]byte(scope))
+	return hex.EncodeToString(sum[:])
+}
+
+// QueuePendingNotification persists a delivery intent before any provider call.
+// The idempotency scope is incident, recipient, channel, event type, and phase.
 func (db *DB) QueuePendingNotification(ctx context.Context, p *PendingNotification) error {
-	p.ID = uuid.New()
-	p.CreatedAt = time.Now().UTC()
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
+	if p.EventType == "" {
+		p.EventType = "new_alert"
+	}
+	if p.Phase == "" {
+		p.Phase = "initial"
+	}
+	if p.State == "" {
+		p.State = "pending"
+	}
+	if p.ScheduledAt.IsZero() {
+		p.ScheduledAt = time.Now().UTC()
+	}
+	if p.NextAttemptAt.IsZero() {
+		p.NextAttemptAt = p.ScheduledAt
+	}
+	if p.MaxAttempts == 0 {
+		p.MaxAttempts = 5
+	}
+	if p.IdempotencyKey == "" {
+		p.IdempotencyKey = notificationIdempotencyKey(p)
+	}
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = time.Now().UTC()
+	}
 	_, err := db.pool.Exec(ctx, `
 		INSERT INTO pending_notifications
-			(id, incident_id, team_id, user_id, user_source, channel, scheduled_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, p.ID, p.IncidentID, p.TeamID, p.UserID, p.UserSource, p.Channel, p.ScheduledAt, p.CreatedAt)
+			(id, incident_id, team_id, user_id, user_source, channel, event_type, phase,
+			 state, idempotency_key, payload, scheduled_at, next_attempt_at, max_attempts, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+	`, p.ID, p.IncidentID, p.TeamID, p.UserID, p.UserSource, p.Channel, p.EventType, p.Phase,
+		p.State, p.IdempotencyKey, p.Payload, p.ScheduledAt, p.NextAttemptAt, p.MaxAttempts, p.CreatedAt)
 	return err
 }
 
-// GetDuePendingNotifications returns notifications scheduled for now or earlier that
-// have not yet been sent or cancelled. Uses FOR UPDATE SKIP LOCKED so concurrent
-// worker pods each claim a disjoint set of rows — no double-firing.
-func (db *DB) GetDuePendingNotifications(ctx context.Context) ([]*PendingNotification, error) {
+// ClaimDuePendingNotifications atomically leases due work. Expired leases are
+// reclaimable after claimTTL, so a process crash cannot permanently lose work.
+func (db *DB) ClaimDuePendingNotifications(ctx context.Context, limit int, claimTTL time.Duration) ([]*PendingNotification, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if claimTTL <= 0 {
+		claimTTL = 2 * time.Minute
+	}
+	claimToken := uuid.New()
 	tx, err := db.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -154,22 +222,32 @@ func (db *DB) GetDuePendingNotifications(ctx context.Context) ([]*PendingNotific
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	rows, err := tx.Query(ctx, `
-		SELECT id, incident_id, team_id, user_id, user_source, channel, scheduled_at, sent_at, cancelled_at, created_at
-		FROM pending_notifications
-		WHERE scheduled_at <= now() AND sent_at IS NULL AND cancelled_at IS NULL
-		ORDER BY scheduled_at
-		LIMIT 100
-		FOR UPDATE SKIP LOCKED
-	`)
+		WITH due AS (
+			SELECT id FROM pending_notifications
+			WHERE COALESCE(next_attempt_at, scheduled_at) <= now()
+			  AND sent_at IS NULL AND cancelled_at IS NULL
+			  AND attempt_count < max_attempts
+			  AND state IN ('pending', 'retrying', 'processing')
+			  AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => $1::double precision))
+			ORDER BY COALESCE(next_attempt_at, scheduled_at), created_at
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE pending_notifications p
+		SET state = 'processing', claimed_at = now(), claim_token = $3,
+			attempt_count = p.attempt_count + 1, last_attempt_at = now(),
+			next_attempt_at = COALESCE(p.next_attempt_at, p.scheduled_at)
+		FROM due WHERE p.id = due.id
+		RETURNING `+pendingNotificationReturningColumns,
+		claimTTL.Seconds(), limit, claimToken)
 	if err != nil {
 		return nil, err
 	}
 
 	var pending []*PendingNotification
 	for rows.Next() {
-		p := &PendingNotification{}
-		if err := rows.Scan(&p.ID, &p.IncidentID, &p.TeamID, &p.UserID, &p.UserSource,
-			&p.Channel, &p.ScheduledAt, &p.SentAt, &p.CancelledAt, &p.CreatedAt); err != nil {
+		p, err := scanPendingNotification(rows)
+		if err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -180,33 +258,41 @@ func (db *DB) GetDuePendingNotifications(ctx context.Context) ([]*PendingNotific
 		return nil, err
 	}
 
-	// Mark all claimed rows as sent within the same transaction so no other
-	// worker can pick them up even if our caller hasn't processed them yet.
-	// The worker will still call MarkPendingNotificationSent but that's a no-op
-	// since sent_at is already set.
-	if len(pending) > 0 {
-		ids := make([]uuid.UUID, len(pending))
-		for i, p := range pending {
-			ids[i] = p.ID
-		}
-		_, err = tx.Exec(ctx, `
-			UPDATE pending_notifications SET sent_at = now()
-			WHERE id = ANY($1)
-		`, ids)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	return pending, tx.Commit(ctx)
 }
 
-// MarkPendingNotificationSent marks a pending notification as sent.
-func (db *DB) MarkPendingNotificationSent(ctx context.Context, id uuid.UUID) error {
-	_, err := db.pool.Exec(ctx, `
-		UPDATE pending_notifications SET sent_at = now() WHERE id = $1
-	`, id)
+// MarkPendingNotificationSent records success only for the active lease.
+func (db *DB) MarkPendingNotificationSent(ctx context.Context, id, claimToken uuid.UUID) error {
+	tag, err := db.pool.Exec(ctx, `
+		UPDATE pending_notifications SET state = 'delivered', sent_at = now(),
+			claimed_at = NULL, claim_token = NULL, last_error = NULL
+		WHERE id = $1 AND claim_token = $2 AND state = 'processing'
+	`, id, claimToken)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotificationClaimLost
+	}
 	return err
+}
+
+// MarkPendingNotificationFailed records a sanitized provider error and either
+// schedules another attempt or moves the notification to a terminal state.
+func (db *DB) MarkPendingNotificationFailed(ctx context.Context, id, claimToken uuid.UUID, retryAt time.Time, failure string, permanent bool) error {
+	tag, err := db.pool.Exec(ctx, `
+		UPDATE pending_notifications
+		SET state = CASE WHEN $5 OR attempt_count >= max_attempts THEN 'failed' ELSE 'retrying' END,
+			next_attempt_at = CASE WHEN $5 OR attempt_count >= max_attempts THEN next_attempt_at ELSE $3 END,
+			last_error = $4, claimed_at = NULL, claim_token = NULL
+		WHERE id = $1 AND claim_token = $2 AND state = 'processing'
+	`, id, claimToken, retryAt, failure, permanent)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotificationClaimLost
+	}
+	return err
+}
+
+// GetPendingNotification returns one delivery record for diagnostics and tests.
+func (db *DB) GetPendingNotification(ctx context.Context, id uuid.UUID) (*PendingNotification, error) {
+	return scanPendingNotification(db.pool.QueryRow(ctx, `SELECT `+pendingNotificationColumns+` FROM pending_notifications WHERE id = $1`, id))
 }
 
 // CancelPendingNotificationsForIncident cancels all unsent pending notifications for an
@@ -214,8 +300,59 @@ func (db *DB) MarkPendingNotificationSent(ctx context.Context, id uuid.UUID) err
 func (db *DB) CancelPendingNotificationsForIncident(ctx context.Context, incidentID uuid.UUID) error {
 	_, err := db.pool.Exec(ctx, `
 		UPDATE pending_notifications
-		SET cancelled_at = now()
+		SET state = 'cancelled', cancelled_at = now(), claimed_at = NULL, claim_token = NULL
 		WHERE incident_id = $1 AND sent_at IS NULL AND cancelled_at IS NULL
 	`, incidentID)
+	return err
+}
+
+// ClaimNotificationPreparations leases accepted incidents whose initial
+// notification intents have not yet been expanded. Claims are short-lived so a
+// crashed preparer is retried without touching historical incidents.
+func (db *DB) ClaimNotificationPreparations(ctx context.Context, limit int, claimTTL time.Duration) ([]NotificationPreparation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if claimTTL <= 0 {
+		claimTTL = 2 * time.Minute
+	}
+	rows, err := db.pool.Query(ctx, `
+		WITH due AS (
+			SELECT incident_id FROM incident_notification_preparations
+			WHERE processed_at IS NULL AND state IN ('pending','processing')
+			  AND next_attempt_at <= now()
+			  AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => $1::double precision))
+			ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED
+		)
+		UPDATE incident_notification_preparations p
+		SET state='processing', claimed_at=now(), attempt_count=p.attempt_count+1
+		FROM due WHERE p.incident_id=due.incident_id
+		RETURNING p.incident_id,p.team_id,p.state,p.attempt_count,p.next_attempt_at,p.claimed_at,p.processed_at,p.last_error,p.created_at`, claimTTL.Seconds(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NotificationPreparation
+	for rows.Next() {
+		var p NotificationPreparation
+		if err := rows.Scan(&p.IncidentID, &p.TeamID, &p.State, &p.AttemptCount, &p.NextAttemptAt, &p.ClaimedAt, &p.ProcessedAt, &p.LastError, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) MarkNotificationPreparationProcessed(ctx context.Context, incidentID uuid.UUID) error {
+	_, err := db.pool.Exec(ctx, `UPDATE incident_notification_preparations SET state='processed', processed_at=now(), claimed_at=NULL, last_error=NULL WHERE incident_id=$1`, incidentID)
+	return err
+}
+
+func (db *DB) MarkNotificationPreparationFailed(ctx context.Context, incidentID uuid.UUID, failure string) error {
+	_, err := db.pool.Exec(ctx, `UPDATE incident_notification_preparations
+		SET state='pending', claimed_at=NULL, last_error=$2,
+			next_attempt_at = now() + make_interval(secs => LEAST(300.0,
+			5.0 * power(2.0, GREATEST(attempt_count - 1, 0))) * (0.8 + random() * 0.4))
+		WHERE incident_id=$1 AND processed_at IS NULL`, incidentID, failure)
 	return err
 }

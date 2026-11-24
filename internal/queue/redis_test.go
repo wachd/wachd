@@ -31,11 +31,19 @@ func requireQueue(t *testing.T) *Queue {
 	if redisURL == "" {
 		redisURL = "redis://localhost:6379/1"
 	}
-	q, err := NewQueue(redisURL)
+	queueKey := "wachd:test:internal-queue:" + t.Name() + ":alerts"
+	q, err := NewQueueWithKey(redisURL, queueKey)
 	if err != nil {
 		t.Skipf("skipping integration test: Redis unavailable (%v) — run make docker-up", err)
 	}
-	t.Cleanup(func() { _ = q.Close() })
+	if err := q.client.Del(context.Background(), queueKey).Err(); err != nil {
+		_ = q.Close()
+		t.Fatalf("clear owned queue key: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = q.client.Del(context.Background(), queueKey).Err()
+		_ = q.Close()
+	})
 	return q
 }
 
@@ -55,6 +63,70 @@ func TestNewQueue_Valid(t *testing.T) {
 	}
 }
 
+func TestNewQueue_DefaultKeyUnchanged(t *testing.T) {
+	redisURL := os.Getenv("TEST_REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/1"
+	}
+	q, err := NewQueue(redisURL)
+	if err != nil {
+		t.Skipf("skipping integration test: Redis unavailable (%v) — run make docker-up", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	if q.queueKey != alertQueueKey {
+		t.Errorf("default queue key changed: got %q, want %q", q.queueKey, alertQueueKey)
+	}
+}
+
+func TestQueueKeysAreIsolated(t *testing.T) {
+	redisURL := os.Getenv("TEST_REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/1"
+	}
+	keyA := "wachd:test:internal-queue:" + t.Name() + ":a"
+	keyB := "wachd:test:internal-queue:" + t.Name() + ":b"
+	qA, err := NewQueueWithKey(redisURL, keyA)
+	if err != nil {
+		t.Skipf("skipping integration test: Redis unavailable (%v) — run make docker-up", err)
+	}
+	qB, err := NewQueueWithKey(redisURL, keyB)
+	if err != nil {
+		_ = qA.Close()
+		t.Fatalf("create second isolated queue: %v", err)
+	}
+	ctx := context.Background()
+	if err := qA.client.Del(ctx, keyA, keyB).Err(); err != nil {
+		_ = qA.Close()
+		_ = qB.Close()
+		t.Fatalf("clear owned queue keys: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = qA.client.Del(context.Background(), keyA, keyB).Err()
+		_ = qA.Close()
+		_ = qB.Close()
+	})
+
+	teamA, teamB := uuid.New(), uuid.New()
+	if err := qA.EnqueueAlert(ctx, uuid.New(), teamA, []byte(`{"owner":"a"}`)); err != nil {
+		t.Fatalf("enqueue A: %v", err)
+	}
+	if err := qB.EnqueueAlert(ctx, uuid.New(), teamB, []byte(`{"owner":"b"}`)); err != nil {
+		t.Fatalf("enqueue B: %v", err)
+	}
+
+	jobA, err := qA.DequeueAlert(ctx, time.Second)
+	if err != nil || jobA == nil {
+		t.Fatalf("dequeue A: job=%v err=%v", jobA != nil, err)
+	}
+	jobB, err := qB.DequeueAlert(ctx, time.Second)
+	if err != nil || jobB == nil {
+		t.Fatalf("dequeue B: job=%v err=%v", jobB != nil, err)
+	}
+	if jobA.TeamID != teamA || jobB.TeamID != teamB {
+		t.Error("isolated queues consumed another queue's job")
+	}
+}
+
 // ── EnqueueAlert / DequeueAlert ───────────────────────────────────────────────
 
 func TestEnqueueAndDequeue(t *testing.T) {
@@ -65,7 +137,7 @@ func TestEnqueueAndDequeue(t *testing.T) {
 	teamID := uuid.New()
 	payload := []byte(`{"alertname":"TestAlert","severity":"high"}`)
 
-	// Verify queue starts empty (or drain first to isolate)
+	// The helper provides an empty test-owned queue key.
 	before, err := q.GetQueueLength(ctx)
 	if err != nil {
 		t.Fatalf("GetQueueLength: %v", err)
@@ -173,15 +245,14 @@ func TestDequeue_Timeout_NoJob(t *testing.T) {
 	q := requireQueue(t)
 	ctx := context.Background()
 
-	// Use a very short timeout — if queue is empty, should return nil
-	// We can't guarantee queue is empty in a shared test environment,
-	// but we can verify no error is returned when timing out.
+	// Use a very short timeout — the test-owned queue is empty.
 	job, err := q.DequeueAlert(ctx, 50*time.Millisecond)
 	if err != nil {
 		t.Fatalf("DequeueAlert timeout: unexpected error: %v", err)
 	}
-	// job may be nil (timeout) or non-nil (another test's job) — both are valid
-	_ = job
+	if job != nil {
+		t.Fatal("expected no job from an empty isolated queue")
+	}
 }
 
 // ── GetQueueLength ────────────────────────────────────────────────────────────

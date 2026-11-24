@@ -654,7 +654,6 @@ func main() {
 	apiRouter.HandleFunc("/{teamId}/dependencies", server.handleCreateServiceDependency).Methods("POST")
 	apiRouter.HandleFunc("/{teamId}/dependencies/{depId}", server.handleDeleteServiceDependency).Methods("DELETE")
 
-
 	// Wrap router with CORS middleware
 	handler := corsMiddleware(router)
 
@@ -825,6 +824,9 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Printf("→ resolved [%s] %s (team %s)", source, title, teamID)
 			if existing != nil {
+				if err := s.db.CancelPendingNotificationsForIncident(r.Context(), existing.ID); err != nil {
+					log.Printf("warn: cancel pending notifications for resolved incident %s: %v", existing.ID, err)
+				}
 				if err := s.queue.EnqueueIncidentResolved(r.Context(), existing.ID, teamID); err != nil {
 					log.Printf("warn: enqueue resolved job for %s: %v", existing.ID, err)
 				}
@@ -855,7 +857,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	fp := fingerprint
 
 	// Create incident
@@ -870,7 +871,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		Fingerprint:  &fp,
 	}
 
-	if err := s.db.CreateIncident(r.Context(), incident); err != nil {
+	if err := s.db.CreateIncidentWithNotificationPreparation(r.Context(), incident); err != nil {
 		if errors.Is(err, store.ErrDuplicateIncident) {
 			// Concurrent duplicate slipped past the application-level dedup and hit
 			// the unique partial index. Look up the winner and return deduplicated.
@@ -1375,6 +1376,9 @@ func (s *Server) handleResolveIncident(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.queue.EnqueueIncidentResolved(r.Context(), incidentID, teamID); err != nil {
 		log.Printf("Failed to enqueue resolved incident job: %v", err)
+	}
+	if err := s.db.CancelPendingNotificationsForIncident(r.Context(), incidentID); err != nil {
+		log.Printf("warn: cancel pending notifications for resolved incident %s: %v", incidentID, err)
 	}
 
 	log.Printf("✓ Incident %s resolved", incident.Title)

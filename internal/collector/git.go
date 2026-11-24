@@ -17,6 +17,8 @@ package collector
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v57/github"
@@ -30,13 +32,22 @@ type GitCollector struct {
 
 // Commit represents a git commit
 type Commit struct {
-	SHA       string    `json:"sha"`
-	Message   string    `json:"message"`
-	Author    string    `json:"author"`
-	Timestamp time.Time `json:"timestamp"`
-	URL       string    `json:"url"`
-	Files     []string  `json:"files"`
+	SHA       string       `json:"sha"`
+	Message   string       `json:"message"`
+	Author    string       `json:"author"`
+	Timestamp time.Time    `json:"timestamp"`
+	URL       string       `json:"url"`
+	Files     []string     `json:"files"`
+	Changes   []FileChange `json:"changes,omitempty"`
 }
+
+// FileChange contains bounded, sanitized patch evidence for a commit.
+type FileChange struct {
+	Filename string `json:"filename"`
+	Patch    string `json:"patch,omitempty"`
+}
+
+var secretPatchRE = regexp.MustCompile(`(?i)(token|password|secret|api[_-]?key)\s*[:=]\s*[^\s]+`)
 
 // NewGitCollector creates a new GitHub collector
 func NewGitCollector(token string) *GitCollector {
@@ -94,20 +105,36 @@ func (g *GitCollector) FetchRecentCommits(ctx context.Context, repo, branch stri
 			commit.Timestamp = c.Commit.Author.GetDate().Time
 		}
 
-		// Get files changed in this commit (requires additional API call)
-		// Only fetch if we need detailed file info
-		if c.Files != nil {
-			files := make([]string, 0, len(c.Files))
-			for _, f := range c.Files {
-				files = append(files, f.GetFilename())
+		// ListCommits does not reliably include files; fetch bounded commit details.
+		detail, _, detailErr := g.client.Repositories.GetCommit(ctx, owner, repoName, commit.SHA, nil)
+		if detailErr == nil && detail != nil {
+			const maxFiles, maxPatch = 20, 12000
+			for i, f := range detail.Files {
+				if i >= maxFiles || f == nil {
+					break
+				}
+				name := f.GetFilename()
+				commit.Files = append(commit.Files, name)
+				patch := sanitizePatch(f.GetPatch())
+				if len(patch) > maxPatch {
+					patch = patch[:maxPatch]
+				}
+				commit.Changes = append(commit.Changes, FileChange{Filename: name, Patch: patch})
 			}
-			commit.Files = files
 		}
 
 		result = append(result, commit)
 	}
 
 	return result, nil
+}
+
+func sanitizePatch(patch string) string {
+	patch = secretPatchRE.ReplaceAllString(patch, "$1=[REDACTED]")
+	if strings.TrimSpace(patch) == "" {
+		return ""
+	}
+	return patch
 }
 
 // parseRepo parses "owner/repo" format into owner and repo

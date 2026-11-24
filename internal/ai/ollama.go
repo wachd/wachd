@@ -179,6 +179,8 @@ func BuildPrompt(req *AnalysisRequest) string {
 	prompt.WriteString("2. SUGGESTED ACTION: Specific next step to take\n")
 	prompt.WriteString("3. CONFIDENCE: High, Medium, or Low\n")
 	prompt.WriteString("4. DEPLOYMENT CAUSE: YES if a recent deployment listed above is the probable root cause, NO otherwise\n\n")
+	prompt.WriteString("5. EVIDENCE CLASSIFICATION: CONFIRMED_ROOT_CAUSE, PROBABLE_ROOT_CAUSE, TEMPORAL_CORRELATION_ONLY, or INSUFFICIENT_EVIDENCE\n\n")
+	prompt.WriteString("Only call a configuration change confirmed when the retrieved commit patch explicitly shows it and telemetry supports the mechanism. Never invent file changes, values, or causal claims.\n\n")
 	prompt.WriteString("Be concise and actionable. Focus on what the on-call engineer should do NOW.\n")
 
 	return prompt.String()
@@ -187,8 +189,9 @@ func BuildPrompt(req *AnalysisRequest) string {
 // ParseAnalysisResponse attempts to parse the AI response into structured format
 func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 	response := &AnalysisResponse{
-		Confidence:  "medium",
-		KeyFindings: []string{},
+		Confidence:    "medium",
+		KeyFindings:   []string{},
+		EvidenceClass: "INSUFFICIENT_EVIDENCE",
 	}
 
 	lines := strings.Split(rawResponse, "\n")
@@ -214,6 +217,8 @@ func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 			continue
 		} else if strings.Contains(lowerLine, "deployment cause") {
 			currentSection = "deployment_cause"
+		} else if strings.Contains(lowerLine, "evidence classification") || strings.Contains(lowerLine, "evidence class") {
+			currentSection = "evidence_class"
 			continue
 		}
 
@@ -242,6 +247,13 @@ func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 			// We stop after the first non-empty answer line.
 			if strings.Contains(lowerLine, "yes") {
 				response.IsDeploymentCause = true
+			}
+		case "evidence_class":
+			for _, class := range []string{"CONFIRMED_ROOT_CAUSE", "PROBABLE_ROOT_CAUSE", "TEMPORAL_CORRELATION_ONLY", "INSUFFICIENT_EVIDENCE"} {
+				if strings.Contains(strings.ToUpper(line), class) {
+					response.EvidenceClass = class
+					break
+				}
 			}
 		}
 	}
