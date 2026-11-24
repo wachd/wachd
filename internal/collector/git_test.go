@@ -15,8 +15,20 @@
 package collector
 
 import (
+	"strings"
 	"testing"
 )
+
+func TestSanitizePatch_RedactsSecretsAndPreservesConfigDiff(t *testing.T) {
+	patch := "-DB_POOL_MAX=50\n+DB_POOL_MAX=5\n+API_TOKEN=ghp_secretvalue"
+	got := sanitizePatch(patch)
+	if !strings.Contains(got, "DB_POOL_MAX=50") || !strings.Contains(got, "DB_POOL_MAX=5") {
+		t.Fatalf("configuration change was removed: %q", got)
+	}
+	if strings.Contains(got, "ghp_secretvalue") || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("secret was not redacted: %q", got)
+	}
+}
 
 func TestParseRepo_Valid(t *testing.T) {
 	tests := []struct {

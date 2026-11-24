@@ -49,4 +49,5 @@ type AnalysisResponse struct {
 	Confidence        string   `json:"confidence"`          // high, medium, low
 	KeyFindings       []string `json:"key_findings"`        // Bullet points
 	IsDeploymentCause bool     `json:"is_deployment_cause"` // true when a recent deployment is the probable root cause
+	EvidenceClass     string   `json:"evidence_classification"`
 }

@@ -412,6 +412,11 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 				sha = sha[:7]
 			}
 			commitMsgs[i] = fmt.Sprintf("[%s] %s by %s", sha, c.Message, c.Author)
+			for _, change := range c.Changes {
+				if change.Patch != "" {
+					commitMsgs[i] += fmt.Sprintf("\n  FILE %s\n%s", change.Filename, change.Patch)
+				}
+			}
 		}
 
 		logMsgs := make([]string, len(sanitizedCtx.Logs))
