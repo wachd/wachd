@@ -127,6 +127,8 @@ jobs:
           load: true
           tags: wachd:scan
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=wachd
+          cache-to: type=gha,scope=wachd,mode=max
 
       - name: Trivy scan — LOW / MEDIUM (report only)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -162,6 +164,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=wachd
+          cache-to: type=gha,scope=wachd,mode=max
 
       - name: Extract metadata — agent
         id: meta-agent
@@ -182,6 +186,8 @@ jobs:
           load: true
           tags: wachd-agent:scan
           labels: ${{ steps.meta-agent.outputs.labels }}
+          cache-from: type=gha,scope=wachd-agent
+          cache-to: type=gha,scope=wachd-agent,mode=max
 
       - name: Trivy scan agent — LOW / MEDIUM (report only)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -218,3 +224,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta-agent.outputs.tags }}
           labels: ${{ steps.meta-agent.outputs.labels }}
+          cache-from: type=gha,scope=wachd-agent
+          cache-to: type=gha,scope=wachd-agent,mode=max

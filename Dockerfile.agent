@@ -16,7 +16,10 @@
 # watches security tool CRDs and forwards findings to central Wachd.
 # No Node.js, no web assets — final image is ~25MB.
 
-FROM golang:1.27-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -27,7 +30,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /out/wachd-agent ./cmd/agent
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o /out/wachd-agent ./cmd/agent
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM gcr.io/distroless/static-debian12:nonroot
