@@ -39,7 +39,20 @@ type Commit struct {
 	URL       string       `json:"url"`
 	Files     []string     `json:"files"`
 	Changes   []FileChange `json:"changes,omitempty"`
+	// Relation says how the commit relates to the incident: RelationWithinWindow
+	// or RelationPriorToIncident. Empty for commits fetched without an incident.
+	Relation string `json:"relation,omitempty"`
 }
+
+const (
+	// RelationWithinWindow marks a commit made inside the normal lookback window.
+	RelationWithinWindow = "within_window"
+	// RelationPriorToIncident marks a fallback commit older than the window.
+	RelationPriorToIncident = "prior_to_incident"
+)
+
+// fallbackCommitLimit bounds how many older commits the fallback returns.
+const fallbackCommitLimit = 3
 
 // FileChange contains bounded, sanitized patch evidence for a commit.
 type FileChange struct {
@@ -67,6 +80,44 @@ func NewGitCollector(token string) *GitCollector {
 // FetchRecentCommits fetches recent commits from a repository
 // repo format: "owner/repo", branch: "main", since: time to fetch from
 func (g *GitCollector) FetchRecentCommits(ctx context.Context, repo, branch string, since time.Time, limit int) ([]Commit, error) {
+	return g.listCommits(ctx, repo, branch, since, time.Time{}, limit)
+}
+
+// FetchCommitsForIncident returns commits made in [firedAt-window, firedAt].
+// When that window is empty it falls back to the newest commits made before
+// firedAt and no older than maxAge, so a configuration change deployed hours
+// or days earlier is still available as evidence. Commits made after firedAt
+// are never returned. Results are newest first.
+func (g *GitCollector) FetchCommitsForIncident(ctx context.Context, repo, branch string, firedAt time.Time, window, maxAge time.Duration, limit int) ([]Commit, error) {
+	commits, err := g.listCommits(ctx, repo, branch, firedAt.Add(-window), firedAt, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(commits) > 0 {
+		for i := range commits {
+			commits[i].Relation = RelationWithinWindow
+		}
+		return commits, nil
+	}
+
+	if maxAge <= window {
+		return commits, nil
+	}
+	fallbackLimit := fallbackCommitLimit
+	if limit < fallbackLimit {
+		fallbackLimit = limit
+	}
+	commits, err = g.listCommits(ctx, repo, branch, firedAt.Add(-maxAge), firedAt, fallbackLimit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range commits {
+		commits[i].Relation = RelationPriorToIncident
+	}
+	return commits, nil
+}
+
+func (g *GitCollector) listCommits(ctx context.Context, repo, branch string, since, until time.Time, limit int) ([]Commit, error) {
 	// Parse owner and repo from "owner/repo" format
 	owner, repoName, err := parseRepo(repo)
 	if err != nil {
@@ -77,6 +128,7 @@ func (g *GitCollector) FetchRecentCommits(ctx context.Context, repo, branch stri
 	opts := &github.CommitsListOptions{
 		SHA:   branch,
 		Since: since,
+		Until: until,
 		ListOptions: github.ListOptions{
 			PerPage: limit,
 		},

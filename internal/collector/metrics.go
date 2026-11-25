@@ -33,6 +33,9 @@ type MetricsCollector struct {
 
 // MetricPoint represents a single metric data point
 type MetricPoint struct {
+	// Name is the metric (or derived series) the point belongs to. It is kept
+	// explicitly because PromQL functions such as rate() drop __name__.
+	Name      string            `json:"name,omitempty"`
 	Timestamp time.Time         `json:"timestamp"`
 	Value     float64           `json:"value"`
 	Labels    map[string]string `json:"labels"`
@@ -97,6 +100,7 @@ func (m *MetricsCollector) FetchMetricHistory(ctx context.Context, query string,
 
 			for _, value := range stream.Values {
 				point := MetricPoint{
+					Name:      labels["__name__"],
 					Timestamp: value.Timestamp.Time(),
 					Value:     float64(value.Value),
 					Labels:    labels,
@@ -148,25 +152,37 @@ func (m *MetricsCollector) FetchErrorRate(ctx context.Context, service string, d
 	since := until.Add(-duration)
 	step := duration / 60 // 60 data points
 
-	return m.FetchMetricHistory(ctx, query, since, until, step)
+	points, err := m.FetchMetricHistory(ctx, query, since, until, step)
+	if err != nil {
+		return nil, err
+	}
+	// rate() drops __name__, so name the series explicitly.
+	for i := range points {
+		points[i].Name = fmt.Sprintf("rate(http_errors_total[%s])", duration)
+	}
+	return points, nil
 }
 
-// FetchPoolMetrics returns optional database/sql pool telemetry. Each query is
-// independent so a missing metric does not prevent other evidence collection.
-func (m *MetricsCollector) FetchPoolMetrics(ctx context.Context, service string, duration time.Duration) ([]MetricPoint, error) {
-	queries := []string{
-		`db_pool_in_use{service="%s"}`,
-		`db_pool_open_connections{service="%s"}`,
-		`rate(db_pool_wait_count{service="%s"}[5m])`,
-		`rate(db_pool_wait_duration_seconds{service="%s"}[5m])`,
+// FetchPoolMetrics returns optional database/sql pool telemetry for the window
+// ending at until. Each query is independent so a missing metric does not
+// prevent other evidence collection. Points are tagged with a stable series
+// name because rate() removes the metric name from the result labels.
+func (m *MetricsCollector) FetchPoolMetrics(ctx context.Context, service string, until time.Time, duration time.Duration) ([]MetricPoint, error) {
+	queries := []struct{ name, query string }{
+		{"db_pool_in_use", `db_pool_in_use{service="%s"}`},
+		{"db_pool_open_connections", `db_pool_open_connections{service="%s"}`},
+		{"rate(db_pool_wait_count[5m])", `rate(db_pool_wait_count{service="%s"}[5m])`},
+		{"rate(db_pool_wait_duration_seconds[5m])", `rate(db_pool_wait_duration_seconds{service="%s"}[5m])`},
 	}
 	var out []MetricPoint
-	until := time.Now()
 	since := until.Add(-duration)
 	for _, q := range queries {
-		points, err := m.FetchMetricHistory(ctx, fmt.Sprintf(q, service), since, until, duration/60)
+		points, err := m.FetchMetricHistory(ctx, fmt.Sprintf(q.query, service), since, until, duration/60)
 		if err != nil {
 			continue
+		}
+		for i := range points {
+			points[i].Name = q.name
 		}
 		out = append(out, points...)
 	}

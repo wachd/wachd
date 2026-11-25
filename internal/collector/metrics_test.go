@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -303,6 +304,9 @@ func TestFetchErrorRate_Success(t *testing.T) {
 	if points[0].Value != 0.05 {
 		t.Errorf("expected value 0.05, got %v", points[0].Value)
 	}
+	if points[0].Name != "rate(http_errors_total[5m0s])" {
+		t.Errorf("error-rate series must be named, got %q", points[0].Name)
+	}
 }
 
 func TestFetchErrorRate_ServerError(t *testing.T) {
@@ -315,5 +319,53 @@ func TestFetchErrorRate_ServerError(t *testing.T) {
 	_, err := c.FetchErrorRate(context.Background(), "api", time.Minute)
 	if err == nil {
 		t.Error("expected error for server error")
+	}
+}
+
+// ── FetchPoolMetrics ──────────────────────────────────────────────────────────
+
+func TestFetchPoolMetrics_NamesEverySeriesAndHonoursUntil(t *testing.T) {
+	var queries []string
+	var ends []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.FormValue("query"))
+		ends = append(ends, r.FormValue("end"))
+		w.Header().Set("Content-Type", "application/json")
+		// rate() results carry no __name__, exactly like real Prometheus.
+		_ = json.NewEncoder(w).Encode(promMatrixResponse([][]interface{}{{1609459200.0, "5"}}))
+	}))
+	defer srv.Close()
+
+	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
+	until := time.Unix(1609459200, 0)
+	points, err := c.FetchPoolMetrics(context.Background(), "checkout-api", until, 30*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := map[string]bool{
+		"db_pool_in_use":                          false,
+		"db_pool_open_connections":                false,
+		"rate(db_pool_wait_count[5m])":            false,
+		"rate(db_pool_wait_duration_seconds[5m])": false,
+	}
+	for _, p := range points {
+		if _, ok := want[p.Name]; !ok {
+			t.Errorf("unexpected or empty metric name %q", p.Name)
+		}
+		want[p.Name] = true
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("no points named %q", name)
+		}
+	}
+	if len(queries) != 4 {
+		t.Fatalf("expected 4 queries, got %d", len(queries))
+	}
+	for _, e := range ends {
+		if !strings.HasPrefix(e, "1609459200") {
+			t.Errorf("query window must end at the incident time, got end=%q", e)
+		}
 	}
 }

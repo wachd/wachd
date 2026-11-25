@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"sort"
 	"strings"
 	"time"
 
@@ -84,14 +85,14 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 			if len(repos) > 0 {
 				gc := collector.NewGitCollector(token)
 				for _, repo := range repos {
-					commits, err := gc.FetchRecentCommits(ctx, repo, "main", since, 10)
+					commits, err := gc.FetchCommitsForIncident(ctx, repo, "main", incident.FiredAt, commitLookbackWindow, commitFallbackMaxAge, 10)
 					if err != nil {
 						log.Printf("  ⚠ GitHub %s: %v", repo, err)
 						continue
 					}
 					result.Commits = append(result.Commits, commits...)
 					if len(commits) > 0 {
-						log.Printf("  ✓ %d commits from %s", len(commits), repo)
+						log.Printf("  ✓ %d commits from %s (newest %s, %s)", len(commits), repo, commits[0].SHA[:minInt(7, len(commits[0].SHA))], commits[0].Relation)
 					}
 				}
 			}
@@ -133,7 +134,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 					log.Printf("  ✓ %d metric points from Prometheus", len(metrics))
 				}
 				// Pool metrics are optional and must not mask the generic error rate.
-				if poolMetrics, poolErr := mc.FetchPoolMetrics(ctx, serviceName, 30*time.Minute); poolErr == nil {
+				if poolMetrics, poolErr := mc.FetchPoolMetrics(ctx, serviceName, incident.FiredAt, 30*time.Minute); poolErr == nil {
 					result.Metrics = append(result.Metrics, poolMetrics...)
 				}
 			}
@@ -616,21 +617,98 @@ func (w *Worker) updateIncidentAnalysis(ctx context.Context, incident *store.Inc
 	return err
 }
 
+// commitLookbackWindow is the normal window before an incident searched for
+// commits; commitFallbackMaxAge bounds the older-commit fallback used when the
+// window is empty.
+const (
+	commitLookbackWindow = 30 * time.Minute
+	commitFallbackMaxAge = 7 * 24 * time.Hour
+)
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// formatCommitForPrompt renders a commit with its timestamp relative to the
+// incident so the AI can judge whether the change could have caused it.
+func formatCommitForPrompt(c collector.Commit, shortSHA string, firedAt time.Time) string {
+	line := fmt.Sprintf("[%s] %s by %s", shortSHA, c.Message, c.Author)
+	if !c.Timestamp.IsZero() {
+		line += fmt.Sprintf(" (committed %s", c.Timestamp.UTC().Format(time.RFC3339))
+		if !firedAt.IsZero() {
+			line += fmt.Sprintf(", %s before the alert", c.Timestamp.Sub(firedAt).Abs().Round(time.Minute))
+		}
+		if c.Relation == collector.RelationPriorToIncident {
+			line += ", older than the 30 minute window"
+		}
+		line += ")"
+	}
+	return line
+}
+
+// metricHints explain what known series mean so the AI does not misread units.
+var metricHints = map[string]string{
+	"db_pool_in_use":                          "connections checked out at each sample; a single sample can be low even when the pool is saturated, so read avg and max",
+	"db_pool_open_connections":                "connections open in the pool; equals the configured pool maximum when the pool is full",
+	"rate(db_pool_wait_count[5m])":            "connection waits per second",
+	"rate(db_pool_wait_duration_seconds[5m])": "total seconds spent waiting for a connection per second, summed over all waiting requests; not an average wait",
+}
+
+// formatMetricsSummary summarises metric points per named series so the AI can
+// cite individual metrics instead of one blended average.
 func formatMetricsSummary(metrics []collector.MetricPoint) string {
 	if len(metrics) == 0 {
 		return "No metrics available"
 	}
-	sum, min, max := 0.0, metrics[0].Value, metrics[0].Value
+	type agg struct {
+		n              int
+		sum            float64
+		min, max, last float64
+		lastAt         time.Time
+	}
+	order := []string{}
+	series := map[string]*agg{}
 	for _, m := range metrics {
-		sum += m.Value
-		if m.Value < min {
-			min = m.Value
+		name := m.Name
+		if name == "" {
+			name = m.Labels["__name__"]
 		}
-		if m.Value > max {
-			max = m.Value
+		if name == "" {
+			name = "unnamed_metric"
+		}
+		a, ok := series[name]
+		if !ok {
+			a = &agg{min: m.Value, max: m.Value}
+			series[name] = a
+			order = append(order, name)
+		}
+		a.n++
+		a.sum += m.Value
+		if m.Value < a.min {
+			a.min = m.Value
+		}
+		if m.Value > a.max {
+			a.max = m.Value
+		}
+		if !m.Timestamp.Before(a.lastAt) {
+			a.last, a.lastAt = m.Value, m.Timestamp
 		}
 	}
-	return fmt.Sprintf("avg=%.2f, min=%.2f, max=%.2f over %d points", sum/float64(len(metrics)), min, max, len(metrics))
+	sort.Strings(order)
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		a := series[name]
+		part := fmt.Sprintf("%s: latest=%.4g avg=%.4g min=%.4g max=%.4g (%d points, latest at %s)",
+			name, a.last, a.sum/float64(a.n), a.min, a.max, a.n, a.lastAt.UTC().Format(time.RFC3339))
+		if hint, ok := metricHints[name]; ok {
+			part += " [" + hint + "]"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func formatTimeline(timeline *correlator.Timeline) string {

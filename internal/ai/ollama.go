@@ -145,7 +145,7 @@ func BuildPrompt(req *AnalysisRequest) string {
 	fmt.Fprintf(&prompt, "Severity: %s\n\n", req.Severity)
 
 	if len(req.Commits) > 0 {
-		prompt.WriteString("RECENT DEPLOYS (last 30 min):\n")
+		prompt.WriteString("RECENT DEPLOYS AND CONFIG CHANGES (newest first; compare each commit time with the alert time):\n")
 		for _, commit := range req.Commits {
 			fmt.Fprintf(&prompt, "- %s\n", commit)
 		}
@@ -181,6 +181,7 @@ func BuildPrompt(req *AnalysisRequest) string {
 	prompt.WriteString("4. DEPLOYMENT CAUSE: YES if a recent deployment listed above is the probable root cause, NO otherwise\n\n")
 	prompt.WriteString("5. EVIDENCE CLASSIFICATION: CONFIRMED_ROOT_CAUSE, PROBABLE_ROOT_CAUSE, TEMPORAL_CORRELATION_ONLY, or INSUFFICIENT_EVIDENCE\n\n")
 	prompt.WriteString("Only call a configuration change confirmed when the retrieved commit patch explicitly shows it and telemetry supports the mechanism. Never invent file changes, values, or causal claims.\n\n")
+	prompt.WriteString("Cite your evidence: name the commit SHA and the exact changed setting with old and new values from the patch, the metric names with their values, and the log event or message you relied on. If one of these is missing, say it is missing instead of inferring it. Prefer the most recent commit before the alert that changes the relevant setting.\n\n")
 	prompt.WriteString("Be concise and actionable. Focus on what the on-call engineer should do NOW.\n")
 
 	return prompt.String()

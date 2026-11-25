@@ -17,8 +17,10 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wachd/wachd/internal/ai"
+	"github.com/wachd/wachd/internal/collector"
 	"github.com/wachd/wachd/internal/sanitiser"
 )
 
@@ -153,4 +155,35 @@ func containsIP(s string) bool {
 		}
 	}
 	return false
+}
+
+func TestFormatMetricsSummary_KeepsNamesPerSeries(t *testing.T) {
+	at := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+	got := formatMetricsSummary([]collector.MetricPoint{
+		{Name: "db_pool_in_use", Value: 5, Timestamp: at},
+		{Name: "db_pool_in_use", Value: 5, Timestamp: at.Add(time.Minute)},
+		{Name: "rate(db_pool_wait_count[5m])", Value: 90, Timestamp: at},
+		{Labels: map[string]string{"__name__": "http_errors_total"}, Value: 7, Timestamp: at},
+	})
+	for _, want := range []string{"db_pool_in_use: latest=5 avg=5 min=5 max=5 (2 points", "rate(db_pool_wait_count[5m]): latest=90", "connection waits per second", "http_errors_total: latest=7"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFormatCommitForPrompt_ShowsTimeRelativeToAlert(t *testing.T) {
+	fired := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+	c := collector.Commit{
+		Message:   "config: adjust service capacity",
+		Author:    "dev",
+		Timestamp: fired.Add(-21 * time.Hour),
+		Relation:  collector.RelationPriorToIncident,
+	}
+	got := formatCommitForPrompt(c, "d2fd87c", fired)
+	for _, want := range []string{"[d2fd87c]", "2026-11-24T13:00:00Z", "21h0m0s before the alert", "older than the 30 minute window"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("commit line missing %q: %s", want, got)
+		}
+	}
 }
