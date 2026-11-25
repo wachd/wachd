@@ -810,3 +810,17 @@ func TestGeminiBackend_Analyze_ErrorField(t *testing.T) {
 		t.Errorf("expected error message to contain quota text, got: %v", err)
 	}
 }
+
+func TestBuildPrompt_RequiresEvidenceCitations(t *testing.T) {
+	prompt := BuildPrompt(&AnalysisRequest{
+		IncidentTitle:  "checkout errors",
+		Severity:       "high",
+		Commits:        []string{"[d2fd87c] config (committed 2026-11-24T13:00:00Z, 21h0m0s before the alert)"},
+		MetricsSummary: "db_pool_in_use: latest=5",
+	})
+	for _, want := range []string{"RECENT DEPLOYS AND CONFIG CHANGES", "21h0m0s before the alert", "Cite your evidence", "old and new values", "say it is missing"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+}

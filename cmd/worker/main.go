@@ -411,7 +411,7 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 			if len(sha) > 7 {
 				sha = sha[:7]
 			}
-			commitMsgs[i] = fmt.Sprintf("[%s] %s by %s", sha, c.Message, c.Author)
+			commitMsgs[i] = formatCommitForPrompt(c, sha, incident.FiredAt)
 			for _, change := range c.Changes {
 				if change.Patch != "" {
 					commitMsgs[i] += fmt.Sprintf("\n  FILE %s\n%s", change.Filename, change.Patch)
