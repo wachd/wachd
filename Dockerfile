@@ -13,7 +13,12 @@
 # limitations under the License.
 
 # ── Stage 1: Go binaries ──────────────────────────────────────────────────────
-FROM golang:1.27-alpine AS go-builder
+# Build on the host platform and cross-compile: Go targets any arch natively, so no
+# QEMU emulation is needed for the compile step.
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS go-builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -26,11 +31,13 @@ RUN go mod download
 COPY . .
 
 # Build both binaries — CGO disabled for fully static executables
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /out/server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /out/worker ./cmd/worker
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o /out/server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o /out/worker ./cmd/worker
 
 # ── Stage 2: Next.js standalone build ────────────────────────────────────────
-FROM node:22-alpine AS web-builder
+# Runs on the host platform. The Next.js build tools must match the host, so
+# dependencies are installed for the host and the output is plain JavaScript.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web-builder
 
 WORKDIR /web
 
@@ -42,6 +49,10 @@ COPY web/ .
 
 # output: 'standalone' in next.config.ts produces a self-contained server.js
 RUN npm run build
+
+# sharp (next/image optimisation) is not used and its native binaries would be for
+# the build host, not the target architecture, so drop them from the output.
+RUN rm -rf .next/standalone/node_modules/@img .next/standalone/node_modules/sharp
 
 # ── Stage 3: Runtime ─────────────────────────────────────────────────────────
 # node:22-alpine hosts both the statically-compiled Go binaries and the
