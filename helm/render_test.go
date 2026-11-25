@@ -9,7 +9,9 @@
 package helm_render_test
 
 import (
+	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -76,5 +78,37 @@ func TestHelmRender_FCM_Disabled_NoEnvVar(t *testing.T) {
 
 	if strings.Contains(out, "FCM_SERVICE_ACCOUNT_JSON") {
 		t.Error("FCM disabled: FCM_SERVICE_ACCOUNT_JSON should not appear in rendered output, but it does")
+	}
+}
+
+// chartAppVersion reads appVersion from Chart.yaml.
+func chartAppVersion(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(chartPath + "/Chart.yaml")
+	if err != nil {
+		t.Fatalf("read Chart.yaml: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^appVersion:\s*"?([^"\s]+)"?\s*$`).FindSubmatch(data)
+	if m == nil {
+		t.Fatal("appVersion not found in Chart.yaml")
+	}
+	return string(m[1])
+}
+
+// A default install must deploy the image that matches the chart's appVersion.
+func TestHelmRender_DefaultImageTagIsAppVersion(t *testing.T) {
+	out := helmTemplate(t)
+	want := "image: ghcr.io/wachd/wachd:" + chartAppVersion(t)
+
+	if got := strings.Count(out, want); got != 3 {
+		t.Errorf("expected %q in server, worker and web deployments (3), found %d", want, got)
+	}
+}
+
+func TestHelmRender_ExplicitImageTagWins(t *testing.T) {
+	out := helmTemplate(t, "image.tag=9.9.9")
+
+	if !strings.Contains(out, "image: ghcr.io/wachd/wachd:9.9.9") {
+		t.Error("image.tag override not applied to rendered deployments")
 	}
 }
