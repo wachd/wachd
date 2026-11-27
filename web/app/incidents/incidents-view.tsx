@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { isUnverifiedHypothesis } from '@/lib/rca';
 import { useSession } from '@/lib/session-context';
 import type { Incident } from '@/lib/types';
 
@@ -202,7 +203,11 @@ export function IncidentsView({ demoMode }: { demoMode: boolean }) {
                       {incident.analysis?.root_cause && (
                         <div className="mt-3 bg-blue-50 border border-blue-200 rounded-md p-3">
                           <p className="text-sm text-blue-900">
-                            <span className="font-medium">AI Analysis: </span>
+                            <span className="font-medium">
+                              {isUnverifiedHypothesis(incident.analysis)
+                                ? 'AI hypothesis (unverified): '
+                                : 'AI Analysis: '}
+                            </span>
                             {incident.analysis.root_cause}
                           </p>
                         </div>

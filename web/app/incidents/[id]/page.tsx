@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import IncidentGraphExplorer from '@/components/incident-graph-explorer';
 import SimilarIncidentsPanel from '@/components/similar-incidents-panel';
 import IncidentTimeline from '@/components/incident-timeline';
+import RcaAnalysisCard from '@/components/rca-analysis-card';
 import { api } from '@/lib/api';
 import { useSession } from '@/lib/session-context';
 import type { Incident } from '@/lib/types';
@@ -209,65 +210,7 @@ export default function IncidentDetailPage() {
         </div>
 
         {/* AI Analysis */}
-        {incident.analysis?.root_cause && (
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <span>🤖</span>
-              Root Cause Analysis
-            </h2>
-            <div className="space-y-4">
-              <div>
-                <h3 className="text-sm font-medium text-gray-700 mb-1">
-                  Probable Cause
-                </h3>
-                <p className="text-gray-900">{incident.analysis.root_cause}</p>
-              </div>
-              {incident.analysis.suggested_action && (
-                <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-1">
-                    Suggested Action
-                  </h3>
-                  <p className="text-gray-900">
-                    {incident.analysis.suggested_action}
-                  </p>
-                </div>
-              )}
-              {incident.analysis.confidence && (
-                <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-1">
-                    Confidence
-                  </h3>
-                  <span
-                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      incident.analysis.confidence === 'high'
-                        ? 'bg-green-100 text-green-800'
-                        : incident.analysis.confidence === 'medium'
-                        ? 'bg-yellow-100 text-yellow-800'
-                        : 'bg-gray-100 text-gray-800'
-                    }`}
-                  >
-                    {incident.analysis.confidence}
-                  </span>
-                </div>
-              )}
-              {incident.analysis.correlations &&
-                incident.analysis.correlations.length > 0 && (
-                  <div>
-                    <h3 className="text-sm font-medium text-gray-700 mb-2">
-                      Timeline Correlations
-                    </h3>
-                    <ul className="list-disc list-inside space-y-1 text-gray-900">
-                      {incident.analysis.correlations.map((corr, idx) => (
-                        <li key={idx} className="text-sm">
-                          {corr}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-            </div>
-          </div>
-        )}
+        {incident.analysis?.root_cause && <RcaAnalysisCard analysis={incident.analysis} />}
 
         {/* Context */}
         {incident.context && (
