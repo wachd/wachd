@@ -848,7 +848,7 @@ func TestParseAnalysisResponse_MarkdownSections(t *testing.T) {
 	if r.Confidence != "high" {
 		t.Errorf("confidence = %q", r.Confidence)
 	}
-	if len(r.KeyFindings) != 2 {
+	if len(r.KeyFindings) != 3 || !strings.HasPrefix(r.KeyFindings[2], "Deployment cause: no commit was provided") {
 		t.Errorf("key findings = %v", r.KeyFindings)
 	}
 	if r.IsDeploymentCause {
@@ -863,5 +863,19 @@ func TestParseAnalysisResponse_InlineLabels(t *testing.T) {
 	r := ParseAnalysisResponse("**ROOT CAUSE:** Bad deploy of abc123.\n**SUGGESTED ACTION:** Roll back.\n**CONFIDENCE:** Low\n**DEPLOYMENT CAUSE:** YES\n**EVIDENCE CLASSIFICATION:** CONFIRMED_ROOT_CAUSE\n")
 	if r.RootCause != "Bad deploy of abc123." || r.SuggestedAction != "Roll back." || r.Confidence != "low" || !r.IsDeploymentCause || r.EvidenceClass != "CONFIRMED_ROOT_CAUSE" {
 		t.Errorf("unexpected parse: %+v", r)
+	}
+}
+
+func TestParseAnalysisResponse_FirstEvidenceClassWins(t *testing.T) {
+	r := ParseAnalysisResponse("### 5. EVIDENCE CLASSIFICATION\n**PROBABLE_ROOT_CAUSE** - not CONFIRMED_ROOT_CAUSE because no commit patch was retrieved.\n")
+	if r.EvidenceClass != "PROBABLE_ROOT_CAUSE" {
+		t.Errorf("class = %q", r.EvidenceClass)
+	}
+}
+
+func TestParseAnalysisResponse_KeepsDeploymentReasoning(t *testing.T) {
+	r := ParseAnalysisResponse("### 4. DEPLOYMENT CAUSE\n**NO** - no commit or deployment information was provided.\n")
+	if r.IsDeploymentCause || len(r.KeyFindings) != 1 || !strings.Contains(r.KeyFindings[0], "no commit or deployment information") {
+		t.Errorf("unexpected: %+v", r)
 	}
 }

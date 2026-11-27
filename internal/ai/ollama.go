@@ -283,12 +283,28 @@ func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 				answer := strings.ToLower(strings.Trim(strings.Fields(lower + " ")[0], "*_.:,;"))
 				response.IsDeploymentCause = answer == "yes"
 			}
-		case "evidence_class":
-			for _, class := range []string{"CONFIRMED_ROOT_CAUSE", "PROBABLE_ROOT_CAUSE", "TEMPORAL_CORRELATION_ONLY", "INSUFFICIENT_EVIDENCE"} {
-				if strings.Contains(strings.ToUpper(text), class) {
-					response.EvidenceClass = class
-					break
+			// Keep the reasoning (for example "no commit was provided") so what the
+			// model could not establish is not lost.
+			note := strings.TrimLeft(text, "*_ ")
+			if f := strings.Fields(note); len(f) > 0 {
+				if w := strings.ToLower(strings.Trim(f[0], "*_.:,;")); w == "yes" || w == "no" {
+					note = strings.TrimLeft(strings.TrimPrefix(note, f[0]), "*_ -–—:")
 				}
+			}
+			if len(strings.Fields(note)) > 2 {
+				response.KeyFindings = append(response.KeyFindings, "Deployment cause: "+note)
+			}
+		case "evidence_class":
+			// The first class named is the answer; later ones are usually
+			// contrasts such as "PROBABLE_ROOT_CAUSE, not CONFIRMED_ROOT_CAUSE".
+			upper, best := strings.ToUpper(text), -1
+			for _, class := range []string{"CONFIRMED_ROOT_CAUSE", "PROBABLE_ROOT_CAUSE", "TEMPORAL_CORRELATION_ONLY", "INSUFFICIENT_EVIDENCE"} {
+				if i := strings.Index(upper, class); i >= 0 && (best < 0 || i < best) {
+					best, response.EvidenceClass = i, class
+				}
+			}
+			if rest := strings.TrimSpace(strings.Trim(text, "*_ ")); len(strings.Fields(rest)) > 3 {
+				response.KeyFindings = append(response.KeyFindings, "Evidence classification: "+rest)
 			}
 		}
 	}
