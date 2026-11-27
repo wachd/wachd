@@ -410,7 +410,7 @@ func main() {
 	redisClient := redis.NewClient(redisOpt)
 	defer func() { _ = redisClient.Close() }()
 
-	sessions := auth.NewSessionStore(redisClient)
+	sessions := auth.NewSessionStore(redisClient).WithAccessSource(db)
 
 	// Load license key — falls back to the open-source tier if unset or invalid.
 	// Wachd is fully open source: no usage limits are enforced on any tier.

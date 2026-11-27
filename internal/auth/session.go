@@ -52,11 +52,39 @@ type Session struct {
 // SessionStore manages sessions in Redis.
 type SessionStore struct {
 	client *redis.Client
+	access AccessSource // when set, sessions are revalidated on every request
 }
 
 // NewSessionStore creates a SessionStore from a redis.Client.
 func NewSessionStore(client *redis.Client) *SessionStore {
 	return &SessionStore{client: client}
+}
+
+// WithAccessSource makes Load re-resolve identity and team roles from the
+// database on every request instead of trusting the snapshot taken at login.
+func (s *SessionStore) WithAccessSource(src AccessSource) *SessionStore {
+	s.access = src
+	return s
+}
+
+// Load returns the session for a token with its current access. A session whose
+// user was deleted, deactivated or lost every grant is removed and reported as
+// absent (nil, nil). If access cannot be verified it returns an error and the
+// caller must deny the request.
+func (s *SessionStore) Load(ctx context.Context, token string) (*Session, error) {
+	sess, err := s.Get(ctx, token)
+	if err != nil || sess == nil || s.access == nil {
+		return sess, err
+	}
+	fresh, err := revalidateSession(ctx, s.access, sess)
+	if err != nil {
+		return nil, err
+	}
+	if fresh == nil {
+		_ = s.Delete(ctx, token)
+		return nil, nil
+	}
+	return fresh, nil
 }
 
 // Create generates a new session token, stores the session in Redis, and returns
