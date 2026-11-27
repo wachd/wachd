@@ -433,3 +433,21 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildTimeline_CommitAfterAlert_IsNotTheDeployThatTriggeredIt(t *testing.T) {
+	alert := time.Date(2026, 11, 24, 12, 33, 30, 0, time.UTC)
+	c := NewCorrelator()
+	tl := c.BuildTimeline(alert, &Context{
+		Commits: []collector.Commit{{SHA: "d2fd87cac8d6953a48fd682fd732f9cf0d240ffd", Author: "dev", Timestamp: alert.Add(15*time.Minute + 41*time.Second)}},
+	})
+	if tl.LastCommit != nil || tl.LastDeployTime != nil {
+		t.Fatalf("a commit after the alert must not become the last deploy: %+v", tl)
+	}
+	joined := strings.Join(tl.Correlations, ";")
+	if !strings.Contains(joined, "d2fd87c") || !strings.Contains(joined, "cannot have caused the original onset") {
+		t.Fatalf("expected an explicit after-onset note, got %q", joined)
+	}
+	if strings.Contains(joined, "after recent deploy") {
+		t.Fatalf("must not claim the alert followed a recent deploy: %q", joined)
+	}
+}

@@ -384,7 +384,10 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 	log.Printf("🧹 Sanitizing PII...")
 	sanitizedCtx := w.sanitizeContext(collectedCtx)
 
-	timeline := w.correlator.BuildTimeline(incident.FiredAt, sanitizedCtx)
+	timeline := w.correlator.BuildTimeline(incident.AnalysisTime(), sanitizedCtx)
+	if note := onsetTimelineNote(incident); note != "" {
+		timeline.Correlations = append([]string{note}, timeline.Correlations...)
+	}
 	for _, c := range timeline.Correlations {
 		log.Printf("   📊 %s", c)
 	}
@@ -411,7 +414,7 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 			if len(sha) > 7 {
 				sha = sha[:7]
 			}
-			commitMsgs[i] = formatCommitForPrompt(c, sha, incident.FiredAt)
+			commitMsgs[i] = formatCommitForPrompt(c, sha, incident.AnalysisTime())
 			for _, change := range c.Changes {
 				if change.Patch != "" {
 					commitMsgs[i] += fmt.Sprintf("\n  FILE %s\n%s", change.Filename, change.Patch)
@@ -439,6 +442,7 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 			log.Printf("Warning: AI analysis failed: %v", err)
 		} else {
 			aiAnalysis = ai.ParseAnalysisResponse(rawResp)
+			limitEvidenceForOnset(incident, sanitizedCtx, aiAnalysis)
 			log.Printf("  Cause: %s", aiAnalysis.RootCause)
 			log.Printf("  Action: %s", aiAnalysis.SuggestedAction)
 			log.Printf("  Confidence: %s", aiAnalysis.Confidence)

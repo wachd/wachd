@@ -58,15 +58,23 @@ func (c *Correlator) BuildTimeline(alertTime time.Time, ctx *Context) *Timeline 
 	// Find last deploy (most recent commit)
 	if len(ctx.Commits) > 0 {
 		lastCommit := &ctx.Commits[0]
-		timeline.LastCommit = lastCommit
-		timeline.LastDeployTime = &lastCommit.Timestamp
+		deployAge := alertTime.Sub(lastCommit.Timestamp)
+		if deployAge < 0 {
+			// Made after the alert started: it can only have changed an alert that
+			// was already firing, so it is never the deploy that triggered it.
+			timeline.Correlations = append(timeline.Correlations, fmt.Sprintf(
+				"Commit %s was made %s after the alert started and cannot have caused the original onset",
+				shortSHA(lastCommit.SHA), formatDuration(-deployAge)))
+		} else {
+			timeline.LastCommit = lastCommit
+			timeline.LastDeployTime = &lastCommit.Timestamp
+		}
 
 		// Check if deploy was recent (within 30 minutes of alert)
-		deployAge := alertTime.Sub(lastCommit.Timestamp)
-		if deployAge < 30*time.Minute {
+		if deployAge >= 0 && deployAge < 30*time.Minute {
 			correlation := fmt.Sprintf("Alert fired %s after recent deploy (commit %s by %s)",
 				formatDuration(deployAge),
-				lastCommit.SHA[:7],
+				shortSHA(lastCommit.SHA),
 				lastCommit.Author,
 			)
 			timeline.Correlations = append(timeline.Correlations, correlation)
@@ -218,4 +226,11 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d minutes", int(d.Minutes()))
 	}
 	return fmt.Sprintf("%.1f hours", d.Hours())
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
