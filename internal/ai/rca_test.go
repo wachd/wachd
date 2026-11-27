@@ -106,15 +106,48 @@ func TestParseRCA_IgnoresModelSuppliedVerified(t *testing.T) {
 
 // ── evidence verification and calibration ─────────────────────────────────────
 
-func TestVerify_ValidConfirmedIsKept(t *testing.T) {
+// A verified commit plus matching telemetry supports a probable cause. It must
+// not by itself establish that the change was deployed.
+func TestVerify_CommitAndTelemetryAreProbableNotConfirmed(t *testing.T) {
 	r := mustParse(t, validJSON)
 	VerifyAndCalibrate(r, lab())
-	if r.EvidenceClass != ClassConfirmed || !r.IsDeploymentCause || len(r.RejectedEvidence) != 0 || len(r.Evidence) != 3 {
-		t.Fatalf("valid RCA was altered: %+v", r)
+	if r.EvidenceClass != ClassProbable || !r.IsDeploymentCause || r.CausalCommit == "" {
+		t.Fatalf("want PROBABLE with the verified commit kept: %+v", r)
 	}
+	if !strings.Contains(strings.Join(r.KeyFindings, " "), "No deployment record was collected") {
+		t.Errorf("the caveat that the deployment is unconfirmed is missing: %v", r.KeyFindings)
+	}
+	if len(r.RejectedEvidence) != 0 || len(r.Evidence) != 3 {
+		t.Fatalf("valid evidence was altered: %+v", r)
+	}
+}
+
+// With a real deployment record the stronger claim is allowed.
+func TestVerify_ConfirmedNeedsADeploymentRecord(t *testing.T) {
+	set := lab()
+	set.DeploymentRecorded = true
+	r := mustParse(t, validJSON)
+	VerifyAndCalibrate(r, set)
+	if r.EvidenceClass != ClassConfirmed || !r.IsDeploymentCause {
+		t.Fatalf("class=%s", r.EvidenceClass)
+	}
+	for _, f := range r.KeyFindings {
+		if strings.Contains(f, "No deployment record") {
+			t.Error("caveat shown although a deployment record exists")
+		}
+	}
+}
+
+// Every kept reference is a verified one, and none of them is a deployment record.
+func TestVerify_KeptEvidenceIsVerifiedCommitsMetricsLogs(t *testing.T) {
+	r := mustParse(t, validJSON)
+	VerifyAndCalibrate(r, lab())
 	for _, e := range r.Evidence {
 		if !e.Verified {
 			t.Errorf("%s %s not verified", e.Type, e.Ref)
+		}
+		if e.Type != "commit" && e.Type != "metric" && e.Type != "log" {
+			t.Errorf("unexpected evidence type %q", e.Type)
 		}
 	}
 }
@@ -273,7 +306,7 @@ func causalRCA(causal string, deploy bool, refs ...string) *AnalysisResponse {
 func TestCausalCommit_VerifiedAndNormalised(t *testing.T) {
 	r := causalRCA("da3db37", true, "da3db37")
 	VerifyAndCalibrate(r, lab())
-	if r.CausalCommit != "da3db37aaaaaaaa" || !r.IsDeploymentCause || r.EvidenceClass != ClassConfirmed {
+	if r.CausalCommit != "da3db37aaaaaaaa" || !r.IsDeploymentCause || r.EvidenceClass != ClassProbable {
 		t.Fatalf("%+v", r)
 	}
 }

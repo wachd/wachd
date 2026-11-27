@@ -57,6 +57,10 @@ type claudeResponse struct {
 
 // NewClaudeBackend creates a new Anthropic Claude backend.
 // model should be a current Claude model ID, e.g. "claude-sonnet-4-6".
+// claudeRequestTimeout bounds one Claude request. Structured answers are longer
+// than the old free-text ones, so 60s was occasionally too short.
+const claudeRequestTimeout = 120 * time.Second
+
 func NewClaudeBackend(apiKey, model string) *ClaudeBackend {
 	if model == "" {
 		model = "claude-sonnet-4-6"
@@ -64,7 +68,7 @@ func NewClaudeBackend(apiKey, model string) *ClaudeBackend {
 	return &ClaudeBackend{
 		apiKey: apiKey,
 		model:  model,
-		client: &http.Client{Timeout: 60 * time.Second},
+		client: &http.Client{Timeout: claudeRequestTimeout},
 	}
 }
 

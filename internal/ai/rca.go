@@ -179,6 +179,12 @@ type EvidenceSet struct {
 	Commits []CommitEvidence
 	Metrics []string // series names as collected
 	Logs    []string // sanitised log messages
+
+	// DeploymentRecorded is true only when a record that the change actually ran
+	// in production was collected (a deployment event, release or rollout). A
+	// commit alone shows a change was written, not that it was deployed, and
+	// Wachd does not collect deployment records today, so this stays false.
+	DeploymentRecorded bool
 }
 
 var (
@@ -342,7 +348,9 @@ func VerifyAndCalibrate(r *AnalysisResponse, set EvidenceSet) {
 
 	orig := r.EvidenceClass
 	switch {
-	case r.EvidenceClass == ClassConfirmed && !(causalCommit && telemetry):
+	case r.EvidenceClass == ClassConfirmed && !(causalCommit && telemetry && set.DeploymentRecorded):
+		// A verified commit plus matching telemetry supports a probable cause.
+		// Only a deployment record can confirm the change was live.
 		r.EvidenceClass = ClassProbable
 	}
 	if (r.EvidenceClass == ClassProbable) && !anyVerified {
@@ -362,6 +370,9 @@ func VerifyAndCalibrate(r *AnalysisResponse, set EvidenceSet) {
 		if r.Confidence == "high" {
 			r.Confidence = "medium"
 		}
+	}
+	if causalCommit && !set.DeploymentRecorded {
+		notes = append(notes, "No deployment record was collected: the commit shows the change was written, not that it was deployed, so the deployment itself is not confirmed.")
 	}
 	r.Warnings = append(r.Warnings, notes...)
 	r.KeyFindings = append(r.KeyFindings, notes...)

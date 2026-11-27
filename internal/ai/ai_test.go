@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // roundTripFunc lets us intercept http.Client calls regardless of URL,
@@ -877,5 +878,22 @@ func TestParseAnalysisResponse_KeepsDeploymentReasoning(t *testing.T) {
 	r := ParseAnalysisResponse("### 4. DEPLOYMENT CAUSE\n**NO** - no commit or deployment information was provided.\n")
 	if r.IsDeploymentCause || len(r.KeyFindings) != 1 || !strings.Contains(r.KeyFindings[0], "no commit or deployment information") {
 		t.Errorf("unexpected: %+v", r)
+	}
+}
+
+// Structured answers are longer than the old free text, so the request limit is 120s.
+func TestClaudeBackend_RequestTimeoutIs120s(t *testing.T) {
+	c := NewClaudeBackend("k", "")
+	if c.client.Timeout != 120*time.Second || claudeRequestTimeout != 120*time.Second {
+		t.Fatalf("timeout = %v", c.client.Timeout)
+	}
+}
+
+func TestBuildPrompt_DoesNotLetACommitProveDeployment(t *testing.T) {
+	p := BuildPrompt(&AnalysisRequest{Commits: []string{"x"}})
+	for _, want := range []string{"not that it was deployed", "deployment record confirms it ran"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing %q", want)
+		}
 	}
 }
