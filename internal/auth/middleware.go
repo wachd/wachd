@@ -141,6 +141,12 @@ func (s *Session) HasAdminRole() bool {
 	return false
 }
 
+// ContextWithSession returns a context carrying sess, as RequireAuth would set
+// it. Handler tests use it to exercise role checks without Redis.
+func ContextWithSession(ctx context.Context, sess *Session) context.Context {
+	return context.WithValue(ctx, sessionContextKey, sess)
+}
+
 // SessionFromContext retrieves the session from the context, or nil if not present.
 func SessionFromContext(ctx context.Context) *Session {
 	sess, _ := ctx.Value(sessionContextKey).(*Session)

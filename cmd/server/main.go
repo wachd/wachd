@@ -1277,7 +1277,7 @@ func (s *Server) handleAcknowledgeIncident(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTeamAccess(r, teamID) {
+	if !s.requireTeamResponder(r, teamID) {
 		writeForbidden(w)
 		return
 	}
@@ -1343,7 +1343,7 @@ func (s *Server) handleResolveIncident(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTeamAccess(r, teamID) {
+	if !s.requireTeamResponder(r, teamID) {
 		writeForbidden(w)
 		return
 	}
@@ -1401,7 +1401,7 @@ func (s *Server) handleReopenIncident(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTeamAccess(r, teamID) {
+	if !s.requireTeamResponder(r, teamID) {
 		writeForbidden(w)
 		return
 	}
@@ -1456,7 +1456,7 @@ func (s *Server) handleSnoozeIncident(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTeamAccess(r, teamID) {
+	if !s.requireTeamResponder(r, teamID) {
 		writeForbidden(w)
 		return
 	}
