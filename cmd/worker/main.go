@@ -60,7 +60,7 @@ type Worker struct {
 	correlator    *correlator.Correlator
 	graphStore    graph.Store
 	aiBackend     ai.Backend
-	invs          investigationStore // defaults to db
+	invs          investigationStore                                            // defaults to db
 	investigate   func(ctx context.Context, teamID, incidentID uuid.UUID) error // test hook; defaults to investigateIncident
 }
 

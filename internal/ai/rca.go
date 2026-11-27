@@ -337,9 +337,7 @@ func VerifyAndCalibrate(r *AnalysisResponse, set EvidenceSet) {
 		notes = append(notes, fmt.Sprintf("Unverified evidence was discarded: %s.", strings.Join(r.RejectedEvidence, ", ")))
 	}
 
-	for _, w := range r.Warnings {
-		notes = append(notes, w)
-	}
+	notes = append(notes, r.Warnings...)
 	r.Warnings = nil
 	if r.IsDeploymentCause && !causalCommit {
 		r.IsDeploymentCause = false
