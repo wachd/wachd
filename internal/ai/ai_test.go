@@ -824,3 +824,44 @@ func TestBuildPrompt_RequiresEvidenceCitations(t *testing.T) {
 		}
 	}
 }
+
+// Regression: a markdown response whose body prose contains words such as
+// "transaction" or "root cause" must not be mistaken for a section heading.
+func TestParseAnalysisResponse_MarkdownSections(t *testing.T) {
+	raw := "## Incident Analysis: checkout-api HTTP 5xx\n\n---\n\n### 1. ROOT CAUSE\n\n" +
+		"The pool is saturated (5 of 5), causing transaction timeouts and 5xx errors.\n\n---\n\n" +
+		"### 2. SUGGESTED ACTION\n\n**Immediately:** Increase the pool size and redeploy.\n\n" +
+		"1. **Verify pool config**\n\n---\n\n### 3. CONFIDENCE\n\n**High** - metrics are unambiguous:\n" +
+		"- `db_pool_in_use`: max=5\n- `rate(db_pool_wait_count[5m])`: ~88/s\n\n---\n\n" +
+		"### 4. DEPLOYMENT CAUSE\n\n**NO** - no commit was provided, so a yes/no call cannot be made on a deployment.\n\n" +
+		"### 5. EVIDENCE CLASSIFICATION\n\nPROBABLE_ROOT_CAUSE\n"
+	r := ParseAnalysisResponse(raw)
+	if !strings.HasPrefix(r.RootCause, "The pool is saturated") || strings.Contains(r.RootCause, "Increase the pool") || strings.Contains(r.RootCause, "###") {
+		t.Errorf("root cause wrong: %q", r.RootCause)
+	}
+	if !strings.Contains(r.SuggestedAction, "Increase the pool size") || strings.Contains(r.SuggestedAction, "###") {
+		t.Errorf("suggested action wrong: %q", r.SuggestedAction)
+	}
+	if r.SuggestedAction == "Review incident details and determine appropriate action" {
+		t.Error("fell back to the default action")
+	}
+	if r.Confidence != "high" {
+		t.Errorf("confidence = %q", r.Confidence)
+	}
+	if len(r.KeyFindings) != 2 {
+		t.Errorf("key findings = %v", r.KeyFindings)
+	}
+	if r.IsDeploymentCause {
+		t.Error("deployment cause must be false for NO")
+	}
+	if r.EvidenceClass != "PROBABLE_ROOT_CAUSE" {
+		t.Errorf("class = %q", r.EvidenceClass)
+	}
+}
+
+func TestParseAnalysisResponse_InlineLabels(t *testing.T) {
+	r := ParseAnalysisResponse("**ROOT CAUSE:** Bad deploy of abc123.\n**SUGGESTED ACTION:** Roll back.\n**CONFIDENCE:** Low\n**DEPLOYMENT CAUSE:** YES\n**EVIDENCE CLASSIFICATION:** CONFIRMED_ROOT_CAUSE\n")
+	if r.RootCause != "Bad deploy of abc123." || r.SuggestedAction != "Roll back." || r.Confidence != "low" || !r.IsDeploymentCause || r.EvidenceClass != "CONFIRMED_ROOT_CAUSE" {
+		t.Errorf("unexpected parse: %+v", r)
+	}
+}

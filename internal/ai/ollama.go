@@ -187,6 +187,52 @@ func BuildPrompt(req *AnalysisRequest) string {
 	return prompt.String()
 }
 
+// analysisSections maps a section label to its key. A line starts a section
+// only when, after stripping markdown, it begins with one of these labels.
+var analysisSections = []struct{ label, key string }{
+	{"evidence classification", "evidence_class"},
+	{"evidence class", "evidence_class"},
+	{"deployment cause", "deployment_cause"},
+	{"suggested action", "action"},
+	{"root cause", "root_cause"},
+	{"confidence", "confidence"},
+	{"key findings", "findings"},
+}
+
+// matchSectionHeading reports the section a line introduces and any content
+// that follows the label on the same line. It accepts markdown headings,
+// numbering and bold ("### 1. ROOT CAUSE", "**Confidence:** High") but never
+// matches a label that merely appears inside a sentence.
+func matchSectionHeading(line string) (key, rest string, ok bool) {
+	t := strings.TrimLeft(line, "#*_ \t>")
+	t = strings.TrimLeft(t, "0123456789")
+	if len(t) < len(strings.TrimLeft(line, "#*_ \t>")) {
+		t = strings.TrimLeft(t, ".) \t*_")
+	}
+	lower := strings.ToLower(t)
+	for _, sec := range analysisSections {
+		if !strings.HasPrefix(lower, sec.label) {
+			continue
+		}
+		tail := strings.TrimLeft(t[len(sec.label):], "*_ \t")
+		if tail != "" && !strings.ContainsRune(":-–—", rune(tail[0])) && !strings.HasPrefix(tail, "–") && !strings.HasPrefix(tail, "—") {
+			// "root cause analysis ..." or "confidence in ..." is prose, not a heading.
+			if !strings.HasPrefix(lower[len(sec.label):], ":") {
+				continue
+			}
+		}
+		tail = strings.TrimLeft(tail, ":-–— \t*_")
+		return sec.key, strings.TrimSpace(tail), true
+	}
+	return "", "", false
+}
+
+// isRule reports whether a line is only a markdown horizontal rule.
+func isRule(line string) bool {
+	t := strings.Trim(line, " -*_=")
+	return t == "" && len(line) >= 3
+}
+
 // ParseAnalysisResponse attempts to parse the AI response into structured format
 func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 	response := &AnalysisResponse{
@@ -195,68 +241,69 @@ func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 		EvidenceClass: "INSUFFICIENT_EVIDENCE",
 	}
 
-	lines := strings.Split(rawResponse, "\n")
-	currentSection := ""
+	section := ""
+	seen := map[string]bool{}
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	add := func(key, text string) {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return
 		}
-
-		lowerLine := strings.ToLower(line)
-
-		// Detect sections
-		if strings.Contains(lowerLine, "root cause") {
-			currentSection = "root_cause"
-			continue
-		} else if strings.Contains(lowerLine, "suggested action") || strings.Contains(lowerLine, "action") {
-			currentSection = "action"
-			continue
-		} else if strings.Contains(lowerLine, "confidence") {
-			currentSection = "confidence"
-			continue
-		} else if strings.Contains(lowerLine, "deployment cause") {
-			currentSection = "deployment_cause"
-		} else if strings.Contains(lowerLine, "evidence classification") || strings.Contains(lowerLine, "evidence class") {
-			currentSection = "evidence_class"
-			continue
-		}
-
-		// Parse content
-		switch currentSection {
+		lower := strings.ToLower(text)
+		first := !seen[key]
+		seen[key] = true
+		switch key {
 		case "root_cause":
 			if response.RootCause == "" {
-				response.RootCause = line
+				response.RootCause = text
 			} else {
-				response.RootCause += " " + line
+				response.RootCause += " " + text
 			}
 		case "action":
 			if response.SuggestedAction == "" {
-				response.SuggestedAction = line
+				response.SuggestedAction = text
 			} else {
-				response.SuggestedAction += " " + line
+				response.SuggestedAction += " " + text
 			}
 		case "confidence":
-			if strings.Contains(lowerLine, "high") {
-				response.Confidence = "high"
-			} else if strings.Contains(lowerLine, "low") {
-				response.Confidence = "low"
+			if first {
+				if strings.Contains(lower, "high") {
+					response.Confidence = "high"
+				} else if strings.Contains(lower, "low") {
+					response.Confidence = "low"
+				}
+			} else if b := strings.TrimLeft(text, "-*• "); b != text {
+				response.KeyFindings = append(response.KeyFindings, strings.TrimSpace(b))
 			}
+		case "findings":
+			response.KeyFindings = append(response.KeyFindings, strings.TrimSpace(strings.TrimLeft(text, "-*• ")))
 		case "deployment_cause":
-			// Any line containing "yes" means a deployment is the probable cause.
-			// We stop after the first non-empty answer line.
-			if strings.Contains(lowerLine, "yes") {
-				response.IsDeploymentCause = true
+			if first {
+				// The answer is the first word (YES/NO); explanations may contain either.
+				answer := strings.ToLower(strings.Trim(strings.Fields(lower + " ")[0], "*_.:,;"))
+				response.IsDeploymentCause = answer == "yes"
 			}
 		case "evidence_class":
 			for _, class := range []string{"CONFIRMED_ROOT_CAUSE", "PROBABLE_ROOT_CAUSE", "TEMPORAL_CORRELATION_ONLY", "INSUFFICIENT_EVIDENCE"} {
-				if strings.Contains(strings.ToUpper(line), class) {
+				if strings.Contains(strings.ToUpper(text), class) {
 					response.EvidenceClass = class
 					break
 				}
 			}
 		}
+	}
+
+	for _, line := range strings.Split(rawResponse, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || isRule(line) {
+			continue
+		}
+		if key, rest, ok := matchSectionHeading(line); ok {
+			section = key
+			add(section, rest)
+			continue
+		}
+		add(section, line)
 	}
 
 	// Fallback: if parsing failed, put entire response in root cause
