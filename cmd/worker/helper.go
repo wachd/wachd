@@ -612,7 +612,7 @@ func (w *Worker) updateIncidentAnalysis(ctx context.Context, incident *store.Inc
 		return fmt.Errorf("marshal analysis: %w", err)
 	}
 	_, err = w.db.Pool().Exec(ctx, `
-		UPDATE incidents SET analysis = $1, updated_at = $2 WHERE id = $3 AND team_id = $4
+		UPDATE incidents SET analysis = COALESCE(analysis, '{}'::jsonb) || $1::jsonb, updated_at = $2 WHERE id = $3 AND team_id = $4
 	`, analysisJSON, time.Now(), incident.ID, incident.TeamID)
 	return err
 }

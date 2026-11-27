@@ -892,8 +892,9 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Enqueue job for worker to process
 	if err := s.queue.EnqueueAlert(r.Context(), incident.ID, teamID, body); err != nil {
-		log.Printf("Failed to enqueue job: %v", err)
-		// Don't fail the request - incident is already saved
+		// The investigation intent was saved with the incident, so the worker's
+		// reconciler will pick it up; the Redis job is only the fast path.
+		log.Printf("Failed to enqueue job (worker will recover it from the database): %v", err)
 	}
 
 	// Return 202 Accepted
@@ -982,6 +983,11 @@ func (s *Server) handleGetIncident(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to convert incident to response: %v", err)
 		http.Error(w, "Failed to format incident", http.StatusInternalServerError)
 		return
+	}
+	if inv, invErr := s.db.GetInvestigation(r.Context(), teamID, incidentID); invErr != nil {
+		log.Printf("warn: load investigation for %s: %v", incidentID, invErr)
+	} else {
+		resp.Investigation = inv.Status()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

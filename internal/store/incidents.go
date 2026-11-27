@@ -110,6 +110,14 @@ func (db *DB) CreateIncidentWithNotificationPreparation(ctx context.Context, inc
 	if err != nil {
 		return fmt.Errorf("failed to create notification preparation: %w", err)
 	}
+	// Durable investigation intent: the Redis job is only a fast path. The grace
+	// period lets it win in the normal case before the reconciler steps in.
+	_, err = tx.Exec(ctx, `INSERT INTO incident_investigations (incident_id, team_id, next_attempt_at)
+		VALUES ($1,$2, now() + make_interval(secs => $3::double precision))`,
+		incident.ID, incident.TeamID, InvestigationFirstAttemptGrace.Seconds())
+	if err != nil {
+		return fmt.Errorf("failed to create investigation intent: %w", err)
+	}
 	return tx.Commit(ctx)
 }
 
@@ -262,6 +270,9 @@ type IncidentResponse struct {
 	CreatedAt      time.Time              `json:"created_at"`
 	UpdatedAt      time.Time              `json:"updated_at"`
 	AssignedTo     *uuid.UUID             `json:"assigned_to,omitempty"`
+	// Investigation reports the root-cause investigation state (detail view only).
+	// Absent for incidents created before durable investigations.
+	Investigation *InvestigationStatus `json:"investigation,omitempty"`
 }
 
 // ToResponse converts an Incident to IncidentResponse with parsed JSON fields
