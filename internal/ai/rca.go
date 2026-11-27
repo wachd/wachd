@@ -345,8 +345,7 @@ func VerifyAndCalibrate(r *AnalysisResponse, set EvidenceSet) {
 	}
 
 	orig := r.EvidenceClass
-	switch {
-	case r.EvidenceClass == ClassConfirmed && !(causalCommit && telemetry && set.DeploymentRecorded):
+	if r.EvidenceClass == ClassConfirmed && (!causalCommit || !telemetry || !set.DeploymentRecorded) {
 		// A verified commit plus matching telemetry supports a probable cause.
 		// Only a deployment record can confirm the change was live.
 		r.EvidenceClass = ClassProbable
