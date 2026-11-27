@@ -50,4 +50,14 @@ type AnalysisResponse struct {
 	KeyFindings       []string `json:"key_findings"`        // Bullet points
 	IsDeploymentCause bool     `json:"is_deployment_cause"` // true when a recent deployment is the probable root cause
 	EvidenceClass     string   `json:"evidence_classification"`
+
+	// Evidence lists the references the answer relied on. Verified is set by
+	// Wachd after checking them against what was collected.
+	Evidence []EvidenceRef `json:"evidence,omitempty"`
+	// RejectedEvidence names references that were discarded as unverifiable.
+	RejectedEvidence []string `json:"rejected_evidence,omitempty"`
+	// Warnings records every claim Wachd lowered or rejected.
+	Warnings []string `json:"warnings,omitempty"`
+	// ParseMode is "json" or "markdown".
+	ParseMode string `json:"parse_mode,omitempty"`
 }

@@ -480,13 +480,24 @@ func (w *Worker) investigateIncident(ctx context.Context, teamID, incidentID uui
 			log.Printf("Warning: AI analysis failed: %v", err)
 			retryErr = fmt.Errorf("AI analysis failed: %w", err)
 		} else {
-			aiAnalysis = ai.ParseAnalysisResponse(rawResp)
-			limitEvidenceForOnset(incident, sanitizedCtx, aiAnalysis)
-			log.Printf("  Cause: %s", aiAnalysis.RootCause)
-			log.Printf("  Action: %s", aiAnalysis.SuggestedAction)
-			log.Printf("  Confidence: %s", aiAnalysis.Confidence)
-			if err := w.updateIncidentAnalysis(ctx, incident, aiAnalysis); err != nil {
-				log.Printf("Warning: failed to save AI analysis: %v", err)
+			parsed, perr := ai.ParseRCA(rawResp)
+			if perr != nil {
+				// Never store an unusable answer as a successful RCA, and never
+				// log or keep the raw text: it may echo sensitive telemetry.
+				log.Printf("Warning: AI response rejected (%d bytes): %v", len(rawResp), perr)
+				retryErr = fmt.Errorf("AI response rejected: %w", perr)
+			} else {
+				aiAnalysis = parsed
+				ai.VerifyAndCalibrate(aiAnalysis, evidenceSetFrom(incident, sanitizedCtx))
+				limitEvidenceForOnset(incident, sanitizedCtx, aiAnalysis)
+				log.Printf("  Cause: %s", aiAnalysis.RootCause)
+				log.Printf("  Action: %s", aiAnalysis.SuggestedAction)
+				log.Printf("  Confidence: %s class: %s evidence: %d verified, %d rejected",
+					aiAnalysis.Confidence, aiAnalysis.EvidenceClass, len(aiAnalysis.Evidence), len(aiAnalysis.RejectedEvidence))
+				if err := w.updateIncidentAnalysis(ctx, incident, aiAnalysis); err != nil {
+					log.Printf("Warning: failed to save AI analysis: %v", err)
+					retryErr = fmt.Errorf("save AI analysis: %w", err)
+				}
 			}
 		}
 	}

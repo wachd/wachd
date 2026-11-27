@@ -76,7 +76,7 @@ func (c *ClaudeBackend) Analyze(ctx context.Context, prompt string) (string, err
 
 	body := claudeRequest{
 		Model:     c.model,
-		MaxTokens: 1024,
+		MaxTokens: 2048,
 		Messages: []claudeMessage{
 			{Role: "user", Content: prompt},
 		},
