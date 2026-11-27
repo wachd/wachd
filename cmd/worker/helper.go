@@ -35,7 +35,7 @@ import (
 
 type grafanaMCPCollector interface {
 	FetchErrorLogs(ctx context.Context, service string, since, until time.Time, limit int) ([]collector.LogLine, error)
-	FetchErrorRate(ctx context.Context, service string, duration time.Duration) ([]collector.MetricPoint, error)
+	FetchErrorRate(ctx context.Context, service string, until time.Time, duration time.Duration) ([]collector.MetricPoint, error)
 }
 
 var newGrafanaMCPCollector = func(endpoint, token string) grafanaMCPCollector {
@@ -126,7 +126,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 			if err != nil {
 				log.Printf("  ⚠ Prometheus client: %v", err)
 			} else {
-				metrics, err := mc.FetchErrorRate(ctx, serviceName, 30*time.Minute)
+				metrics, err := mc.FetchErrorRate(ctx, serviceName, incident.AnalysisTime(), 30*time.Minute)
 				if err != nil {
 					log.Printf("  ⚠ Prometheus query: %v", err)
 				} else if len(metrics) > 0 {
@@ -267,7 +267,7 @@ func (w *Worker) collectGrafanaMCPContext(ctx context.Context, cfg *store.TeamCo
 		}
 	}
 
-	metrics, err := gc.FetchErrorRate(ctx, serviceName, 30*time.Minute)
+	metrics, err := gc.FetchErrorRate(ctx, serviceName, until, 30*time.Minute)
 	if err != nil {
 		log.Printf("  ⚠ Grafana MCP metrics: %v", err)
 	} else {
@@ -357,7 +357,7 @@ func collectDepViaMCP(ctx context.Context, mc grafanaMCPCollector, dep *store.Se
 	}
 
 	metricsOK := false
-	if metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, 30*time.Minute); err != nil {
+	if metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, until, 30*time.Minute); err != nil {
 		log.Printf("    ⚠ Grafana MCP metrics for dependency %s: %v", dep.DependsOn, err)
 	} else {
 		metricsOK = true
@@ -406,7 +406,7 @@ func applyDependencyContext(ctx context.Context, incident *store.Incident, cfg *
 				if err != nil {
 					log.Printf("    ⚠ Prometheus client for dependency %s: %v", dep.DependsOn, err)
 				} else {
-					metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, 30*time.Minute)
+					metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, incident.AnalysisTime(), 30*time.Minute)
 					if err != nil {
 						log.Printf("    ⚠ Prometheus for dependency %s: %v", dep.DependsOn, err)
 					} else if len(metrics) > 0 {

@@ -40,7 +40,7 @@ func (f *fakeGrafanaMCPCollector) FetchErrorLogs(context.Context, string, time.T
 	return f.logs, f.logsErr
 }
 
-func (f *fakeGrafanaMCPCollector) FetchErrorRate(context.Context, string, time.Duration) ([]collector.MetricPoint, error) {
+func (f *fakeGrafanaMCPCollector) FetchErrorRate(context.Context, string, time.Time, time.Duration) ([]collector.MetricPoint, error) {
 	f.metricCalls++
 	return f.metrics, f.metricsErr
 }
