@@ -257,3 +257,66 @@ func TestVerify_UnknownEvidenceTypeRejected(t *testing.T) {
 }
 
 func TestVerify_NilSafe(t *testing.T) { VerifyAndCalibrate(nil, lab()) }
+
+// ── causal_commit ─────────────────────────────────────────────────────────────
+
+func causalRCA(causal string, deploy bool, refs ...string) *AnalysisResponse {
+	r := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", Confidence: "high", EvidenceClass: ClassConfirmed,
+		IsDeploymentCause: deploy, CausalCommit: causal}
+	for _, c := range refs {
+		r.Evidence = append(r.Evidence, EvidenceRef{Type: "commit", Ref: c})
+	}
+	r.Evidence = append(r.Evidence, EvidenceRef{Type: "metric", Ref: "db_pool_in_use"})
+	return r
+}
+
+func TestCausalCommit_VerifiedAndNormalised(t *testing.T) {
+	r := causalRCA("da3db37", true, "da3db37")
+	VerifyAndCalibrate(r, lab())
+	if r.CausalCommit != "da3db37aaaaaaaa" || !r.IsDeploymentCause || r.EvidenceClass != ClassConfirmed {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// History is not blame: a second cited commit does not become the cause.
+func TestCausalCommit_ContextCommitIsNotCausal(t *testing.T) {
+	r := causalRCA("da3db37", true, "da3db37", "2a74f4c")
+	VerifyAndCalibrate(r, lab())
+	if r.CausalCommit != "da3db37aaaaaaaa" {
+		t.Fatalf("causal = %q", r.CausalCommit)
+	}
+}
+
+func TestCausalCommit_FabricatedPostOnsetAndPatchlessAreCleared(t *testing.T) {
+	set := lab()
+	set.Commits = append(set.Commits, CommitEvidence{SHA: "c0ffee1234", HasPatch: false})
+	for name, cc := range map[string]string{"fabricated": "deadbee", "post-onset": "9a914b2", "no patch": "c0ffee1"} {
+		r := causalRCA(cc, true)
+		VerifyAndCalibrate(r, set)
+		if r.CausalCommit != "" || r.IsDeploymentCause || r.EvidenceClass == ClassConfirmed {
+			t.Errorf("%s: causal=%q deploy=%v class=%s", name, r.CausalCommit, r.IsDeploymentCause, r.EvidenceClass)
+		}
+	}
+}
+
+func TestCausalCommit_InferredOnlyWhenUnambiguous(t *testing.T) {
+	one := causalRCA("", true, "da3db37")
+	VerifyAndCalibrate(one, lab())
+	if one.CausalCommit == "" || !one.IsDeploymentCause {
+		t.Errorf("single usable commit not inferred: %+v", one)
+	}
+	two := causalRCA("", true, "da3db37", "2a74f4c")
+	VerifyAndCalibrate(two, lab())
+	if two.CausalCommit != "" || two.IsDeploymentCause || two.EvidenceClass == ClassConfirmed {
+		t.Errorf("ambiguous commits must not be guessed: %+v", two)
+	}
+}
+
+func TestCausalCommit_NullMeansNoDeploymentCause(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"x","suggested_action":"y","confidence":"high","is_deployment_cause":false,
+	"causal_commit":null,"evidence_classification":"PROBABLE_ROOT_CAUSE","evidence":[{"type":"metric","ref":"db_pool_in_use"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if r.CausalCommit != "" || r.IsDeploymentCause {
+		t.Fatalf("%+v", r)
+	}
+}

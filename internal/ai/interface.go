@@ -51,6 +51,9 @@ type AnalysisResponse struct {
 	IsDeploymentCause bool     `json:"is_deployment_cause"` // true when a recent deployment is the probable root cause
 	EvidenceClass     string   `json:"evidence_classification"`
 
+	// CausalCommit is the verified commit held responsible, empty when none is.
+	CausalCommit string `json:"causal_commit,omitempty"`
+
 	// Evidence lists the references the answer relied on. Verified is set by
 	// Wachd after checking them against what was collected.
 	Evidence []EvidenceRef `json:"evidence,omitempty"`

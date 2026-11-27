@@ -60,6 +60,7 @@ type rcaPayload struct {
 	Confidence        string        `json:"confidence"`
 	EvidenceClass     string        `json:"evidence_classification"`
 	IsDeploymentCause bool          `json:"is_deployment_cause"`
+	CausalCommit      string        `json:"causal_commit"`
 	Evidence          []EvidenceRef `json:"evidence"`
 }
 
@@ -112,6 +113,7 @@ func fromPayload(p *rcaPayload) (*AnalysisResponse, error) {
 		Confidence:        conf,
 		KeyFindings:       []string{},
 		IsDeploymentCause: p.IsDeploymentCause,
+		CausalCommit:      strings.TrimSpace(p.CausalCommit),
 		EvidenceClass:     class,
 		ParseMode:         ParseJSON,
 	}
@@ -255,6 +257,8 @@ func VerifyAndCalibrate(r *AnalysisResponse, set EvidenceSet) {
 	}
 
 	var causalCommit, telemetry, anyVerified bool
+	var evidenceCommit string // the one verified, usable commit ref, if unambiguous
+	usableRefs := 0
 	kept := r.Evidence[:0:0]
 	for _, e := range r.Evidence {
 		switch e.Type {
@@ -262,7 +266,8 @@ func VerifyAndCalibrate(r *AnalysisResponse, set EvidenceSet) {
 			if c, ok := commitByPrefix(e.Ref); ok {
 				e.Verified = true
 				if !c.AfterOnset && c.HasPatch {
-					causalCommit = true
+					usableRefs++
+					evidenceCommit = e.Ref
 				}
 			}
 		case "metric":
@@ -280,6 +285,32 @@ func VerifyAndCalibrate(r *AnalysisResponse, set EvidenceSet) {
 		}
 	}
 	r.Evidence = kept
+
+	// The commit the model holds responsible must itself be real, pre-onset and
+	// carry a patch. Without an explicit one, a single usable cited commit is
+	// taken only when the model also claimed a deployment cause.
+	if cc := strings.TrimSpace(r.CausalCommit); cc != "" {
+		c, ok := commitByPrefix(cc)
+		switch {
+		case !ok:
+			r.RejectedEvidence = append(r.RejectedEvidence, fmt.Sprintf("causal commit %q", cc))
+			r.CausalCommit = ""
+		case c.AfterOnset:
+			r.Warnings = append(r.Warnings, fmt.Sprintf("Causal commit %s was committed after the alert began and cannot be its cause.", cc))
+			r.CausalCommit = ""
+		case !c.HasPatch:
+			r.Warnings = append(r.Warnings, fmt.Sprintf("Causal commit %s has no collected patch, so the change is unverified.", cc))
+			r.CausalCommit = ""
+		default:
+			causalCommit = true
+			r.CausalCommit = c.SHA
+		}
+	} else if r.IsDeploymentCause && usableRefs == 1 {
+		if c, ok := commitByPrefix(evidenceCommit); ok {
+			causalCommit = true
+			r.CausalCommit = c.SHA
+		}
+	}
 
 	// Commit ids in the prose must exist too.
 	prose := r.RootCause + " " + r.SuggestedAction + " " + strings.Join(r.KeyFindings, " ")
@@ -299,6 +330,10 @@ func VerifyAndCalibrate(r *AnalysisResponse, set EvidenceSet) {
 		notes = append(notes, fmt.Sprintf("Unverified evidence was discarded: %s.", strings.Join(r.RejectedEvidence, ", ")))
 	}
 
+	for _, w := range r.Warnings {
+		notes = append(notes, w)
+	}
+	r.Warnings = nil
 	if r.IsDeploymentCause && !causalCommit {
 		r.IsDeploymentCause = false
 		notes = append(notes, "A deployment cause was not accepted: no collected pre-onset commit with a patch supports it.")

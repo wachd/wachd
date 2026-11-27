@@ -181,6 +181,7 @@ func BuildPrompt(req *AnalysisRequest) string {
 	prompt.WriteString("  \"key_findings\": [string],           // short facts you relied on, plus what could NOT be established (for example: no commit or deployment information)\n")
 	prompt.WriteString("  \"confidence\": \"high\"|\"medium\"|\"low\",\n")
 	prompt.WriteString("  \"is_deployment_cause\": boolean,     // DEPLOYMENT CAUSE: true only if a commit listed above is the probable root cause\n")
+	prompt.WriteString("  \"causal_commit\": string|null,       // the single commit SHA you hold responsible for the incident, or null. Null when none is listed, none predates the alert, or none is supported by its patch. Commits mentioned only as history or context are NOT causal.\n")
 	prompt.WriteString("  \"evidence_classification\": \"CONFIRMED_ROOT_CAUSE\"|\"PROBABLE_ROOT_CAUSE\"|\"TEMPORAL_CORRELATION_ONLY\"|\"INSUFFICIENT_EVIDENCE\",\n")
 	prompt.WriteString("  \"evidence\": [ {\"type\": \"commit\"|\"metric\"|\"log\", \"ref\": string, \"detail\": string} ]\n")
 	prompt.WriteString("}\n\n")
