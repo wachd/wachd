@@ -62,12 +62,35 @@ export interface MetricPoint {
   value: number;
 }
 
+export type EvidenceClassification =
+  | 'CONFIRMED_ROOT_CAUSE'
+  | 'PROBABLE_ROOT_CAUSE'
+  | 'TEMPORAL_CORRELATION_ONLY'
+  | 'INSUFFICIENT_EVIDENCE';
+
+// A reference the AI cited. Wachd sets `verified` after checking it against the
+// data it actually collected.
+export interface EvidenceRef {
+  type: string; // commit | metric | log
+  ref: string;
+  detail?: string;
+  verified?: boolean;
+}
+
+// Every field after `correlations` is absent on incidents analysed before
+// evidence verification (v0.4.37), so all of them are optional.
 export interface IncidentAnalysis {
   root_cause?: string;
   suggested_action?: string;
   confidence?: 'high' | 'medium' | 'low';
   key_findings?: string[];
   correlations?: string[];
+  evidence_classification?: EvidenceClassification | string;
+  is_deployment_cause?: boolean;
+  causal_commit?: string;
+  evidence?: EvidenceRef[];
+  rejected_evidence?: string[];
+  warnings?: string[];
 }
 
 export interface Schedule {

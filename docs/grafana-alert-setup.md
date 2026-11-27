@@ -16,8 +16,40 @@ service = <your-service-name>
 
 This value must match:
 - The GitHub repository name (or the subfolder if it is a monorepo)
-- The service name used in your Loki log labels
+- The service name used in your Loki log labels (by default the `service` label; see [Loki label key](#loki-label-key) if your logs use another label)
 - The service name used in your Prometheus metric labels
+
+---
+
+## Loki label key
+
+Wachd looks up a service's error logs with a LogQL stream selector. By default it uses the `service` label:
+
+```
+{service="checkout-api"} |~ "(?i)(error|critical|fatal)"
+```
+
+Many Kubernetes setups label log streams differently, for example `app`. Set the **Loki Service Label** in **Settings → Data Sources**, or `loki_label_key` through the API, and Wachd uses that label instead:
+
+```bash
+curl -X PUT https://wachd.example.com/api/v1/teams/$TEAM_ID/config \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"loki_label_key": "app"}'
+```
+
+| Configured value | Selector sent to Loki |
+|---|---|
+| *(empty / not set)* | `{service="checkout-api"}` |
+| `app` | `{app="checkout-api"}` |
+| `app_kubernetes_io_name` | `{app_kubernetes_io_name="checkout-api"}` |
+
+**Label naming restrictions.** Prometheus and Loki label names must match `[A-Za-z_][A-Za-z0-9_]*`: letters, digits and underscores, not starting with a digit. Kubernetes label keys such as `app.kubernetes.io/name` contain dots and slashes, so they cannot be used as a Loki stream label as they are. Log shippers (Promtail, Grafana Alloy) convert them when they attach pod labels to a stream, usually by replacing each non-alphanumeric character with `_`, which gives `app_kubernetes_io_name`. Enter the name the label actually has in Loki; check it in Grafana Explore (label browser) or with `logcli labels`. A key that is not a valid Loki label name is rejected when you save it, and Wachd does not rewrite keys for you.
+
+- The service name is always quoted and escaped in the query, and the key can never change the structure of the query.
+- Leaving the value empty restores the default. Existing teams are unaffected until they set a value.
+- If the label does not exist in your Loki, the query returns no logs and the analysis runs without log context. Confirm the label name before saving.
+- The setting applies to log collection, including the Grafana MCP log query. Prometheus metric queries still use the `service` label.
+- The value matched against this label is the service name Wachd derives from the alert (normally its `service` label).
 
 ---
 

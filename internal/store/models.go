@@ -175,6 +175,7 @@ type TeamConfig struct {
 	GrafanaMCPTokenEncrypted *string   `json:"grafana_mcp_token_encrypted,omitempty"`
 	PrometheusEndpoint       *string   `json:"prometheus_endpoint,omitempty"`
 	LokiEndpoint             *string   `json:"loki_endpoint,omitempty"`
+	LokiLabelKey             *string   `json:"loki_label_key,omitempty"` // stream label identifying a service; nil = "service"
 	DynatraceEndpoint        *string   `json:"dynatrace_endpoint,omitempty"`
 	DynatraceTokenEncrypted  *string   `json:"dynatrace_token_encrypted,omitempty"`
 	SplunkEndpoint           *string   `json:"splunk_endpoint,omitempty"`

@@ -44,6 +44,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 	"github.com/wachd/wachd/internal/auth"
+	"github.com/wachd/wachd/internal/collector"
 	"github.com/wachd/wachd/internal/graph"
 	"github.com/wachd/wachd/internal/license"
 	"github.com/wachd/wachd/internal/notify"
@@ -1534,6 +1535,7 @@ type teamConfigPublic struct {
 	GrafanaMCPTokenSet bool     `json:"grafana_mcp_token_set"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint,omitempty"`
 	LokiEndpoint       *string  `json:"loki_endpoint,omitempty"`
+	LokiLabelKey       *string  `json:"loki_label_key,omitempty"`
 }
 
 // teamConfigInput is the request body for PUT /{teamId}/config.
@@ -1546,6 +1548,7 @@ type teamConfigInput struct {
 	GrafanaMCPToken    string   `json:"grafana_mcp_token"`
 	PrometheusEndpoint *string  `json:"prometheus_endpoint"`
 	LokiEndpoint       *string  `json:"loki_endpoint"`
+	LokiLabelKey       *string  `json:"loki_label_key"`
 }
 
 // buildTeamConfigPublic assembles the API-safe config view for a team.
@@ -1572,6 +1575,7 @@ func (s *Server) buildTeamConfigPublic(ctx context.Context, teamID uuid.UUID, cf
 		pub.GrafanaMCPTokenSet = cfg.GrafanaMCPTokenEncrypted != nil && *cfg.GrafanaMCPTokenEncrypted != ""
 		pub.PrometheusEndpoint = cfg.PrometheusEndpoint
 		pub.LokiEndpoint = cfg.LokiEndpoint
+		pub.LokiLabelKey = cfg.LokiLabelKey
 		if cfg.GitHubRepos != nil {
 			_ = json.Unmarshal(cfg.GitHubRepos, &pub.GitHubRepos)
 		}
@@ -1647,6 +1651,12 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "loki_endpoint too long", http.StatusBadRequest)
 		return
 	}
+	if input.LokiLabelKey != nil {
+		if _, err := collector.ValidateLokiLabelKey(*input.LokiLabelKey); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if input.GrafanaMCPURL != nil && len(*input.GrafanaMCPURL) > 500 {
 		http.Error(w, "grafana_mcp_url too long", http.StatusBadRequest)
 		return
@@ -1680,6 +1690,14 @@ func (s *Server) handleUpsertTeamConfig(w http.ResponseWriter, r *http.Request) 
 	}
 	if input.LokiEndpoint != nil {
 		tc.LokiEndpoint = input.LokiEndpoint
+	}
+	if input.LokiLabelKey != nil {
+		// An empty value clears the setting and restores the default ("service").
+		if key := strings.TrimSpace(*input.LokiLabelKey); key == "" {
+			tc.LokiLabelKey = nil
+		} else {
+			tc.LokiLabelKey = &key
+		}
 	}
 	if input.GrafanaMCPURL != nil {
 		tc.GrafanaMCPURL = input.GrafanaMCPURL

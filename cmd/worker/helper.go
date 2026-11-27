@@ -38,6 +38,22 @@ type grafanaMCPCollector interface {
 	FetchErrorRate(ctx context.Context, service string, until time.Time, duration time.Duration) ([]collector.MetricPoint, error)
 }
 
+// lokiLabelKey is the team's configured Loki stream label, "" for the default.
+func lokiLabelKey(cfg *store.TeamConfig) string {
+	if cfg != nil && cfg.LokiLabelKey != nil {
+		return *cfg.LokiLabelKey
+	}
+	return ""
+}
+
+// applyLokiLabelKey passes the team's Loki label key to collectors that build
+// their own Loki queries. Collectors without the setter are left as they are.
+func applyLokiLabelKey(c grafanaMCPCollector, cfg *store.TeamConfig) {
+	if s, ok := c.(interface{ SetLokiLabelKey(string) }); ok {
+		s.SetLokiLabelKey(lokiLabelKey(cfg))
+	}
+}
+
 var newGrafanaMCPCollector = func(endpoint, token string) grafanaMCPCollector {
 	return collector.NewGrafanaMCPCollector(endpoint, token)
 }
@@ -106,7 +122,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 		if err := validate.EndpointURL(*cfg.LokiEndpoint); err != nil {
 			log.Printf("  ⚠ Loki endpoint blocked (SSRF): %v", err)
 		} else {
-			lc := collector.NewLogsCollector(*cfg.LokiEndpoint)
+			lc := collector.NewLogsCollector(*cfg.LokiEndpoint).WithLabelKey(lokiLabelKey(cfg))
 			logs, err := lc.FetchErrorLogs(ctx, serviceName, since, incident.AnalysisTime(), 50)
 			if err != nil {
 				log.Printf("  ⚠ Loki: %v", err)
@@ -253,6 +269,7 @@ func (w *Worker) collectGrafanaMCPContext(ctx context.Context, cfg *store.TeamCo
 	}
 
 	gc := newGrafanaMCPCollector(*cfg.GrafanaMCPURL, token)
+	applyLokiLabelKey(gc, cfg)
 	logsSuccess := false
 	metricsSuccess := false
 
@@ -317,6 +334,7 @@ func (w *Worker) collectDependencyContext(ctx context.Context, incident *store.I
 			directDeps = deps
 		} else if token != "" {
 			mc := newGrafanaMCPCollector(*cfg.GrafanaMCPURL, token)
+			applyLokiLabelKey(mc, cfg)
 			for _, dep := range deps {
 				logsOK, metricsOK := collectDepViaMCP(ctx, mc, dep, since, incident.AnalysisTime(), result)
 				if !logsOK || !metricsOK {
@@ -387,7 +405,7 @@ func applyDependencyContext(ctx context.Context, incident *store.Incident, cfg *
 			if err := validate.EndpointURL(*cfg.LokiEndpoint); err != nil {
 				log.Printf("    ⚠ Loki endpoint blocked (SSRF) for dependency %s: %v", dep.DependsOn, err)
 			} else {
-				lc := collector.NewLogsCollector(*cfg.LokiEndpoint)
+				lc := collector.NewLogsCollector(*cfg.LokiEndpoint).WithLabelKey(lokiLabelKey(cfg))
 				logs, err := lc.FetchErrorLogs(ctx, dep.DependsOn, since, incident.AnalysisTime(), 50)
 				if err != nil {
 					log.Printf("    ⚠ Loki for dependency %s: %v", dep.DependsOn, err)
