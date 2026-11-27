@@ -27,9 +27,9 @@ import (
 const (
 	// investigationLease is how long a worker owns an investigation without
 	// renewing it. A crashed worker is therefore detected within this time.
-	investigationLease = 90 * time.Second
+	investigationLease = 45 * time.Second
 	// investigationHeartbeat renews the lease while an investigation runs.
-	investigationHeartbeat = 20 * time.Second
+	investigationHeartbeat = 15 * time.Second
 	// maxInvestigationAttempts bounds retries; after that the investigation is
 	// marked failed and stays visible on the incident.
 	maxInvestigationAttempts = 3
