@@ -35,7 +35,7 @@ import (
 
 type grafanaMCPCollector interface {
 	FetchErrorLogs(ctx context.Context, service string, since, until time.Time, limit int) ([]collector.LogLine, error)
-	FetchErrorRate(ctx context.Context, service string, duration time.Duration) ([]collector.MetricPoint, error)
+	FetchErrorRate(ctx context.Context, service string, until time.Time, duration time.Duration) ([]collector.MetricPoint, error)
 }
 
 var newGrafanaMCPCollector = func(endpoint, token string) grafanaMCPCollector {
@@ -68,7 +68,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 	}
 	log.Printf("  Service: %s", serviceName)
 
-	since := incident.FiredAt.Add(-30 * time.Minute)
+	since := incident.AnalysisTime().Add(-30 * time.Minute)
 
 	// GitHub commits
 	if cfg.GitHubTokenEncrypted != nil && w.enc != nil {
@@ -85,7 +85,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 			if len(repos) > 0 {
 				gc := collector.NewGitCollector(token)
 				for _, repo := range repos {
-					commits, err := gc.FetchCommitsForIncident(ctx, repo, "main", incident.FiredAt, commitLookbackWindow, commitFallbackMaxAge, 10)
+					commits, err := gc.FetchCommitsForIncident(ctx, repo, "main", incident.AnalysisTime(), commitLookbackWindow, commitFallbackMaxAge, 10)
 					if err != nil {
 						log.Printf("  ⚠ GitHub %s: %v", repo, err)
 						continue
@@ -99,7 +99,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 		}
 	}
 
-	logsFromMCP, metricsFromMCP := w.collectGrafanaMCPContext(ctx, cfg, serviceName, since, incident.FiredAt, result)
+	logsFromMCP, metricsFromMCP := w.collectGrafanaMCPContext(ctx, cfg, serviceName, since, incident.AnalysisTime(), result)
 
 	// Loki logs
 	if !logsFromMCP && cfg.LokiEndpoint != nil && *cfg.LokiEndpoint != "" {
@@ -107,7 +107,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 			log.Printf("  ⚠ Loki endpoint blocked (SSRF): %v", err)
 		} else {
 			lc := collector.NewLogsCollector(*cfg.LokiEndpoint)
-			logs, err := lc.FetchErrorLogs(ctx, serviceName, since, incident.FiredAt, 50)
+			logs, err := lc.FetchErrorLogs(ctx, serviceName, since, incident.AnalysisTime(), 50)
 			if err != nil {
 				log.Printf("  ⚠ Loki: %v", err)
 			} else if len(logs) > 0 {
@@ -126,7 +126,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 			if err != nil {
 				log.Printf("  ⚠ Prometheus client: %v", err)
 			} else {
-				metrics, err := mc.FetchErrorRate(ctx, serviceName, 30*time.Minute)
+				metrics, err := mc.FetchErrorRate(ctx, serviceName, incident.AnalysisTime(), 30*time.Minute)
 				if err != nil {
 					log.Printf("  ⚠ Prometheus query: %v", err)
 				} else if len(metrics) > 0 {
@@ -134,7 +134,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 					log.Printf("  ✓ %d metric points from Prometheus", len(metrics))
 				}
 				// Pool metrics are optional and must not mask the generic error rate.
-				if poolMetrics, poolErr := mc.FetchPoolMetrics(ctx, serviceName, incident.FiredAt, 30*time.Minute); poolErr == nil {
+				if poolMetrics, poolErr := mc.FetchPoolMetrics(ctx, serviceName, incident.AnalysisTime(), 30*time.Minute); poolErr == nil {
 					result.Metrics = append(result.Metrics, poolMetrics...)
 				}
 			}
@@ -169,7 +169,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 				}
 
 				// Error logs
-				dtLogs, err := dc.FetchLogs(ctx, serviceName, since, incident.FiredAt, 50)
+				dtLogs, err := dc.FetchLogs(ctx, serviceName, since, incident.AnalysisTime(), 50)
 				if err != nil {
 					log.Printf("  ⚠ Dynatrace logs: %v", err)
 				} else if len(dtLogs) > 0 {
@@ -178,7 +178,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 				}
 
 				// Error rate metric
-				dtMetrics, err := dc.FetchMetrics(ctx, serviceName, "builtin:service.errors.total.rate", since, incident.FiredAt)
+				dtMetrics, err := dc.FetchMetrics(ctx, serviceName, "builtin:service.errors.total.rate", since, incident.AnalysisTime())
 				if err != nil {
 					log.Printf("  ⚠ Dynatrace metrics: %v", err)
 				} else if len(dtMetrics) > 0 {
@@ -201,7 +201,7 @@ func (w *Worker) collectContext(ctx context.Context, incident *store.Incident) *
 				sc := collector.NewSplunkCollector(*cfg.SplunkEndpoint, splunkToken)
 
 				// Error logs via SPL
-				splunkLogs, err := sc.FetchLogs(ctx, serviceName, since, incident.FiredAt, 50)
+				splunkLogs, err := sc.FetchLogs(ctx, serviceName, since, incident.AnalysisTime(), 50)
 				if err != nil {
 					log.Printf("  ⚠ Splunk logs: %v", err)
 				} else if len(splunkLogs) > 0 {
@@ -267,7 +267,7 @@ func (w *Worker) collectGrafanaMCPContext(ctx context.Context, cfg *store.TeamCo
 		}
 	}
 
-	metrics, err := gc.FetchErrorRate(ctx, serviceName, 30*time.Minute)
+	metrics, err := gc.FetchErrorRate(ctx, serviceName, until, 30*time.Minute)
 	if err != nil {
 		log.Printf("  ⚠ Grafana MCP metrics: %v", err)
 	} else {
@@ -318,7 +318,7 @@ func (w *Worker) collectDependencyContext(ctx context.Context, incident *store.I
 		} else if token != "" {
 			mc := newGrafanaMCPCollector(*cfg.GrafanaMCPURL, token)
 			for _, dep := range deps {
-				logsOK, metricsOK := collectDepViaMCP(ctx, mc, dep, since, incident.FiredAt, result)
+				logsOK, metricsOK := collectDepViaMCP(ctx, mc, dep, since, incident.AnalysisTime(), result)
 				if !logsOK || !metricsOK {
 					directDeps = append(directDeps, dep)
 				}
@@ -357,7 +357,7 @@ func collectDepViaMCP(ctx context.Context, mc grafanaMCPCollector, dep *store.Se
 	}
 
 	metricsOK := false
-	if metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, 30*time.Minute); err != nil {
+	if metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, until, 30*time.Minute); err != nil {
 		log.Printf("    ⚠ Grafana MCP metrics for dependency %s: %v", dep.DependsOn, err)
 	} else {
 		metricsOK = true
@@ -388,7 +388,7 @@ func applyDependencyContext(ctx context.Context, incident *store.Incident, cfg *
 				log.Printf("    ⚠ Loki endpoint blocked (SSRF) for dependency %s: %v", dep.DependsOn, err)
 			} else {
 				lc := collector.NewLogsCollector(*cfg.LokiEndpoint)
-				logs, err := lc.FetchErrorLogs(ctx, dep.DependsOn, since, incident.FiredAt, 50)
+				logs, err := lc.FetchErrorLogs(ctx, dep.DependsOn, since, incident.AnalysisTime(), 50)
 				if err != nil {
 					log.Printf("    ⚠ Loki for dependency %s: %v", dep.DependsOn, err)
 				} else if len(logs) > 0 {
@@ -406,7 +406,7 @@ func applyDependencyContext(ctx context.Context, incident *store.Incident, cfg *
 				if err != nil {
 					log.Printf("    ⚠ Prometheus client for dependency %s: %v", dep.DependsOn, err)
 				} else {
-					metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, 30*time.Minute)
+					metrics, err := mc.FetchErrorRate(ctx, dep.DependsOn, incident.AnalysisTime(), 30*time.Minute)
 					if err != nil {
 						log.Printf("    ⚠ Prometheus for dependency %s: %v", dep.DependsOn, err)
 					} else if len(metrics) > 0 {
@@ -612,7 +612,7 @@ func (w *Worker) updateIncidentAnalysis(ctx context.Context, incident *store.Inc
 		return fmt.Errorf("marshal analysis: %w", err)
 	}
 	_, err = w.db.Pool().Exec(ctx, `
-		UPDATE incidents SET analysis = $1, updated_at = $2 WHERE id = $3 AND team_id = $4
+		UPDATE incidents SET analysis = COALESCE(analysis, '{}'::jsonb) || $1::jsonb, updated_at = $2 WHERE id = $3 AND team_id = $4
 	`, analysisJSON, time.Now(), incident.ID, incident.TeamID)
 	return err
 }
@@ -639,7 +639,11 @@ func formatCommitForPrompt(c collector.Commit, shortSHA string, firedAt time.Tim
 	if !c.Timestamp.IsZero() {
 		line += fmt.Sprintf(" (committed %s", c.Timestamp.UTC().Format(time.RFC3339))
 		if !firedAt.IsZero() {
-			line += fmt.Sprintf(", %s before the alert", c.Timestamp.Sub(firedAt).Abs().Round(time.Minute))
+			if c.Timestamp.After(firedAt) {
+				line += fmt.Sprintf(", %s AFTER the alert started, so it cannot have caused the original onset", c.Timestamp.Sub(firedAt).Round(time.Minute))
+			} else {
+				line += fmt.Sprintf(", %s before the alert", firedAt.Sub(c.Timestamp).Round(time.Minute))
+			}
 		}
 		if c.Relation == collector.RelationPriorToIncident {
 			line += ", older than the 30 minute window"
@@ -794,8 +798,7 @@ func (w *Worker) checkEscalationForIncident(ctx context.Context, incident *store
 	// Threshold for repeat R, layer K = (cycleDuration + repeatInterval) * R + layers[K].notify_after_minutes
 	cycleDuration := cfg.Layers[numLayers-1].NotifyAfterMinutes
 	thresholdMinutes := (cycleDuration+cfg.RepeatIntervalMinutes)*nextRepeat + nextLayer.NotifyAfterMinutes
-	elapsed := time.Since(incident.FiredAt)
-	if elapsed < time.Duration(thresholdMinutes)*time.Minute {
+	if !escalationStepDue(incident, thresholdMinutes, time.Now()) {
 		return // not yet time for this step
 	}
 
@@ -874,4 +877,47 @@ func (w *Worker) resolveLayerMember(ctx context.Context, teamID uuid.UUID, sched
 		}
 	}
 	return nil
+}
+
+// onsetTimelineNote tells the analysis which time it is anchored to when the
+// source reported an alert onset that differs from the time Wachd received it.
+func onsetTimelineNote(incident *store.Incident) string {
+	onset, ok := incident.AlertOnset()
+	if !ok || onset.Equal(incident.FiredAt) {
+		return ""
+	}
+	return fmt.Sprintf("Alert onset reported by the source: %s; Wachd received it at %s. Only changes made before the onset are listed as candidates, and a commit is not proof that it was deployed",
+		onset.UTC().Format(time.RFC3339), incident.FiredAt.UTC().Format(time.RFC3339))
+}
+
+// limitEvidenceForOnset keeps the stated confidence within what the evidence
+// supports once the analysis is anchored to a source-reported onset:
+//   - with no logs and no metrics covering the onset window there is nothing
+//     to support a mechanism, so the result is INSUFFICIENT_EVIDENCE;
+//   - a commit alone is not deployment evidence, so a deployment cause is at
+//     most PROBABLE_ROOT_CAUSE.
+//
+// Incidents without a source-reported onset are left unchanged.
+func limitEvidenceForOnset(incident *store.Incident, ctx *correlator.Context, analysis *ai.AnalysisResponse) {
+	if analysis == nil || ctx == nil {
+		return
+	}
+	if _, ok := incident.AlertOnset(); !ok {
+		return
+	}
+	if len(ctx.Logs) == 0 && len(ctx.Metrics) == 0 {
+		analysis.EvidenceClass = "INSUFFICIENT_EVIDENCE"
+		return
+	}
+	if analysis.IsDeploymentCause && analysis.EvidenceClass == "CONFIRMED_ROOT_CAUSE" {
+		analysis.EvidenceClass = "PROBABLE_ROOT_CAUSE"
+	}
+}
+
+// escalationStepDue reports whether an escalation step's threshold has passed.
+// It is measured from FiredAt, the time Wachd received the alert, and never
+// from a source-reported alert onset: an alert that began long before Wachd
+// heard about it must not make every escalation step overdue on arrival.
+func escalationStepDue(incident *store.Incident, thresholdMinutes int, now time.Time) bool {
+	return now.Sub(incident.FiredAt) >= time.Duration(thresholdMinutes)*time.Minute
 }

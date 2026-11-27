@@ -1,0 +1,36 @@
+{
+  "receiver": "wachd-rca",
+  "status": "firing",
+  "orgId": 1,
+  "state": "alerting",
+  "title": "[FIRING:1] checkout-api HTTP 5xx Wachd RCA Lab (checkout-api)",
+  "message": "**Firing**\n\nValue: C0=31.536370418444008\nLabels:\n - alertname = checkout-api HTTP 5xx\n - grafana_folder = Wachd RCA Lab\n - service = checkout-api\n",
+  "commonLabels": {
+    "alertname": "checkout-api HTTP 5xx",
+    "grafana_folder": "Wachd RCA Lab",
+    "service": "checkout-api"
+  },
+  "groupLabels": {
+    "alertname": "checkout-api HTTP 5xx",
+    "grafana_folder": "Wachd RCA Lab"
+  },
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "checkout-api HTTP 5xx",
+        "grafana_folder": "Wachd RCA Lab",
+        "service": "checkout-api"
+      },
+      "annotations": {},
+      "startsAt": "2026-11-24T12:33:30Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "fingerprint": "c30e75966b4ca670",
+      "valueString": "[ var='C0' metric='Value' labels={instance=checkout-api:8080, job=checkout-api, service=checkout-api} value=31.536370418444008 ]",
+      "values": {
+        "C0": 31.536370418444008
+      }
+    }
+  ],
+  "version": "1"
+}

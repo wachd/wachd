@@ -43,7 +43,7 @@ func (s *SessionStore) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		sess, err := s.Get(r.Context(), cookie.Value)
+		sess, err := s.Load(r.Context(), cookie.Value)
 		if err != nil || sess == nil {
 			writeUnauthorized(w)
 			return
@@ -141,6 +141,12 @@ func (s *Session) HasAdminRole() bool {
 	return false
 }
 
+// ContextWithSession returns a context carrying sess, as RequireAuth would set
+// it. Handler tests use it to exercise role checks without Redis.
+func ContextWithSession(ctx context.Context, sess *Session) context.Context {
+	return context.WithValue(ctx, sessionContextKey, sess)
+}
+
 // SessionFromContext retrieves the session from the context, or nil if not present.
 func SessionFromContext(ctx context.Context) *Session {
 	sess, _ := ctx.Value(sessionContextKey).(*Session)
@@ -174,7 +180,7 @@ func BearerOrCookie(sessions *SessionStore, db *store.DB) func(http.Handler) htt
 				}
 				if tok == nil || user == nil {
 					// Not a PAT — try as a session token (mobile clients use Bearer with session tokens).
-					if sess, sessErr := sessions.Get(r.Context(), raw); sessErr == nil && sess != nil {
+					if sess, sessErr := sessions.Load(r.Context(), raw); sessErr == nil && sess != nil {
 						ctx := context.WithValue(r.Context(), sessionContextKey, sess)
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
@@ -201,12 +207,7 @@ func BearerOrCookie(sessions *SessionStore, db *store.DB) func(http.Handler) htt
 				if err != nil {
 					log.Printf("auth: get token user teams: %v", err)
 				}
-				teamIDs := make([]uuid.UUID, 0, len(teamAccess))
-				roles := make(map[string]string, len(teamAccess))
-				for _, ta := range teamAccess {
-					teamIDs = append(teamIDs, ta.TeamID)
-					roles[ta.TeamID.String()] = ta.Role
-				}
+				teamIDs, roles := mergeAccess(teamAccess)
 
 				sess := &Session{
 					LocalUserID:         &user.ID,
@@ -237,7 +238,7 @@ func BearerOrCookie(sessions *SessionStore, db *store.DB) func(http.Handler) htt
 				writeUnauthorized(w)
 				return
 			}
-			sess, err := sessions.Get(r.Context(), cookie.Value)
+			sess, err := sessions.Load(r.Context(), cookie.Value)
 			if err != nil || sess == nil {
 				writeUnauthorized(w)
 				return

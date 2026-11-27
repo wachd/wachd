@@ -394,12 +394,7 @@ func (h *Handlers) authenticateLocal(w http.ResponseWriter, r *http.Request, use
 		teamAccess = nil
 	}
 
-	teamIDs := make([]uuid.UUID, len(teamAccess))
-	roles := make(map[string]string, len(teamAccess))
-	for i, ta := range teamAccess {
-		teamIDs[i] = ta.TeamID
-		roles[ta.TeamID.String()] = ta.Role
-	}
+	teamIDs, roles := mergeAccess(teamAccess)
 
 	sess := &Session{
 		Email:               user.Email,

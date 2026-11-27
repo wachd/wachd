@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -294,7 +295,7 @@ func TestFetchErrorRate_Success(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
-	points, err := c.FetchErrorRate(context.Background(), "checkout-api", 5*time.Minute)
+	points, err := c.FetchErrorRate(context.Background(), "checkout-api", time.Now(), 5*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -316,7 +317,7 @@ func TestFetchErrorRate_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
-	_, err := c.FetchErrorRate(context.Background(), "api", time.Minute)
+	_, err := c.FetchErrorRate(context.Background(), "api", time.Now(), time.Minute)
 	if err == nil {
 		t.Error("expected error for server error")
 	}
@@ -367,5 +368,38 @@ func TestFetchPoolMetrics_NamesEverySeriesAndHonoursUntil(t *testing.T) {
 		if !strings.HasPrefix(e, "1609459200") {
 			t.Errorf("query window must end at the incident time, got end=%q", e)
 		}
+	}
+}
+
+// The error-rate window must end at the analysis time it is given, not at the
+// moment the worker happens to run.
+func TestFetchErrorRate_WindowAnchoredToUntil(t *testing.T) {
+	var gotStart, gotEnd string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotStart, gotEnd = r.Form.Get("start"), r.Form.Get("end")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promMatrixResponse([][]interface{}{{1609459200.0, "1"}}))
+	}))
+	defer srv.Close()
+
+	c, err := newMetricsCollectorWithRoundTripper(srv.URL, http.DefaultTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Date(2026, 11, 24, 10, 22, 36, 0, time.UTC)
+	if _, err := c.FetchErrorRate(context.Background(), "checkout-api", until, 30*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	end, err := strconv.ParseFloat(gotEnd, 64)
+	if err != nil {
+		t.Fatalf("end %q: %v", gotEnd, err)
+	}
+	start, _ := strconv.ParseFloat(gotStart, 64)
+	if int64(end) != until.Unix() {
+		t.Errorf("window end = %v, want %v", int64(end), until.Unix())
+	}
+	if int64(end-start) != 1800 {
+		t.Errorf("window length = %v, want 1800s", end-start)
 	}
 }

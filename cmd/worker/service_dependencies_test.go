@@ -150,7 +150,7 @@ func (m *mockMCPCollector) FetchErrorLogs(_ context.Context, service string, _, 
 	return m.logs, m.logsErr
 }
 
-func (m *mockMCPCollector) FetchErrorRate(_ context.Context, _ string, _ time.Duration) ([]collector.MetricPoint, error) {
+func (m *mockMCPCollector) FetchErrorRate(_ context.Context, _ string, _ time.Time, _ time.Duration) ([]collector.MetricPoint, error) {
 	return m.metrics, m.metricsErr
 }
 

@@ -71,7 +71,7 @@ func TestGrafanaMCPCollector_FetchErrorLogsAndMetrics(t *testing.T) {
 	if len(logs) != 1 || logs[0].Message != "fatal timeout" {
 		t.Fatalf("unexpected logs: %+v", logs)
 	}
-	metrics, err := c.FetchErrorRate(context.Background(), "api", 30*time.Minute)
+	metrics, err := c.FetchErrorRate(context.Background(), "api", time.Now(), 30*time.Minute)
 	if err != nil {
 		t.Fatalf("FetchErrorRate: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestGrafanaMCPCollector_FetchErrorRate_MissingDatasource(t *testing.T) {
 	defer srv.Close()
 
 	c := newGrafanaMCPCollectorWithClient(srv.URL, "", srv.Client())
-	_, err := c.FetchErrorRate(context.Background(), "api", 30*time.Minute)
+	_, err := c.FetchErrorRate(context.Background(), "api", time.Now(), 30*time.Minute)
 	if err == nil {
 		t.Fatal("expected missing prometheus datasource error")
 	}

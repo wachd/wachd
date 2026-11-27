@@ -146,9 +146,8 @@ func (m *MetricsCollector) FetchCurrentValue(ctx context.Context, query string) 
 }
 
 // FetchErrorRate fetches the error rate for a service
-func (m *MetricsCollector) FetchErrorRate(ctx context.Context, service string, duration time.Duration) ([]MetricPoint, error) {
+func (m *MetricsCollector) FetchErrorRate(ctx context.Context, service string, until time.Time, duration time.Duration) ([]MetricPoint, error) {
 	query := fmt.Sprintf(`rate(http_errors_total{service="%s"}[%s])`, service, duration)
-	until := time.Now()
 	since := until.Add(-duration)
 	step := duration / 60 // 60 data points
 

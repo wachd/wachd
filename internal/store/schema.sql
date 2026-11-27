@@ -625,3 +625,23 @@ BEGIN
         );
     END LOOP;
 END $$;
+
+-- Durable investigation intent. A row is written in the same transaction as the
+-- incident, so an accepted alert can always be investigated even if the Redis
+-- enqueue fails or the worker dies mid-run. Incidents created before this table
+-- existed have no row and are not reprocessed.
+CREATE TABLE IF NOT EXISTS incident_investigations (
+    incident_id UUID PRIMARY KEY REFERENCES incidents(id) ON DELETE CASCADE,
+    team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT 'pending',  -- pending | running | completed | failed
+    attempt_count INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    lease_until TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_incident_investigations_due
+    ON incident_investigations(state, next_attempt_at, lease_until)
+    WHERE state IN ('pending', 'running');

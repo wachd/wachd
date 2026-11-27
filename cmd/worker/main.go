@@ -60,6 +60,8 @@ type Worker struct {
 	correlator    *correlator.Correlator
 	graphStore    graph.Store
 	aiBackend     ai.Backend
+	invs          investigationStore                                            // defaults to db
+	investigate   func(ctx context.Context, teamID, incidentID uuid.UUID) error // test hook; defaults to investigateIncident
 }
 
 // alertJobConcurrency keeps investigation work from holding the Redis consumer
@@ -310,11 +312,20 @@ func main() {
 				default:
 					if err := worker.processNextJob(ctx); err != nil {
 						log.Printf("Error processing job: %v", err)
+						// Avoid a hot loop while Redis or the database is down;
+						// durable investigations are recovered by the reconciler.
+						select {
+						case <-ctx.Done():
+						case <-time.After(time.Second):
+						}
 					}
 				}
 			}
 		}()
 	}
+
+	go worker.runInvestigationReconciler(ctx)
+	log.Println("✓ Investigation reconciler started (5s poll)")
 
 	go worker.runEscalationLoop(ctx)
 	log.Println("✓ Escalation loop started (30s poll)")
@@ -353,14 +364,41 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 }
 
 func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
-
-	incident, err := w.db.GetIncident(ctx, job.TeamID, job.IncidentID)
+	claimed, managed, attempt, err := w.investigationStore().ClaimInvestigation(ctx, job.IncidentID, investigationLease)
 	if err != nil {
-		log.Printf("Failed to get incident %s: %v", job.IncidentID, err)
+		// The durable row stays pending, so the reconciler will pick it up.
+		log.Printf("investigation claim failed for %s: %v", job.IncidentID, err)
+		return err
+	}
+	if managed && !claimed {
+		log.Printf("investigation for %s is finished, leased elsewhere or backing off — skipping duplicate job", job.IncidentID)
+		return nil
+	}
+	if !managed {
+		// Incident created before durable investigations: process it once, as before.
+		err := w.investigateIncident(ctx, job.TeamID, job.IncidentID)
+		return err
+	}
+	// Failures are recorded on the durable investigation and retried by the
+	// reconciler, so the queue consumer has nothing further to do.
+	_ = w.runInvestigation(ctx, job.TeamID, job.IncidentID, attempt)
+	return nil
+}
+
+// investigateIncident collects context and runs the AI analysis for one
+// incident. It returns an error when the investigation should be retried:
+// the incident could not be read, or an available AI backend failed. Pending
+// notification intents are dispatched either way so a slow or broken AI backend
+// never delays paging.
+func (w *Worker) investigateIncident(ctx context.Context, teamID, incidentID uuid.UUID) (retryErr error) {
+
+	incident, err := w.db.GetIncident(ctx, teamID, incidentID)
+	if err != nil {
+		log.Printf("Failed to get incident %s: %v", incidentID, err)
 		return err
 	}
 	if incident == nil {
-		log.Printf("Incident %s not found (may have been deleted), skipping", job.IncidentID)
+		log.Printf("Incident %s not found (may have been deleted), skipping", incidentID)
 		return nil
 	}
 
@@ -384,7 +422,10 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 	log.Printf("🧹 Sanitizing PII...")
 	sanitizedCtx := w.sanitizeContext(collectedCtx)
 
-	timeline := w.correlator.BuildTimeline(incident.FiredAt, sanitizedCtx)
+	timeline := w.correlator.BuildTimeline(incident.AnalysisTime(), sanitizedCtx)
+	if note := onsetTimelineNote(incident); note != "" {
+		timeline.Correlations = append([]string{note}, timeline.Correlations...)
+	}
 	for _, c := range timeline.Correlations {
 		log.Printf("   📊 %s", c)
 	}
@@ -411,7 +452,7 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 			if len(sha) > 7 {
 				sha = sha[:7]
 			}
-			commitMsgs[i] = formatCommitForPrompt(c, sha, incident.FiredAt)
+			commitMsgs[i] = formatCommitForPrompt(c, sha, incident.AnalysisTime())
 			for _, change := range c.Changes {
 				if change.Patch != "" {
 					commitMsgs[i] += fmt.Sprintf("\n  FILE %s\n%s", change.Filename, change.Patch)
@@ -437,13 +478,26 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 		rawResp, err := w.aiBackend.Analyze(ctx, prompt)
 		if err != nil {
 			log.Printf("Warning: AI analysis failed: %v", err)
+			retryErr = fmt.Errorf("AI analysis failed: %w", err)
 		} else {
-			aiAnalysis = ai.ParseAnalysisResponse(rawResp)
-			log.Printf("  Cause: %s", aiAnalysis.RootCause)
-			log.Printf("  Action: %s", aiAnalysis.SuggestedAction)
-			log.Printf("  Confidence: %s", aiAnalysis.Confidence)
-			if err := w.updateIncidentAnalysis(ctx, incident, aiAnalysis); err != nil {
-				log.Printf("Warning: failed to save AI analysis: %v", err)
+			parsed, perr := ai.ParseRCA(rawResp)
+			if perr != nil {
+				// Never store an unusable answer as a successful RCA, and never
+				// log or keep the raw text: it may echo sensitive telemetry.
+				log.Printf("Warning: AI response rejected (%d bytes): %v", len(rawResp), perr)
+				retryErr = fmt.Errorf("AI response rejected: %w", perr)
+			} else {
+				aiAnalysis = parsed
+				ai.VerifyAndCalibrate(aiAnalysis, evidenceSetFrom(incident, sanitizedCtx))
+				limitEvidenceForOnset(incident, sanitizedCtx, aiAnalysis)
+				log.Printf("  Cause: %s", aiAnalysis.RootCause)
+				log.Printf("  Action: %s", aiAnalysis.SuggestedAction)
+				log.Printf("  Confidence: %s class: %s evidence: %d verified, %d rejected",
+					aiAnalysis.Confidence, aiAnalysis.EvidenceClass, len(aiAnalysis.Evidence), len(aiAnalysis.RejectedEvidence))
+				if err := w.updateIncidentAnalysis(ctx, incident, aiAnalysis); err != nil {
+					log.Printf("Warning: failed to save AI analysis: %v", err)
+					retryErr = fmt.Errorf("save AI analysis: %w", err)
+				}
 			}
 		}
 	}
@@ -452,8 +506,10 @@ func (w *Worker) processAlertJob(ctx context.Context, job *queue.Job) error {
 	// output is intentionally not sent as a second initial notification.
 	w.firePendingNotifications(ctx)
 
-	log.Printf("✓ Incident %s processed", incident.ID)
-	return nil
+	if retryErr == nil {
+		log.Printf("✓ Incident %s processed", incident.ID)
+	}
+	return retryErr
 }
 
 // runNotificationPreparationLoop expands the transactionally-created handoff

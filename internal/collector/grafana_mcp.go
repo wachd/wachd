@@ -141,7 +141,7 @@ func (g *GrafanaMCPCollector) FetchErrorLogs(ctx context.Context, service string
 	return logs, nil
 }
 
-func (g *GrafanaMCPCollector) FetchErrorRate(ctx context.Context, service string, duration time.Duration) ([]MetricPoint, error) {
+func (g *GrafanaMCPCollector) FetchErrorRate(ctx context.Context, service string, until time.Time, duration time.Duration) ([]MetricPoint, error) {
 	if err := g.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func (g *GrafanaMCPCollector) FetchErrorRate(ctx context.Context, service string
 	if !ok || uid == "" {
 		return nil, fmt.Errorf("grafana mcp datasource %q not found", datasourceTypePrometheus)
 	}
-	until := time.Now().UTC()
+	until = until.UTC()
 	since := until.Add(-duration)
 	result, err := g.callTool(ctx, toolQueryPrometheus, map[string]interface{}{
 		"datasourceUid": uid,

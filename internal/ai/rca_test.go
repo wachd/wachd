@@ -1,0 +1,376 @@
+package ai
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+const validJSON = `{"root_cause":"Pool capped at 5 after da3db37 changed DB_POOL_MAX 50 -> 5.",
+"suggested_action":"Revert da3db37 and redeploy.","key_findings":["db_pool_in_use max=5"],
+"confidence":"high","is_deployment_cause":true,"evidence_classification":"CONFIRMED_ROOT_CAUSE",
+"evidence":[{"type":"commit","ref":"da3db37","detail":"DB_POOL_MAX 50->5"},
+{"type":"metric","ref":"db_pool_in_use","detail":"max 5"},
+{"type":"log","ref":"db_connection_timeout","detail":""}]}`
+
+func lab() EvidenceSet {
+	return EvidenceSet{
+		Commits: []CommitEvidence{{SHA: "da3db37aaaaaaaa", HasPatch: true}, {SHA: "2a74f4c1111111", HasPatch: true},
+			{SHA: "9a914b2bbbbbbbb", HasPatch: true, AfterOnset: true}},
+		Metrics: []string{"db_pool_in_use", "rate(db_pool_wait_count[5m])", "rate(http_errors_total[30m0s])"},
+		Logs:    []string{`level=error msg="db_connection_timeout: context deadline exceeded" service=checkout-api`},
+	}
+}
+
+func mustParse(t *testing.T, raw string) *AnalysisResponse {
+	t.Helper()
+	r, err := ParseRCA(raw)
+	if err != nil {
+		t.Fatalf("ParseRCA: %v", err)
+	}
+	return r
+}
+
+// ── schema and parsing ────────────────────────────────────────────────────────
+
+func TestParseRCA_ValidJSON(t *testing.T) {
+	r := mustParse(t, validJSON)
+	if r.ParseMode != ParseJSON || r.EvidenceClass != ClassConfirmed || r.Confidence != "high" || !r.IsDeploymentCause {
+		t.Fatalf("unexpected: %+v", r)
+	}
+	if r.RootCause == "" || r.SuggestedAction == "" || len(r.KeyFindings) != 1 || len(r.Evidence) != 3 {
+		t.Fatalf("fields not kept distinct: %+v", r)
+	}
+}
+
+func TestParseRCA_ToleratesFencesAndProse(t *testing.T) {
+	for _, raw := range []string{"```json\n" + validJSON + "\n```", "Here is the analysis:\n" + validJSON + "\nHope that helps."} {
+		if r := mustParse(t, raw); r.RootCause == "" {
+			t.Errorf("not parsed: %q", raw[:20])
+		}
+	}
+}
+
+func TestParseRCA_RejectsMalformed(t *testing.T) {
+	cases := map[string]string{
+		"empty":            "",
+		"prose only":       "The database pool is saturated, increase it.",
+		"truncated json":   validJSON[:len(validJSON)-60],
+		"missing root":     `{"suggested_action":"x","evidence_classification":"PROBABLE_ROOT_CAUSE"}`,
+		"missing action":   `{"root_cause":"x","evidence_classification":"PROBABLE_ROOT_CAUSE"}`,
+		"missing class":    `{"root_cause":"x","suggested_action":"y"}`,
+		"invalid class":    `{"root_cause":"x","suggested_action":"y","evidence_classification":"DEFINITELY"}`,
+		"blank root cause": `{"root_cause":"   ","suggested_action":"y","evidence_classification":"PROBABLE_ROOT_CAUSE"}`,
+		"wrong types":      `{"root_cause":["a"],"suggested_action":"y","evidence_classification":"PROBABLE_ROOT_CAUSE"}`,
+	}
+	for name, raw := range cases {
+		if _, err := ParseRCA(raw); !errors.Is(err, ErrMalformedRCA) {
+			t.Errorf("%s: want ErrMalformedRCA, got %v", name, err)
+		}
+	}
+}
+
+// Partial answers are errors, never a "successful" RCA that dumps the raw text.
+func TestParseRCA_NeverFallsBackToRawText(t *testing.T) {
+	raw := "## Incident Analysis\nsomething vague with no sections at all"
+	if r, err := ParseRCA(raw); err == nil {
+		t.Fatalf("accepted unusable response: %+v", r)
+	}
+}
+
+func TestParseRCA_UnknownConfidenceIsLow(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"x","suggested_action":"y","confidence":"certain","evidence_classification":"INSUFFICIENT_EVIDENCE"}`)
+	if r.Confidence != "low" {
+		t.Errorf("confidence = %q", r.Confidence)
+	}
+}
+
+func TestParseRCA_MarkdownFallbackNeedsRealSections(t *testing.T) {
+	r := mustParse(t, "### 1. ROOT CAUSE\nPool exhausted.\n### 2. SUGGESTED ACTION\nRaise the pool.\n### 5. EVIDENCE CLASSIFICATION\nPROBABLE_ROOT_CAUSE\n")
+	if r.ParseMode != ParseMarkdown || r.RootCause != "Pool exhausted." || r.SuggestedAction != "Raise the pool." {
+		t.Fatalf("unexpected: %+v", r)
+	}
+	if _, err := ParseRCA("### 1. ROOT CAUSE\nPool exhausted.\n"); err == nil {
+		t.Error("markdown without a suggested action must be rejected")
+	}
+}
+
+// The model must not be able to mark its own evidence as verified.
+func TestParseRCA_IgnoresModelSuppliedVerified(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"x","suggested_action":"y","evidence_classification":"PROBABLE_ROOT_CAUSE",
+	"evidence":[{"type":"metric","ref":"made_up","verified":true}]}`)
+	if r.Evidence[0].Verified {
+		t.Fatal("verified flag accepted from the model")
+	}
+}
+
+// ── evidence verification and calibration ─────────────────────────────────────
+
+// A verified commit plus matching telemetry supports a probable cause. It must
+// not by itself establish that the change was deployed.
+func TestVerify_CommitAndTelemetryAreProbableNotConfirmed(t *testing.T) {
+	r := mustParse(t, validJSON)
+	VerifyAndCalibrate(r, lab())
+	if r.EvidenceClass != ClassProbable || !r.IsDeploymentCause || r.CausalCommit == "" {
+		t.Fatalf("want PROBABLE with the verified commit kept: %+v", r)
+	}
+	if !strings.Contains(strings.Join(r.KeyFindings, " "), "No deployment record was collected") {
+		t.Errorf("the caveat that the deployment is unconfirmed is missing: %v", r.KeyFindings)
+	}
+	if len(r.RejectedEvidence) != 0 || len(r.Evidence) != 3 {
+		t.Fatalf("valid evidence was altered: %+v", r)
+	}
+}
+
+// With a real deployment record the stronger claim is allowed.
+func TestVerify_ConfirmedNeedsADeploymentRecord(t *testing.T) {
+	set := lab()
+	set.DeploymentRecorded = true
+	r := mustParse(t, validJSON)
+	VerifyAndCalibrate(r, set)
+	if r.EvidenceClass != ClassConfirmed || !r.IsDeploymentCause {
+		t.Fatalf("class=%s", r.EvidenceClass)
+	}
+	for _, f := range r.KeyFindings {
+		if strings.Contains(f, "No deployment record") {
+			t.Error("caveat shown although a deployment record exists")
+		}
+	}
+}
+
+// Every kept reference is a verified one, and none of them is a deployment record.
+func TestVerify_KeptEvidenceIsVerifiedCommitsMetricsLogs(t *testing.T) {
+	r := mustParse(t, validJSON)
+	VerifyAndCalibrate(r, lab())
+	for _, e := range r.Evidence {
+		if !e.Verified {
+			t.Errorf("%s %s not verified", e.Type, e.Ref)
+		}
+		if e.Type != "commit" && e.Type != "metric" && e.Type != "log" {
+			t.Errorf("unexpected evidence type %q", e.Type)
+		}
+	}
+}
+
+// Seen in a real run: the model cited a metric that was never collected.
+func TestVerify_FabricatedMetricRejected(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"pool saturated","suggested_action":"raise pool","confidence":"high",
+	"evidence_classification":"PROBABLE_ROOT_CAUSE",
+	"evidence":[{"type":"metric","ref":"db_pool_max_open_connections"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if len(r.Evidence) != 0 || len(r.RejectedEvidence) != 1 {
+		t.Fatalf("fabricated metric accepted: %+v", r)
+	}
+	if r.EvidenceClass != ClassInsufficient || r.Confidence != "low" {
+		t.Errorf("unsupported claim not lowered: class=%s confidence=%s", r.EvidenceClass, r.Confidence)
+	}
+	if !strings.Contains(strings.Join(r.KeyFindings, " "), "db_pool_max_open_connections") {
+		t.Error("rejection not surfaced in key findings")
+	}
+}
+
+func TestVerify_NonexistentCommitRejectedAndNeverConfirmed(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"caused by deadbee","suggested_action":"revert deadbee","confidence":"high",
+	"is_deployment_cause":true,"evidence_classification":"CONFIRMED_ROOT_CAUSE",
+	"evidence":[{"type":"commit","ref":"deadbee"},{"type":"metric","ref":"db_pool_in_use"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if r.IsDeploymentCause {
+		t.Error("deployment cause accepted without a real commit")
+	}
+	if r.EvidenceClass == ClassConfirmed {
+		t.Error("CONFIRMED accepted with a fabricated commit")
+	}
+	if len(r.RejectedEvidence) == 0 {
+		t.Error("fabricated commit not recorded")
+	}
+}
+
+func TestVerify_ConfirmedWithoutCommitIsLowered(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"pool saturated","suggested_action":"raise pool","confidence":"high",
+	"evidence_classification":"CONFIRMED_ROOT_CAUSE","evidence":[{"type":"metric","ref":"db_pool_in_use"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if r.EvidenceClass != ClassProbable {
+		t.Fatalf("class = %s, want PROBABLE_ROOT_CAUSE", r.EvidenceClass)
+	}
+}
+
+func TestVerify_ConfirmedWithCommitButNoPatchIsLowered(t *testing.T) {
+	set := lab()
+	set.Commits = []CommitEvidence{{SHA: "da3db37aaaaaaaa", HasPatch: false}}
+	r := mustParse(t, validJSON)
+	VerifyAndCalibrate(r, set)
+	if r.EvidenceClass == ClassConfirmed || r.IsDeploymentCause {
+		t.Fatalf("confirmed without a patch: class=%s deploy=%v", r.EvidenceClass, r.IsDeploymentCause)
+	}
+}
+
+// S3: a commit made after the onset can never be the cause.
+func TestVerify_PostOnsetCommitIsNotACause(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"9a914b2 broke it","suggested_action":"revert","confidence":"high",
+	"is_deployment_cause":true,"evidence_classification":"CONFIRMED_ROOT_CAUSE",
+	"evidence":[{"type":"commit","ref":"9a914b2"},{"type":"metric","ref":"db_pool_in_use"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if r.IsDeploymentCause || r.EvidenceClass == ClassConfirmed {
+		t.Fatalf("post-onset commit accepted as cause: %+v", r)
+	}
+}
+
+func TestVerify_NoEvidenceMeansInsufficientAndLowConfidence(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"probably the pool","suggested_action":"look","confidence":"high","evidence_classification":"PROBABLE_ROOT_CAUSE"}`)
+	VerifyAndCalibrate(r, lab())
+	if r.EvidenceClass != ClassInsufficient || r.Confidence != "low" {
+		t.Fatalf("class=%s confidence=%s", r.EvidenceClass, r.Confidence)
+	}
+}
+
+func TestVerify_TemporalConfidenceCapped(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"x","suggested_action":"y","confidence":"high","evidence_classification":"TEMPORAL_CORRELATION_ONLY",
+	"evidence":[{"type":"metric","ref":"db_pool_in_use"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if r.Confidence != "medium" || r.EvidenceClass != ClassTemporal {
+		t.Fatalf("class=%s confidence=%s", r.EvidenceClass, r.Confidence)
+	}
+}
+
+// Commit ids in prose that were never collected are flagged even without a ref.
+func TestVerify_UnknownShaInProseFlagged(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"commit 1234abc changed it","suggested_action":"y","confidence":"medium","evidence_classification":"PROBABLE_ROOT_CAUSE",
+	"evidence":[{"type":"metric","ref":"db_pool_in_use"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if len(r.RejectedEvidence) != 1 || !strings.Contains(r.RejectedEvidence[0], "1234abc") {
+		t.Fatalf("unknown sha not flagged: %v", r.RejectedEvidence)
+	}
+}
+
+func TestVerify_RealShaInProseAndPlainNumbersAreFine(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"da3db37 lowered it; 1234567 requests failed; decade","suggested_action":"y","confidence":"medium",
+	"evidence_classification":"PROBABLE_ROOT_CAUSE","evidence":[{"type":"metric","ref":"db_pool_in_use"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if len(r.RejectedEvidence) != 0 {
+		t.Fatalf("false positive: %v", r.RejectedEvidence)
+	}
+}
+
+func TestVerify_MetricNamesMatchByBaseName(t *testing.T) {
+	for ref, want := range map[string]bool{
+		"db_pool_wait_count": true, "rate(db_pool_wait_count[5m])": true, `db_pool_in_use{service="x"}`: true,
+		"http_errors_total": true, "db_pool_wait": false, "": false,
+	} {
+		r := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", EvidenceClass: ClassProbable, Confidence: "medium",
+			Evidence: []EvidenceRef{{Type: "metric", Ref: ref}}}
+		VerifyAndCalibrate(r, lab())
+		if got := len(r.Evidence) == 1; got != want {
+			t.Errorf("metric %q verified=%v want %v", ref, got, want)
+		}
+	}
+}
+
+func TestVerify_LogMustBeInCollectedLogs(t *testing.T) {
+	good := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", EvidenceClass: ClassProbable, Confidence: "medium",
+		Evidence: []EvidenceRef{{Type: "log", Ref: "db_connection_timeout: context deadline exceeded"}}}
+	VerifyAndCalibrate(good, lab())
+	if len(good.Evidence) != 1 {
+		t.Error("real log fragment rejected")
+	}
+	bad := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", EvidenceClass: ClassProbable, Confidence: "medium",
+		Evidence: []EvidenceRef{{Type: "log", Ref: "OutOfMemoryError: heap space"}}}
+	VerifyAndCalibrate(bad, lab())
+	if len(bad.Evidence) != 0 || len(bad.RejectedEvidence) != 1 {
+		t.Error("fabricated log accepted")
+	}
+}
+
+func TestVerify_UnknownEvidenceTypeRejected(t *testing.T) {
+	r := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", EvidenceClass: ClassProbable, Confidence: "medium",
+		Evidence: []EvidenceRef{{Type: "trace", Ref: "abc123456789"}}}
+	VerifyAndCalibrate(r, lab())
+	if len(r.Evidence) != 0 {
+		t.Error("unknown evidence type accepted")
+	}
+}
+
+func TestVerify_NilSafe(t *testing.T) { VerifyAndCalibrate(nil, lab()) }
+
+// ── causal_commit ─────────────────────────────────────────────────────────────
+
+func causalRCA(causal string, deploy bool, refs ...string) *AnalysisResponse {
+	r := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", Confidence: "high", EvidenceClass: ClassConfirmed,
+		IsDeploymentCause: deploy, CausalCommit: causal}
+	for _, c := range refs {
+		r.Evidence = append(r.Evidence, EvidenceRef{Type: "commit", Ref: c})
+	}
+	r.Evidence = append(r.Evidence, EvidenceRef{Type: "metric", Ref: "db_pool_in_use"})
+	return r
+}
+
+func TestCausalCommit_VerifiedAndNormalised(t *testing.T) {
+	r := causalRCA("da3db37", true, "da3db37")
+	VerifyAndCalibrate(r, lab())
+	if r.CausalCommit != "da3db37aaaaaaaa" || !r.IsDeploymentCause || r.EvidenceClass != ClassProbable {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// History is not blame: a second cited commit does not become the cause.
+func TestCausalCommit_ContextCommitIsNotCausal(t *testing.T) {
+	r := causalRCA("da3db37", true, "da3db37", "2a74f4c")
+	VerifyAndCalibrate(r, lab())
+	if r.CausalCommit != "da3db37aaaaaaaa" {
+		t.Fatalf("causal = %q", r.CausalCommit)
+	}
+}
+
+func TestCausalCommit_FabricatedPostOnsetAndPatchlessAreCleared(t *testing.T) {
+	set := lab()
+	set.Commits = append(set.Commits, CommitEvidence{SHA: "c0ffee1234", HasPatch: false})
+	for name, cc := range map[string]string{"fabricated": "deadbee", "post-onset": "9a914b2", "no patch": "c0ffee1"} {
+		r := causalRCA(cc, true)
+		VerifyAndCalibrate(r, set)
+		if r.CausalCommit != "" || r.IsDeploymentCause || r.EvidenceClass == ClassConfirmed {
+			t.Errorf("%s: causal=%q deploy=%v class=%s", name, r.CausalCommit, r.IsDeploymentCause, r.EvidenceClass)
+		}
+	}
+}
+
+func TestCausalCommit_InferredOnlyWhenUnambiguous(t *testing.T) {
+	one := causalRCA("", true, "da3db37")
+	VerifyAndCalibrate(one, lab())
+	if one.CausalCommit == "" || !one.IsDeploymentCause {
+		t.Errorf("single usable commit not inferred: %+v", one)
+	}
+	two := causalRCA("", true, "da3db37", "2a74f4c")
+	VerifyAndCalibrate(two, lab())
+	if two.CausalCommit != "" || two.IsDeploymentCause || two.EvidenceClass == ClassConfirmed {
+		t.Errorf("ambiguous commits must not be guessed: %+v", two)
+	}
+}
+
+func TestCausalCommit_NullMeansNoDeploymentCause(t *testing.T) {
+	r := mustParse(t, `{"root_cause":"x","suggested_action":"y","confidence":"high","is_deployment_cause":false,
+	"causal_commit":null,"evidence_classification":"PROBABLE_ROOT_CAUSE","evidence":[{"type":"metric","ref":"db_pool_in_use"}]}`)
+	VerifyAndCalibrate(r, lab())
+	if r.CausalCommit != "" || r.IsDeploymentCause {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// Seen in real runs: the model copied the summary line, "name: latest=5 avg=...".
+func TestVerify_MetricRefCopiedFromSummaryLine(t *testing.T) {
+	for _, ref := range []string{
+		"db_pool_in_use: latest=5 avg=4.754 min=0 max=5 (61 points)",
+		"rate(db_pool_wait_count[5m]): latest=88.19 avg=88.38",
+	} {
+		r := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", EvidenceClass: ClassProbable, Confidence: "medium",
+			Evidence: []EvidenceRef{{Type: "metric", Ref: ref}}}
+		VerifyAndCalibrate(r, lab())
+		if len(r.Evidence) != 1 || len(r.RejectedEvidence) != 0 {
+			t.Errorf("valid metric rejected: %q -> %+v", ref, r.RejectedEvidence)
+		}
+	}
+	bad := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", EvidenceClass: ClassProbable, Confidence: "medium",
+		Evidence: []EvidenceRef{{Type: "metric", Ref: "db_pool_max_open_connections: latest=5"}}}
+	VerifyAndCalibrate(bad, lab())
+	if len(bad.Evidence) != 0 {
+		t.Error("fabricated metric accepted")
+	}
+}

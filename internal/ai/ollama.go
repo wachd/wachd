@@ -174,17 +174,74 @@ func BuildPrompt(req *AnalysisRequest) string {
 	}
 
 	prompt.WriteString("TASK:\n")
-	prompt.WriteString("Analyze this incident and provide:\n")
-	prompt.WriteString("1. ROOT CAUSE: Most likely cause (1-2 sentences)\n")
-	prompt.WriteString("2. SUGGESTED ACTION: Specific next step to take\n")
-	prompt.WriteString("3. CONFIDENCE: High, Medium, or Low\n")
-	prompt.WriteString("4. DEPLOYMENT CAUSE: YES if a recent deployment listed above is the probable root cause, NO otherwise\n\n")
-	prompt.WriteString("5. EVIDENCE CLASSIFICATION: CONFIRMED_ROOT_CAUSE, PROBABLE_ROOT_CAUSE, TEMPORAL_CORRELATION_ONLY, or INSUFFICIENT_EVIDENCE\n\n")
-	prompt.WriteString("Only call a configuration change confirmed when the retrieved commit patch explicitly shows it and telemetry supports the mechanism. Never invent file changes, values, or causal claims.\n\n")
-	prompt.WriteString("Cite your evidence: name the commit SHA and the exact changed setting with old and new values from the patch, the metric names with their values, and the log event or message you relied on. If one of these is missing, say it is missing instead of inferring it. Prefer the most recent commit before the alert that changes the relevant setting.\n\n")
+	prompt.WriteString("Analyze this incident and answer with ONE JSON object and nothing else (no Markdown, no code fence). Fields:\n")
+	prompt.WriteString("{\n")
+	prompt.WriteString("  \"root_cause\": string,               // ROOT CAUSE: most likely cause, 1-3 sentences. Say so if it cannot be determined.\n")
+	prompt.WriteString("  \"suggested_action\": string,         // SUGGESTED ACTION: the specific next step for the on-call engineer NOW\n")
+	prompt.WriteString("  \"key_findings\": [string],           // short facts you relied on, plus what could NOT be established (for example: no commit or deployment information)\n")
+	prompt.WriteString("  \"confidence\": \"high\"|\"medium\"|\"low\",\n")
+	prompt.WriteString("  \"is_deployment_cause\": boolean,     // DEPLOYMENT CAUSE: true only if a commit listed above is the probable root cause\n")
+	prompt.WriteString("  \"causal_commit\": string|null,       // the single commit SHA you hold responsible for the incident, or null. Null when none is listed, none predates the alert, or none is supported by its patch. Commits mentioned only as history or context are NOT causal.\n")
+	prompt.WriteString("  \"evidence_classification\": \"CONFIRMED_ROOT_CAUSE\"|\"PROBABLE_ROOT_CAUSE\"|\"TEMPORAL_CORRELATION_ONLY\"|\"INSUFFICIENT_EVIDENCE\",\n")
+	prompt.WriteString("  \"evidence\": [ {\"type\": \"commit\"|\"metric\"|\"log\", \"ref\": string, \"detail\": string} ]\n")
+	prompt.WriteString("}\n\n")
+	prompt.WriteString("Rules for evidence:\n")
+	prompt.WriteString("- Each evidence ref must be copied exactly from the data above: a commit SHA as listed, a metric name as listed, or a log message fragment as listed. Do not list anything that is not above. Wachd verifies every ref and discards the ones it cannot find.\n")
+	prompt.WriteString("- Only call a configuration change CONFIRMED_ROOT_CAUSE when a listed commit's patch explicitly shows it, telemetry supports the mechanism, and a deployment record confirms it ran. Never invent file changes, values, or causal claims.\n")
+	prompt.WriteString("- A commit shows that a change was written, not that it was deployed. Unless a deployment or release record is listed above, never use CONFIRMED_ROOT_CAUSE and do not state that the change was deployed as fact; say it is the probable cause.\n")
+	prompt.WriteString("- If no commit is listed, or every listed commit is dated after the alert began, do not name a commit or deployment as the cause, set is_deployment_cause to false, and never use CONFIRMED_ROOT_CAUSE. Describe what the telemetry shows and use PROBABLE_ROOT_CAUSE, TEMPORAL_CORRELATION_ONLY or INSUFFICIENT_EVIDENCE as the evidence warrants.\n")
+	prompt.WriteString("- Cite your evidence in key_findings: name the commit SHA and the exact changed setting with old and new values from the patch, the metric names with their values, and the log event or message you relied on. If one of these is missing, say it is missing instead of inferring it.\n")
+	prompt.WriteString("- Distinguish what was observed (symptoms in metrics and logs), what is probable (a technical mechanism the telemetry supports), and what is verified (a change shown by a commit patch).\n")
+	prompt.WriteString("- Prefer the most recent commit before the alert that changes the relevant setting. Say explicitly when a commit, metric or log you would need is missing.\n\n")
 	prompt.WriteString("Be concise and actionable. Focus on what the on-call engineer should do NOW.\n")
 
 	return prompt.String()
+}
+
+// analysisSections maps a section label to its key. A line starts a section
+// only when, after stripping markdown, it begins with one of these labels.
+var analysisSections = []struct{ label, key string }{
+	{"evidence classification", "evidence_class"},
+	{"evidence class", "evidence_class"},
+	{"deployment cause", "deployment_cause"},
+	{"suggested action", "action"},
+	{"root cause", "root_cause"},
+	{"confidence", "confidence"},
+	{"key findings", "findings"},
+}
+
+// matchSectionHeading reports the section a line introduces and any content
+// that follows the label on the same line. It accepts markdown headings,
+// numbering and bold ("### 1. ROOT CAUSE", "**Confidence:** High") but never
+// matches a label that merely appears inside a sentence.
+func matchSectionHeading(line string) (key, rest string, ok bool) {
+	t := strings.TrimLeft(line, "#*_ \t>")
+	t = strings.TrimLeft(t, "0123456789")
+	if len(t) < len(strings.TrimLeft(line, "#*_ \t>")) {
+		t = strings.TrimLeft(t, ".) \t*_")
+	}
+	lower := strings.ToLower(t)
+	for _, sec := range analysisSections {
+		if !strings.HasPrefix(lower, sec.label) {
+			continue
+		}
+		tail := strings.TrimLeft(t[len(sec.label):], "*_ \t")
+		if tail != "" && !strings.ContainsRune(":-–—", rune(tail[0])) && !strings.HasPrefix(tail, "–") && !strings.HasPrefix(tail, "—") {
+			// "root cause analysis ..." or "confidence in ..." is prose, not a heading.
+			if !strings.HasPrefix(lower[len(sec.label):], ":") {
+				continue
+			}
+		}
+		tail = strings.TrimLeft(tail, ":-–— \t*_")
+		return sec.key, strings.TrimSpace(tail), true
+	}
+	return "", "", false
+}
+
+// isRule reports whether a line is only a markdown horizontal rule.
+func isRule(line string) bool {
+	t := strings.Trim(line, " -*_=")
+	return t == "" && len(line) >= 3
 }
 
 // ParseAnalysisResponse attempts to parse the AI response into structured format
@@ -195,68 +252,82 @@ func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 		EvidenceClass: "INSUFFICIENT_EVIDENCE",
 	}
 
-	lines := strings.Split(rawResponse, "\n")
-	currentSection := ""
+	section := ""
+	seen := map[string]bool{}
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	add := func(key, text string) {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return
 		}
-
-		lowerLine := strings.ToLower(line)
-
-		// Detect sections
-		if strings.Contains(lowerLine, "root cause") {
-			currentSection = "root_cause"
-			continue
-		} else if strings.Contains(lowerLine, "suggested action") || strings.Contains(lowerLine, "action") {
-			currentSection = "action"
-			continue
-		} else if strings.Contains(lowerLine, "confidence") {
-			currentSection = "confidence"
-			continue
-		} else if strings.Contains(lowerLine, "deployment cause") {
-			currentSection = "deployment_cause"
-		} else if strings.Contains(lowerLine, "evidence classification") || strings.Contains(lowerLine, "evidence class") {
-			currentSection = "evidence_class"
-			continue
-		}
-
-		// Parse content
-		switch currentSection {
+		lower := strings.ToLower(text)
+		first := !seen[key]
+		seen[key] = true
+		switch key {
 		case "root_cause":
 			if response.RootCause == "" {
-				response.RootCause = line
+				response.RootCause = text
 			} else {
-				response.RootCause += " " + line
+				response.RootCause += " " + text
 			}
 		case "action":
 			if response.SuggestedAction == "" {
-				response.SuggestedAction = line
+				response.SuggestedAction = text
 			} else {
-				response.SuggestedAction += " " + line
+				response.SuggestedAction += " " + text
 			}
 		case "confidence":
-			if strings.Contains(lowerLine, "high") {
-				response.Confidence = "high"
-			} else if strings.Contains(lowerLine, "low") {
-				response.Confidence = "low"
+			if first {
+				if strings.Contains(lower, "high") {
+					response.Confidence = "high"
+				} else if strings.Contains(lower, "low") {
+					response.Confidence = "low"
+				}
+			} else if b := strings.TrimLeft(text, "-*• "); b != text {
+				response.KeyFindings = append(response.KeyFindings, strings.TrimSpace(b))
 			}
+		case "findings":
+			response.KeyFindings = append(response.KeyFindings, strings.TrimSpace(strings.TrimLeft(text, "-*• ")))
 		case "deployment_cause":
-			// Any line containing "yes" means a deployment is the probable cause.
-			// We stop after the first non-empty answer line.
-			if strings.Contains(lowerLine, "yes") {
-				response.IsDeploymentCause = true
+			if first {
+				// The answer is the first word (YES/NO); explanations may contain either.
+				answer := strings.ToLower(strings.Trim(strings.Fields(lower + " ")[0], "*_.:,;"))
+				response.IsDeploymentCause = answer == "yes"
+			}
+			// Keep the reasoning (for example "no commit was provided") so what the
+			// model could not establish is not lost.
+			note := strings.TrimLeft(text, "*_ ")
+			if f := strings.Fields(note); len(f) > 0 {
+				if w := strings.ToLower(strings.Trim(f[0], "*_.:,;")); w == "yes" || w == "no" {
+					note = strings.TrimLeft(strings.TrimPrefix(note, f[0]), "*_ -–—:")
+				}
+			}
+			if len(strings.Fields(note)) > 2 {
+				response.KeyFindings = append(response.KeyFindings, "Deployment cause: "+note)
 			}
 		case "evidence_class":
+			// The first class named is the answer; later ones are usually
+			// contrasts such as "PROBABLE_ROOT_CAUSE, not CONFIRMED_ROOT_CAUSE".
+			upper, best := strings.ToUpper(text), -1
 			for _, class := range []string{"CONFIRMED_ROOT_CAUSE", "PROBABLE_ROOT_CAUSE", "TEMPORAL_CORRELATION_ONLY", "INSUFFICIENT_EVIDENCE"} {
-				if strings.Contains(strings.ToUpper(line), class) {
-					response.EvidenceClass = class
-					break
+				if i := strings.Index(upper, class); i >= 0 && (best < 0 || i < best) {
+					best, response.EvidenceClass = i, class
 				}
 			}
 		}
+	}
+
+	for _, line := range strings.Split(rawResponse, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || isRule(line) {
+			continue
+		}
+		if key, rest, ok := matchSectionHeading(line); ok {
+			section = key
+			add(section, rest)
+			continue
+		}
+		add(section, line)
 	}
 
 	// Fallback: if parsing failed, put entire response in root cause

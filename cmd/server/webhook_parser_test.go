@@ -16,9 +16,12 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/wachd/wachd/internal/store"
 )
 
 func TestParseWebhookPayload_AgentKubescape(t *testing.T) {
@@ -280,5 +283,26 @@ func TestIncidentFingerprint_NormalizesService(t *testing.T) {
 
 	if a != b {
 		t.Errorf("fingerprint should normalize service case and whitespace: %q != %q", a, b)
+	}
+}
+
+// The real Grafana unified-alerting payload captured from the checkout-api lab
+// is recognised as a Grafana alert and carries the original onset in startsAt.
+func TestParseWebhookPayload_CapturedGrafanaUnifiedAlert(t *testing.T) {
+	body, err := os.ReadFile("../../internal/store/testdata/grafana_firing_checkout_api.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	title, _, _, source, resolved := parseWebhookPayload(body)
+	if source != "grafana" || resolved || title == "" {
+		t.Fatalf("source=%q resolved=%v title=%q", source, resolved, title)
+	}
+	receipt := time.Date(2026, 11, 25, 13, 41, 58, 0, time.UTC)
+	inc := &store.Incident{Source: source, AlertPayload: body, FiredAt: receipt}
+	if got, ok := inc.AlertOnset(); !ok || !got.Equal(time.Date(2026, 11, 24, 12, 33, 30, 0, time.UTC)) {
+		t.Fatalf("onset = %v, %v", got, ok)
+	}
+	if !inc.FiredAt.Equal(receipt) {
+		t.Fatal("receipt time must be preserved")
 	}
 }
