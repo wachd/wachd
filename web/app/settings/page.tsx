@@ -30,6 +30,7 @@ export default function SettingsPage() {
   const [githubRepos, setGithubRepos] = useState('');
   const [prometheusEndpoint, setPrometheusEndpoint] = useState('');
   const [lokiEndpoint, setLokiEndpoint] = useState('');
+  const [lokiLabelKey, setLokiLabelKey] = useState('');
   const [aiBackend, setAiBackend] = useState('ollama');
   const [aiModel, setAiModel] = useState('');
 
@@ -77,6 +78,7 @@ export default function SettingsPage() {
         setGithubRepos((cfg.github_repos ?? []).join('\n'));
         setPrometheusEndpoint(cfg.prometheus_endpoint ?? '');
         setLokiEndpoint(cfg.loki_endpoint ?? '');
+        setLokiLabelKey(cfg.loki_label_key ?? '');
         setAiBackend(cfg.ai_backend ?? 'ollama');
         setAiModel(cfg.ai_model ?? '');
         setSlackWebhookUrl(cfg.slack_webhook_url ?? '');
@@ -133,6 +135,8 @@ export default function SettingsPage() {
       github_repos: repos,
       prometheus_endpoint: prometheusEndpoint || null,
       loki_endpoint: lokiEndpoint || null,
+      // An empty value clears the setting and restores the default label, "service".
+      loki_label_key: lokiLabelKey.trim(),
       ai_backend: aiBackend,
       ai_model: aiModel || null,
     };
@@ -147,7 +151,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [primaryTeamId, githubToken, githubRepos, prometheusEndpoint, lokiEndpoint, aiBackend, aiModel]);
+  }, [primaryTeamId, githubToken, githubRepos, prometheusEndpoint, lokiEndpoint, lokiLabelKey, aiBackend, aiModel]);
 
   const saveNotifications = useCallback(async () => {
     if (!primaryTeamId) return;
@@ -389,6 +393,28 @@ export default function SettingsPage() {
               placeholder="http://loki:3100"
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
             />
+          </div>
+
+          <div>
+            <label htmlFor="loki-label-key" className="block text-sm font-medium text-gray-700 mb-1">
+              Loki Service Label
+            </label>
+            <input
+              id="loki-label-key"
+              type="text"
+              value={lokiLabelKey}
+              onChange={(e) => setLokiLabelKey(e.target.value)}
+              placeholder="service"
+              maxLength={253}
+              pattern="[A-Za-z_][A-Za-z0-9_]*"
+              aria-describedby="loki-label-key-help"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            />
+            <p id="loki-label-key-help" className="mt-1 text-xs text-gray-500">
+              The Loki stream label that holds the service name. Leave empty to use{' '}
+              <code>service</code>. Use the label as Loki names it, for example <code>app</code> or{' '}
+              <code>app_kubernetes_io_name</code>; dots and slashes are not valid in a Loki label.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">

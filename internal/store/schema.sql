@@ -312,6 +312,9 @@ ALTER TABLE team_config ADD COLUMN IF NOT EXISTS splunk_endpoint            VARC
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS splunk_token_encrypted    TEXT;
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS grafana_mcp_url            VARCHAR(500);
 ALTER TABLE team_config ADD COLUMN IF NOT EXISTS grafana_mcp_token_encrypted TEXT;
+-- Loki stream label identifying a service (NULL = "service"). Additive and nullable:
+-- existing rows keep their current behaviour.
+ALTER TABLE team_config ADD COLUMN IF NOT EXISTS loki_label_key VARCHAR(253);
 
 -- Idempotent migration: move AI backend config out of team_config (per-team) into
 -- system_config (platform-wide). Drop the columns so the schema stays clean.

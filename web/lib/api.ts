@@ -54,6 +54,7 @@ export interface TeamConfigPublic {
   github_repos?: string[];
   prometheus_endpoint?: string;
   loki_endpoint?: string;
+  loki_label_key?: string;
   ai_backend: string;
   ai_model?: string;
 }
@@ -65,6 +66,7 @@ export interface TeamConfigInput {
   github_repos?: string[];
   prometheus_endpoint?: string | null;
   loki_endpoint?: string | null;
+  loki_label_key?: string | null;
   ai_backend?: string;
   ai_model?: string | null;
 }

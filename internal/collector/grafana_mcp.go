@@ -47,7 +47,11 @@ type GrafanaMCPCollector struct {
 	sessionID      string
 	nextID         int64
 	datasourceUIDs map[string]string
+	lokiLabelKey   string // stream label for the service; "" means "service"
 }
+
+// SetLokiLabelKey sets the Loki stream label used to select a service's logs.
+func (g *GrafanaMCPCollector) SetLokiLabelKey(key string) { g.lokiLabelKey = key }
 
 type mcpRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
@@ -122,9 +126,13 @@ func (g *GrafanaMCPCollector) FetchErrorLogs(ctx context.Context, service string
 	if !ok || uid == "" {
 		return nil, fmt.Errorf("grafana mcp datasource %q not found", datasourceTypeLoki)
 	}
+	logql, err := errorLogsQuery(g.lokiLabelKey, service)
+	if err != nil {
+		return nil, err
+	}
 	result, err := g.callTool(ctx, toolQueryLokiLogs, map[string]interface{}{
 		"datasourceUid": uid,
-		"logql":         fmt.Sprintf(`{service=%q} |~ "(?i)(error|critical|fatal)"`, service),
+		"logql":         logql,
 		"startRfc3339":  since.UTC().Format(time.RFC3339),
 		"endRfc3339":    until.UTC().Format(time.RFC3339),
 		"limit":         limit,
