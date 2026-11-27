@@ -192,7 +192,8 @@ var (
 // to the underlying metric name.
 func metricBase(s string) string {
 	for _, tok := range identToken.FindAllString(s, -1) {
-		if !promFuncs[tok] {
+		tok = strings.TrimRight(tok, ":") // "name: latest=5" is a label, not part of the name
+		if tok != "" && !promFuncs[tok] {
 			return tok
 		}
 	}

@@ -320,3 +320,24 @@ func TestCausalCommit_NullMeansNoDeploymentCause(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+// Seen in real runs: the model copied the summary line, "name: latest=5 avg=...".
+func TestVerify_MetricRefCopiedFromSummaryLine(t *testing.T) {
+	for _, ref := range []string{
+		"db_pool_in_use: latest=5 avg=4.754 min=0 max=5 (61 points)",
+		"rate(db_pool_wait_count[5m]): latest=88.19 avg=88.38",
+	} {
+		r := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", EvidenceClass: ClassProbable, Confidence: "medium",
+			Evidence: []EvidenceRef{{Type: "metric", Ref: ref}}}
+		VerifyAndCalibrate(r, lab())
+		if len(r.Evidence) != 1 || len(r.RejectedEvidence) != 0 {
+			t.Errorf("valid metric rejected: %q -> %+v", ref, r.RejectedEvidence)
+		}
+	}
+	bad := &AnalysisResponse{RootCause: "x", SuggestedAction: "y", EvidenceClass: ClassProbable, Confidence: "medium",
+		Evidence: []EvidenceRef{{Type: "metric", Ref: "db_pool_max_open_connections: latest=5"}}}
+	VerifyAndCalibrate(bad, lab())
+	if len(bad.Evidence) != 0 {
+		t.Error("fabricated metric accepted")
+	}
+}
