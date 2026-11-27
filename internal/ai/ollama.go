@@ -303,9 +303,6 @@ func ParseAnalysisResponse(rawResponse string) *AnalysisResponse {
 					best, response.EvidenceClass = i, class
 				}
 			}
-			if rest := strings.TrimSpace(strings.Trim(text, "*_ ")); len(strings.Fields(rest)) > 3 {
-				response.KeyFindings = append(response.KeyFindings, "Evidence classification: "+rest)
-			}
 		}
 	}
 
